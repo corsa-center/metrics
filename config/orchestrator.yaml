@@ -1,0 +1,59 @@
+# Orchestrator Configuration
+# Coordinates metrics collection and dashboard integration
+
+# Repository paths
+dashboard_repo_path: "../dashboard"  # Path to dashboard repository
+output_path: "./output"              # Local output directory
+
+# Enable/disable collectors
+collectors:
+  citation: true      # Research impact metrics
+  community: true     # Community health metrics
+  licensing: true     # Licensing metrics
+  quality: false      # Code quality metrics (optional)
+  viability: false    # Long-term viability metrics (optional)
+
+# API credentials
+api_credentials:
+  github:
+    token: ${GITHUB_TOKEN}  # Set via environment variable
+  semantic_scholar:
+    api_key: ${SEMANTIC_SCHOLAR_KEY}  # Optional, improves rate limits
+  openalex:
+    email: ${OPENALEX_EMAIL}  # Polite pool access
+  zenodo:
+    # No auth required for public API
+
+# Metric weights for overall score calculation
+metric_weights:
+  citation: 0.4       # 40% weight
+  community: 0.4      # 40% weight
+  licensing: 0.2      # 20% weight
+
+# Rate limiting
+rate_limiting:
+  delay_between_packages: 2  # seconds
+  api_retry_attempts: 3
+  api_retry_delay: 5  # seconds
+
+# Filters
+filters:
+  # Only process packages in these categories (empty = all)
+  categories: []
+  # Exclude specific repositories
+  exclude_repos: []
+  # Minimum stars threshold (0 = no minimum)
+  min_stars: 0
+
+# Output options
+output:
+  dashboard_format: true    # Generate sustainabilityMetrics.json
+  detailed_reports: true    # Generate per-package detailed reports
+  summary_report: true      # Generate summary statistics
+  csv_export: false         # Export to CSV format
+
+# Logging
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  file: "orchestrator.log"
+  console: true
