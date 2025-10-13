@@ -10,9 +10,10 @@ This framework collects metrics from multiple sources and integrates with the [C
 
 - **Multi-Source Data Collection**: GitHub, Semantic Scholar, OpenAlex, Zenodo
 - **Orchestrated Workflows**: Configurable collection pipelines
-- **Multiple Metric Types**: Citation impact, community health, licensing
+- **Comprehensive Metrics**: Citation, community, licensing, security, documentation, sustainability
 - **Dashboard Integration**: Generate JSON data for CORSA dashboard
 - **Automated Collection**: GitHub Actions workflows
+- **Extensible Framework**: Placeholder metrics for incremental implementation
 
 ## Quick Start
 
@@ -63,16 +64,38 @@ python scripts/generate_corsa_citations.py \
   --output output/citationMetrics.json
 ```
 
+## Metric Categories
+
+The framework collects six categories of sustainability metrics:
+
+| Category | Status | Description |
+|----------|--------|-------------|
+| **Impact** (Citation) | ✅ Implemented | Academic citations, informal mentions, dependent packages |
+| **Community Health** | 🔄 Placeholder | Contributors, activity, issue/PR response times |
+| **Licensing** | ✅ Implemented | License detection, SPDX identification, OSI approval |
+| **Security** | 🔄 Placeholder | Vulnerabilities, advisories, security policies |
+| **Documentation** | 🔄 Placeholder | README quality, API docs, tutorials, freshness |
+| **Sustainability** | 🔄 Placeholder | Maintenance status, bus factor, funding, roadmap |
+
+See [METRICS_CATALOG.md](METRICS_CATALOG.md) for detailed metric definitions.
+
 ## Project Structure
 
 ```
 metrics/
 ├── collectors/              # Metric collection modules
 │   ├── impact/
-│   │   └── citation.py     # Citation metrics
+│   │   └── citation.py     # Citation metrics (✅ implemented)
 │   ├── community/
-│   │   ├── community_health.py  # Community health metrics
-│   │   └── licensing.py         # License analysis
+│   │   ├── community_health.py  # Legacy community health
+│   │   └── health.py            # Community health (🔄 placeholder)
+│   ├── viability/
+│   │   ├── licensing.py         # License analysis (✅ implemented)
+│   │   └── sustainability.py    # Sustainability (🔄 placeholder)
+│   ├── security/
+│   │   └── vulnerability.py     # Security metrics (🔄 placeholder)
+│   ├── documentation/
+│   │   └── quality.py           # Documentation metrics (🔄 placeholder)
 │   └── catalog_sync.py     # Catalog synchronization
 │
 ├── integrations/            # API integrations
@@ -115,6 +138,8 @@ See [CONFIGURATION.md](CONFIGURATION.md) for detailed setup.
 - [ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md) - Orchestrator usage
 - [QUICK_START.md](QUICK_START.md) - Getting started guide
 - [QUICK_REFERENCE.md](QUICK_REFERENCE.md) - Command reference
+- [METRICS_CATALOG.md](METRICS_CATALOG.md) - Complete metrics catalog
+- [PLACEHOLDER_GUIDE.md](PLACEHOLDER_GUIDE.md) - Implementing placeholder metrics
 
 ## API Integrations
 

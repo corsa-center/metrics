@@ -227,6 +227,101 @@ class MetricsOrchestrator:
                 "license_clarity_score": 0,
             }
 
+    async def collect_security_metrics(self, package: Dict) -> Dict:
+        """Collect security metrics"""
+        if not self.collectors_enabled.get("security", False):
+            return self._empty_security_metrics()
+
+        logger.info(f"Collecting security metrics for {package['name']}")
+
+        try:
+            from collectors.security.vulnerability import SecurityMetricsCollector
+
+            collector = SecurityMetricsCollector(self.config)
+            result = await collector.collect(package)
+
+            return {
+                "vulnerability_count": result.get("vulnerability_metrics", {}).get(
+                    "cve_count", 0
+                ),
+                "security_advisories": result.get("security_advisories", {}).get(
+                    "total_advisories", 0
+                ),
+                "has_security_policy": result.get("security_posture", {}).get(
+                    "has_security_policy", False
+                ),
+                "security_score": result.get("overall_security_score", 0),
+            }
+        except Exception as e:
+            logger.error(
+                f"Security metrics collection failed for {package['name']}: {e}"
+            )
+            return self._empty_security_metrics()
+
+    async def collect_documentation_metrics(self, package: Dict) -> Dict:
+        """Collect documentation quality metrics"""
+        if not self.collectors_enabled.get("documentation", False):
+            return self._empty_documentation_metrics()
+
+        logger.info(f"Collecting documentation metrics for {package['name']}")
+
+        try:
+            from collectors.documentation.quality import DocumentationQualityCollector
+
+            collector = DocumentationQualityCollector(self.config)
+            result = await collector.collect(package)
+
+            return {
+                "has_readme": result.get("readme_metrics", {}).get("has_readme", False),
+                "readme_score": result.get("readme_metrics", {}).get("readme_score", 0),
+                "has_api_docs": result.get("api_documentation", {}).get(
+                    "has_api_docs", False
+                ),
+                "has_tutorials": result.get("tutorials_and_guides", {}).get(
+                    "has_tutorials", False
+                ),
+                "documentation_score": result.get("overall_documentation_score", 0),
+            }
+        except Exception as e:
+            logger.error(
+                f"Documentation metrics collection failed for {package['name']}: {e}"
+            )
+            return self._empty_documentation_metrics()
+
+    async def collect_sustainability_metrics(self, package: Dict) -> Dict:
+        """Collect sustainability metrics"""
+        if not self.collectors_enabled.get("sustainability", False):
+            return self._empty_sustainability_metrics()
+
+        logger.info(f"Collecting sustainability metrics for {package['name']}")
+
+        try:
+            from collectors.viability.sustainability import (
+                SustainabilityMetricsCollector,
+            )
+
+            collector = SustainabilityMetricsCollector(self.config)
+            result = await collector.collect(package)
+
+            return {
+                "is_actively_maintained": result.get("maintenance_health", {}).get(
+                    "is_actively_maintained", False
+                ),
+                "bus_factor": result.get("bus_factor", {}).get("bus_factor_score", 0),
+                "has_funding": result.get("financial_sustainability", {}).get(
+                    "has_funding", False
+                ),
+                "has_roadmap": result.get("project_planning", {}).get(
+                    "has_roadmap", False
+                ),
+                "sustainability_score": result.get("overall_sustainability_score", 0),
+            }
+        except Exception as e:
+            logger.error(
+                f"Sustainability metrics collection failed for {package['name']}: {e}"
+            )
+            return self._empty_sustainability_metrics()
+
     async def collect_all_metrics(self, package: Dict) -> Dict:
         """Collect all metrics for a package
 
@@ -244,9 +339,25 @@ class MetricsOrchestrator:
         citation_task = self.collect_citation_metrics(package)
         community_task = self.collect_community_metrics(package)
         licensing_task = self.collect_licensing_metrics(package)
+        security_task = self.collect_security_metrics(package)
+        documentation_task = self.collect_documentation_metrics(package)
+        sustainability_task = self.collect_sustainability_metrics(package)
 
-        citation_metrics, community_metrics, licensing_metrics = await asyncio.gather(
-            citation_task, community_task, licensing_task, return_exceptions=True
+        (
+            citation_metrics,
+            community_metrics,
+            licensing_metrics,
+            security_metrics,
+            documentation_metrics,
+            sustainability_metrics,
+        ) = await asyncio.gather(
+            citation_task,
+            community_task,
+            licensing_task,
+            security_task,
+            documentation_task,
+            sustainability_task,
+            return_exceptions=True,
         )
 
         # Handle exceptions
@@ -267,9 +378,26 @@ class MetricsOrchestrator:
                 "license_clarity_score": 0,
             }
 
+        if isinstance(security_metrics, Exception):
+            logger.error(f"Security collection error: {security_metrics}")
+            security_metrics = self._empty_security_metrics()
+
+        if isinstance(documentation_metrics, Exception):
+            logger.error(f"Documentation collection error: {documentation_metrics}")
+            documentation_metrics = self._empty_documentation_metrics()
+
+        if isinstance(sustainability_metrics, Exception):
+            logger.error(f"Sustainability collection error: {sustainability_metrics}")
+            sustainability_metrics = self._empty_sustainability_metrics()
+
         # Calculate overall score (weighted average)
         overall_score = self._calculate_overall_score(
-            citation_metrics, community_metrics, licensing_metrics
+            citation_metrics,
+            community_metrics,
+            licensing_metrics,
+            security_metrics,
+            documentation_metrics,
+            sustainability_metrics,
         )
 
         return {
@@ -277,14 +405,24 @@ class MetricsOrchestrator:
             "impact_metrics": citation_metrics,
             "community_metrics": community_metrics,
             "licensing_metrics": licensing_metrics,
+            "security_metrics": security_metrics,
+            "documentation_metrics": documentation_metrics,
+            "sustainability_metrics": sustainability_metrics,
             "last_updated": datetime.utcnow().isoformat() + "Z",
         }
 
     def _calculate_overall_score(
-        self, citation: Dict, community: Dict, licensing: Dict
+        self,
+        citation: Dict,
+        community: Dict,
+        licensing: Dict,
+        security: Dict,
+        documentation: Dict,
+        sustainability: Dict,
     ) -> int:
         """Calculate weighted overall sustainability score"""
-        # Weights: citation (40%), community (40%), licensing (20%)
+        # Weights: citation (20%), community (20%), licensing (10%),
+        #          security (20%), documentation (15%), sustainability (15%)
         citation_score = citation.get("citation_score", 0)
 
         # Normalize community metrics (simplified)
@@ -299,8 +437,18 @@ class MetricsOrchestrator:
         )
 
         licensing_score = licensing.get("license_clarity_score", 0)
+        security_score = security.get("security_score", 0)
+        documentation_score = documentation.get("documentation_score", 0)
+        sustainability_score = sustainability.get("sustainability_score", 0)
 
-        overall = citation_score * 0.4 + community_score * 0.4 + licensing_score * 0.2
+        overall = (
+            citation_score * 0.20
+            + community_score * 0.20
+            + licensing_score * 0.10
+            + security_score * 0.20
+            + documentation_score * 0.15
+            + sustainability_score * 0.15
+        )
 
         return int(round(overall))
 
@@ -322,6 +470,35 @@ class MetricsOrchestrator:
             "commit_frequency_per_month": 0,
             "avg_issue_response_days": 0,
             "avg_pr_merge_days": 0,
+        }
+
+    def _empty_security_metrics(self) -> Dict:
+        """Return empty security metrics structure"""
+        return {
+            "vulnerability_count": 0,
+            "security_advisories": 0,
+            "has_security_policy": False,
+            "security_score": 0,
+        }
+
+    def _empty_documentation_metrics(self) -> Dict:
+        """Return empty documentation metrics structure"""
+        return {
+            "has_readme": False,
+            "readme_score": 0,
+            "has_api_docs": False,
+            "has_tutorials": False,
+            "documentation_score": 0,
+        }
+
+    def _empty_sustainability_metrics(self) -> Dict:
+        """Return empty sustainability metrics structure"""
+        return {
+            "is_actively_maintained": False,
+            "bus_factor": 0,
+            "has_funding": False,
+            "has_roadmap": False,
+            "sustainability_score": 0,
         }
 
     async def process_all_software(

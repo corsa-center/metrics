@@ -6,12 +6,14 @@ dashboard_repo_path: "../dashboard"  # Path to dashboard repository
 output_path: "./output"              # Local output directory
 
 # Enable/disable collectors
+# ✅ = Implemented, 🔄 = Placeholder (returns zeros/false)
 collectors:
-  citation: true      # Research impact metrics
-  community: true     # Community health metrics
-  licensing: true     # Licensing metrics
-  quality: false      # Code quality metrics (optional)
-  viability: false    # Long-term viability metrics (optional)
+  citation: true          # ✅ Impact metrics (citations, mentions, dependents)
+  community: false        # 🔄 Community health (contributors, activity, issues/PRs)
+  licensing: true         # ✅ License analysis (SPDX, OSI approval)
+  security: false         # 🔄 Security metrics (CVEs, advisories, policies)
+  documentation: false    # 🔄 Documentation quality (README, API docs, tutorials)
+  sustainability: false   # 🔄 Sustainability (maintenance, bus factor, funding)
 
 # API credentials
 api_credentials:
@@ -25,10 +27,14 @@ api_credentials:
     # No auth required for public API
 
 # Metric weights for overall score calculation
+# Note: Weights are only applied to enabled collectors
 metric_weights:
-  citation: 0.4       # 40% weight
-  community: 0.4      # 40% weight
-  licensing: 0.2      # 20% weight
+  citation: 0.20       # 20% weight - Research impact
+  community: 0.20      # 20% weight - Community health
+  licensing: 0.10      # 10% weight - License compliance
+  security: 0.20       # 20% weight - Security posture
+  documentation: 0.15  # 15% weight - Documentation quality
+  sustainability: 0.15 # 15% weight - Long-term viability
 
 # Rate limiting
 rate_limiting:
