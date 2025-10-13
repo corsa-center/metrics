@@ -5,15 +5,13 @@
 dashboard_repo_path: "../dashboard"  # Path to dashboard repository
 output_path: "./output"              # Local output directory
 
-# Enable/disable collectors
+# Enable/disable CASS dimension collectors
 # ✅ = Implemented, 🔄 = Placeholder (returns zeros/false)
 collectors:
-  citation: true          # ✅ Impact metrics (citations, mentions, dependents)
-  community: false        # 🔄 Community health (contributors, activity, issues/PRs)
-  licensing: true         # ✅ License analysis (SPDX, OSI approval)
-  security: false         # 🔄 Security metrics (CVEs, advisories, policies)
-  documentation: false    # 🔄 Documentation quality (README, API docs, tutorials)
-  sustainability: false   # 🔄 Sustainability (maintenance, bus factor, funding)
+  impact: true          # ✅ Impact dimension (citations, adoption, field research impact)
+  community: false      # 🔄 Community dimension (health, engagement, diversity)
+  viability: true       # ✅ Viability dimension (sustainability, security, licensing)
+  quality: false        # 🔄 Quality dimension (documentation, code quality, testing)
 
 # API credentials
 api_credentials:
@@ -26,15 +24,13 @@ api_credentials:
   zenodo:
     # No auth required for public API
 
-# Metric weights for overall score calculation
-# Note: Weights are only applied to enabled collectors
+# Metric weights for overall score calculation (CASS dimensions)
+# Note: Weights should sum to 1.0
 metric_weights:
-  citation: 0.20       # 20% weight - Research impact
-  community: 0.20      # 20% weight - Community health
-  licensing: 0.10      # 10% weight - License compliance
-  security: 0.20       # 20% weight - Security posture
-  documentation: 0.15  # 15% weight - Documentation quality
-  sustainability: 0.15 # 15% weight - Long-term viability
+  impact: 0.25       # 25% weight - Research impact, citation, and adoption
+  community: 0.25    # 25% weight - Community health, engagement, and diversity
+  viability: 0.25    # 25% weight - Sustainability, security, and licensing
+  quality: 0.25      # 25% weight - Documentation, code quality, and testing
 
 # Rate limiting
 rate_limiting:

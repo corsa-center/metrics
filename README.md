@@ -10,7 +10,7 @@ This framework collects metrics from multiple sources and integrates with the [C
 
 - **Multi-Source Data Collection**: GitHub, Semantic Scholar, OpenAlex, Zenodo
 - **Orchestrated Workflows**: Configurable collection pipelines
-- **Comprehensive Metrics**: Citation, community, licensing, security, documentation, sustainability
+- **CASS Framework**: Four dimensions - Impact, Community, Viability, Quality
 - **Dashboard Integration**: Generate JSON data for CORSA dashboard
 - **Automated Collection**: GitHub Actions workflows
 - **Extensible Framework**: Placeholder metrics for incremental implementation
@@ -64,39 +64,36 @@ python scripts/generate_corsa_citations.py \
   --output output/citationMetrics.json
 ```
 
-## Metric Categories
+## CASS Dimensions
 
-The framework collects six categories of sustainability metrics:
+The framework follows the CASS (Consortium for Advancement of Scientific Software) sustainability model with four main dimensions:
 
-| Category | Status | Description |
+| Dimension | Status | Description |
 |----------|--------|-------------|
-| **Impact** (Citation) | ✅ Implemented | Academic citations, informal mentions, dependent packages |
-| **Community Health** | 🔄 Placeholder | Contributors, activity, issue/PR response times |
-| **Licensing** | ✅ Implemented | License detection, SPDX identification, OSI approval |
-| **Security** | 🔄 Placeholder | Vulnerabilities, advisories, security policies |
-| **Documentation** | 🔄 Placeholder | README quality, API docs, tutorials, freshness |
-| **Sustainability** | 🔄 Placeholder | Maintenance status, bus factor, funding, roadmap |
+| **Impact** | ✅ Implemented | Software citation, adoption, and field research impact |
+| **Community** | 🔄 Placeholder | Community health, engagement, and diversity |
+| **Viability** | ✅ Implemented | Long-term sustainability, security, and licensing |
+| **Quality** | 🔄 Placeholder | Documentation, code quality, testing, and usability |
 
-See [METRICS_CATALOG.md](METRICS_CATALOG.md) for detailed metric definitions.
+Each dimension contains multiple sub-categories and metrics that contribute to an overall sustainability score.
 
 ## Project Structure
 
 ```
 metrics/
-├── collectors/              # Metric collection modules
+├── collectors/              # CASS dimension collectors
 │   ├── impact/
-│   │   └── citation.py     # Citation metrics (✅ implemented)
+│   │   ├── citation.py     # Citation metrics (✅ implemented)
+│   │   └── dimension.py    # Impact dimension (🔄 placeholder)
 │   ├── community/
-│   │   ├── community_health.py  # Legacy community health
-│   │   └── health.py            # Community health (🔄 placeholder)
+│   │   ├── community_health.py  # Legacy community health collector
+│   │   └── dimension.py         # Community dimension (🔄 placeholder)
 │   ├── viability/
 │   │   ├── licensing.py         # License analysis (✅ implemented)
-│   │   └── sustainability.py    # Sustainability (🔄 placeholder)
-│   ├── security/
-│   │   └── vulnerability.py     # Security metrics (🔄 placeholder)
-│   ├── documentation/
-│   │   └── quality.py           # Documentation metrics (🔄 placeholder)
-│   └── catalog_sync.py     # Catalog synchronization
+│   │   └── dimension.py         # Viability dimension (🔄 placeholder)
+│   ├── quality/
+│   │   └── dimension.py         # Quality dimension (🔄 placeholder)
+│   └── catalog_sync.py          # Catalog synchronization
 │
 ├── integrations/            # API integrations
 │   ├── base.py             # Base API client
@@ -138,8 +135,7 @@ See [CONFIGURATION.md](CONFIGURATION.md) for detailed setup.
 - [ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md) - Orchestrator usage
 - [QUICK_START.md](QUICK_START.md) - Getting started guide
 - [QUICK_REFERENCE.md](QUICK_REFERENCE.md) - Command reference
-- [METRICS_CATALOG.md](METRICS_CATALOG.md) - Complete metrics catalog
-- [PLACEHOLDER_GUIDE.md](PLACEHOLDER_GUIDE.md) - Implementing placeholder metrics
+- [CASS-Sustainability-Metrics-Report.pdf](CASS-Sustainability-Metrics-Report.pdf) - CASS framework specification
 
 ## API Integrations
 

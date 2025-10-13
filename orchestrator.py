@@ -123,204 +123,95 @@ class MetricsOrchestrator:
         logger.info(f"Prepared {len(software_list)} software packages for processing")
         return software_list
 
-    async def collect_citation_metrics(self, package: Dict) -> Dict:
-        """Collect citation metrics for a package
+    async def collect_impact_dimension(self, package: Dict) -> Dict:
+        """Collect Impact dimension metrics
 
         Args:
             package: Package metadata dictionary
 
         Returns:
-            Citation metrics dictionary
+            Impact dimension metrics dictionary
         """
-        if not self.collectors_enabled.get("citation", False):
-            return self._empty_citation_metrics()
+        if not self.collectors_enabled.get("impact", False):
+            return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
-        logger.info(f"Collecting citation metrics for {package['name']}")
+        logger.info(f"Collecting Impact dimension for {package['name']}")
 
-        # Import collector dynamically to avoid import errors if not configured
         try:
+            # Try citation collector first (if implemented)
             from collectors.impact.citation import CitationMetricCollector
 
             collector = CitationMetricCollector(self.config)
             result = await collector.collect(package)
+            return {"dimension": "impact", "score": result.get("score", 0), "max_score": 100.0}
+        except ImportError:
+            # Fall back to dimension placeholder
+            try:
+                from collectors.impact.dimension import ImpactDimensionCollector
 
-            return {
-                "citation_score": result.get("score", 0),
-                "formal_citations": result.get("sub_metrics", {})
-                .get("formal_citations", {})
-                .get("raw_value", 0),
-                "informal_mentions": result.get("sub_metrics", {})
-                .get("informal_mentions", {})
-                .get("raw_value", 0),
-                "dependent_packages": result.get("sub_metrics", {})
-                .get("dependent_packages", {})
-                .get("raw_value", 0),
-                "doi_resolutions": result.get("sub_metrics", {})
-                .get("doi_resolutions", {})
-                .get("raw_value", 0),
-            }
-        except Exception as e:
-            logger.error(
-                f"Citation metrics collection failed for {package['name']}: {e}"
-            )
-            return self._empty_citation_metrics()
+                collector = ImpactDimensionCollector(self.config)
+                return await collector.collect(package)
+            except Exception as e:
+                logger.error(f"Impact dimension collection failed for {package['name']}: {e}")
+                return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
-    async def collect_community_metrics(self, package: Dict) -> Dict:
-        """Collect community health metrics"""
+    async def collect_community_dimension(self, package: Dict) -> Dict:
+        """Collect Community dimension metrics"""
         if not self.collectors_enabled.get("community", False):
-            return self._empty_community_metrics()
+            return {"dimension": "community", "score": 0.0, "max_score": 100.0}
 
-        logger.info(f"Collecting community metrics for {package['name']}")
+        logger.info(f"Collecting Community dimension for {package['name']}")
 
         try:
-            from collectors.community.health import CommunityHealthCollector
+            from collectors.community.dimension import CommunityDimensionCollector
 
-            collector = CommunityHealthCollector(self.config)
-            result = await collector.collect(package)
-
-            return {
-                "total_contributors": result.get("total_contributors", 0),
-                "active_contributors_30d": result.get("active_contributors_30d", 0),
-                "commit_frequency_per_month": result.get("commit_frequency", 0),
-                "avg_issue_response_days": result.get("avg_issue_response_time", 0),
-                "avg_pr_merge_days": result.get("avg_pr_merge_time", 0),
-            }
+            collector = CommunityDimensionCollector(self.config)
+            return await collector.collect(package)
         except Exception as e:
-            logger.error(
-                f"Community metrics collection failed for {package['name']}: {e}"
-            )
-            return self._empty_community_metrics()
+            logger.error(f"Community dimension collection failed for {package['name']}: {e}")
+            return {"dimension": "community", "score": 0.0, "max_score": 100.0}
 
-    async def collect_licensing_metrics(self, package: Dict) -> Dict:
-        """Collect licensing metrics"""
-        if not self.collectors_enabled.get("licensing", False):
-            # Use basic info from catalog
-            return {
-                "license": package.get("license", "Unknown"),
-                "license_compatibility": "unknown",
-                "outbound_licenses": [],
-                "license_clarity_score": 0,
-            }
+    async def collect_viability_dimension(self, package: Dict) -> Dict:
+        """Collect Viability dimension metrics"""
+        if not self.collectors_enabled.get("viability", False):
+            return {"dimension": "viability", "score": 0.0, "max_score": 100.0}
 
-        logger.info(f"Collecting licensing metrics for {package['name']}")
+        logger.info(f"Collecting Viability dimension for {package['name']}")
 
         try:
+            # Try licensing collector first (if implemented)
             from collectors.viability.licensing import LicensingCollector
 
             collector = LicensingCollector(self.config)
             result = await collector.collect(package)
+            # Use clarity_score as the viability score for now
+            return {"dimension": "viability", "score": result.get("clarity_score", 0), "max_score": 100.0}
+        except ImportError:
+            # Fall back to dimension placeholder
+            try:
+                from collectors.viability.dimension import ViabilityDimensionCollector
 
-            return {
-                "license": result.get("license", package.get("license", "Unknown")),
-                "license_compatibility": result.get("compatibility", "unknown"),
-                "outbound_licenses": result.get("dependencies", []),
-                "license_clarity_score": result.get("clarity_score", 0),
-            }
-        except Exception as e:
-            logger.error(
-                f"Licensing metrics collection failed for {package['name']}: {e}"
-            )
-            return {
-                "license": package.get("license", "Unknown"),
-                "license_compatibility": "unknown",
-                "outbound_licenses": [],
-                "license_clarity_score": 0,
-            }
+                collector = ViabilityDimensionCollector(self.config)
+                return await collector.collect(package)
+            except Exception as e:
+                logger.error(f"Viability dimension collection failed for {package['name']}: {e}")
+                return {"dimension": "viability", "score": 0.0, "max_score": 100.0}
 
-    async def collect_security_metrics(self, package: Dict) -> Dict:
-        """Collect security metrics"""
-        if not self.collectors_enabled.get("security", False):
-            return self._empty_security_metrics()
+    async def collect_quality_dimension(self, package: Dict) -> Dict:
+        """Collect Quality dimension metrics"""
+        if not self.collectors_enabled.get("quality", False):
+            return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
 
-        logger.info(f"Collecting security metrics for {package['name']}")
+        logger.info(f"Collecting Quality dimension for {package['name']}")
 
         try:
-            from collectors.security.vulnerability import SecurityMetricsCollector
+            from collectors.quality.dimension import QualityDimensionCollector
 
-            collector = SecurityMetricsCollector(self.config)
-            result = await collector.collect(package)
-
-            return {
-                "vulnerability_count": result.get("vulnerability_metrics", {}).get(
-                    "cve_count", 0
-                ),
-                "security_advisories": result.get("security_advisories", {}).get(
-                    "total_advisories", 0
-                ),
-                "has_security_policy": result.get("security_posture", {}).get(
-                    "has_security_policy", False
-                ),
-                "security_score": result.get("overall_security_score", 0),
-            }
+            collector = QualityDimensionCollector(self.config)
+            return await collector.collect(package)
         except Exception as e:
-            logger.error(
-                f"Security metrics collection failed for {package['name']}: {e}"
-            )
-            return self._empty_security_metrics()
-
-    async def collect_documentation_metrics(self, package: Dict) -> Dict:
-        """Collect documentation quality metrics"""
-        if not self.collectors_enabled.get("documentation", False):
-            return self._empty_documentation_metrics()
-
-        logger.info(f"Collecting documentation metrics for {package['name']}")
-
-        try:
-            from collectors.documentation.quality import DocumentationQualityCollector
-
-            collector = DocumentationQualityCollector(self.config)
-            result = await collector.collect(package)
-
-            return {
-                "has_readme": result.get("readme_metrics", {}).get("has_readme", False),
-                "readme_score": result.get("readme_metrics", {}).get("readme_score", 0),
-                "has_api_docs": result.get("api_documentation", {}).get(
-                    "has_api_docs", False
-                ),
-                "has_tutorials": result.get("tutorials_and_guides", {}).get(
-                    "has_tutorials", False
-                ),
-                "documentation_score": result.get("overall_documentation_score", 0),
-            }
-        except Exception as e:
-            logger.error(
-                f"Documentation metrics collection failed for {package['name']}: {e}"
-            )
-            return self._empty_documentation_metrics()
-
-    async def collect_sustainability_metrics(self, package: Dict) -> Dict:
-        """Collect sustainability metrics"""
-        if not self.collectors_enabled.get("sustainability", False):
-            return self._empty_sustainability_metrics()
-
-        logger.info(f"Collecting sustainability metrics for {package['name']}")
-
-        try:
-            from collectors.viability.sustainability import (
-                SustainabilityMetricsCollector,
-            )
-
-            collector = SustainabilityMetricsCollector(self.config)
-            result = await collector.collect(package)
-
-            return {
-                "is_actively_maintained": result.get("maintenance_health", {}).get(
-                    "is_actively_maintained", False
-                ),
-                "bus_factor": result.get("bus_factor", {}).get("bus_factor_score", 0),
-                "has_funding": result.get("financial_sustainability", {}).get(
-                    "has_funding", False
-                ),
-                "has_roadmap": result.get("project_planning", {}).get(
-                    "has_roadmap", False
-                ),
-                "sustainability_score": result.get("overall_sustainability_score", 0),
-            }
-        except Exception as e:
-            logger.error(
-                f"Sustainability metrics collection failed for {package['name']}: {e}"
-            )
-            return self._empty_sustainability_metrics()
+            logger.error(f"Quality dimension collection failed for {package['name']}: {e}")
+            return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
 
     async def collect_all_metrics(self, package: Dict) -> Dict:
         """Collect all metrics for a package
@@ -335,171 +226,98 @@ class MetricsOrchestrator:
             f"Starting metrics collection for {package['name']} ({package['repository']})"
         )
 
-        # Collect metrics in parallel
-        citation_task = self.collect_citation_metrics(package)
-        community_task = self.collect_community_metrics(package)
-        licensing_task = self.collect_licensing_metrics(package)
-        security_task = self.collect_security_metrics(package)
-        documentation_task = self.collect_documentation_metrics(package)
-        sustainability_task = self.collect_sustainability_metrics(package)
+        # Collect all 4 CASS dimensions in parallel
+        impact_task = self.collect_impact_dimension(package)
+        community_task = self.collect_community_dimension(package)
+        viability_task = self.collect_viability_dimension(package)
+        quality_task = self.collect_quality_dimension(package)
 
         (
-            citation_metrics,
+            impact_metrics,
             community_metrics,
-            licensing_metrics,
-            security_metrics,
-            documentation_metrics,
-            sustainability_metrics,
+            viability_metrics,
+            quality_metrics,
         ) = await asyncio.gather(
-            citation_task,
+            impact_task,
             community_task,
-            licensing_task,
-            security_task,
-            documentation_task,
-            sustainability_task,
+            viability_task,
+            quality_task,
             return_exceptions=True,
         )
 
         # Handle exceptions
-        if isinstance(citation_metrics, Exception):
-            logger.error(f"Citation collection error: {citation_metrics}")
-            citation_metrics = self._empty_citation_metrics()
+        if isinstance(impact_metrics, Exception):
+            logger.error(f"Impact dimension error: {impact_metrics}")
+            impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
         if isinstance(community_metrics, Exception):
-            logger.error(f"Community collection error: {community_metrics}")
-            community_metrics = self._empty_community_metrics()
+            logger.error(f"Community dimension error: {community_metrics}")
+            community_metrics = {"dimension": "community", "score": 0.0, "max_score": 100.0}
 
-        if isinstance(licensing_metrics, Exception):
-            logger.error(f"Licensing collection error: {licensing_metrics}")
-            licensing_metrics = {
-                "license": package.get("license", "Unknown"),
-                "license_compatibility": "unknown",
-                "outbound_licenses": [],
-                "license_clarity_score": 0,
-            }
+        if isinstance(viability_metrics, Exception):
+            logger.error(f"Viability dimension error: {viability_metrics}")
+            viability_metrics = {"dimension": "viability", "score": 0.0, "max_score": 100.0}
 
-        if isinstance(security_metrics, Exception):
-            logger.error(f"Security collection error: {security_metrics}")
-            security_metrics = self._empty_security_metrics()
+        if isinstance(quality_metrics, Exception):
+            logger.error(f"Quality dimension error: {quality_metrics}")
+            quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
 
-        if isinstance(documentation_metrics, Exception):
-            logger.error(f"Documentation collection error: {documentation_metrics}")
-            documentation_metrics = self._empty_documentation_metrics()
-
-        if isinstance(sustainability_metrics, Exception):
-            logger.error(f"Sustainability collection error: {sustainability_metrics}")
-            sustainability_metrics = self._empty_sustainability_metrics()
-
-        # Calculate overall score (weighted average)
+        # Calculate overall score (weighted average of 4 dimensions)
         overall_score = self._calculate_overall_score(
-            citation_metrics,
+            impact_metrics,
             community_metrics,
-            licensing_metrics,
-            security_metrics,
-            documentation_metrics,
-            sustainability_metrics,
+            viability_metrics,
+            quality_metrics,
         )
 
         return {
             "overall_score": overall_score,
-            "impact_metrics": citation_metrics,
-            "community_metrics": community_metrics,
-            "licensing_metrics": licensing_metrics,
-            "security_metrics": security_metrics,
-            "documentation_metrics": documentation_metrics,
-            "sustainability_metrics": sustainability_metrics,
+            "dimensions": {
+                "impact": impact_metrics,
+                "community": community_metrics,
+                "viability": viability_metrics,
+                "quality": quality_metrics,
+            },
             "last_updated": datetime.utcnow().isoformat() + "Z",
         }
 
     def _calculate_overall_score(
         self,
-        citation: Dict,
+        impact: Dict,
         community: Dict,
-        licensing: Dict,
-        security: Dict,
-        documentation: Dict,
-        sustainability: Dict,
+        viability: Dict,
+        quality: Dict,
     ) -> int:
-        """Calculate weighted overall sustainability score"""
-        # Weights: citation (20%), community (20%), licensing (10%),
-        #          security (20%), documentation (15%), sustainability (15%)
-        citation_score = citation.get("citation_score", 0)
+        """Calculate weighted overall sustainability score based on 4 CASS dimensions
 
-        # Normalize community metrics (simplified)
-        community_score = min(
-            100,
-            (
-                min(100, community.get("active_contributors_30d", 0) * 5) * 0.4
-                + min(100, community.get("commit_frequency_per_month", 0) * 2) * 0.3
-                + (100 - min(100, community.get("avg_issue_response_days", 10) * 5))
-                * 0.3
-            ),
-        )
+        Default weights (can be configured):
+        - Impact: 25%
+        - Community: 25%
+        - Viability: 25%
+        - Quality: 25%
+        """
+        # Get weights from config or use defaults
+        weights = self.config.get("metric_weights", {})
+        impact_weight = weights.get("impact", 0.25)
+        community_weight = weights.get("community", 0.25)
+        viability_weight = weights.get("viability", 0.25)
+        quality_weight = weights.get("quality", 0.25)
 
-        licensing_score = licensing.get("license_clarity_score", 0)
-        security_score = security.get("security_score", 0)
-        documentation_score = documentation.get("documentation_score", 0)
-        sustainability_score = sustainability.get("sustainability_score", 0)
+        # Extract scores from dimension results
+        impact_score = impact.get("score", 0)
+        community_score = community.get("score", 0)
+        viability_score = viability.get("score", 0)
+        quality_score = quality.get("score", 0)
 
+        # Calculate weighted average
         overall = (
-            citation_score * 0.20
-            + community_score * 0.20
-            + licensing_score * 0.10
-            + security_score * 0.20
-            + documentation_score * 0.15
-            + sustainability_score * 0.15
+            impact_score * impact_weight
+            + community_score * community_weight
+            + viability_score * viability_weight
+            + quality_score * quality_weight
         )
 
         return int(round(overall))
-
-    def _empty_citation_metrics(self) -> Dict:
-        """Return empty citation metrics structure"""
-        return {
-            "citation_score": 0,
-            "formal_citations": 0,
-            "informal_mentions": 0,
-            "dependent_packages": 0,
-            "doi_resolutions": 0,
-        }
-
-    def _empty_community_metrics(self) -> Dict:
-        """Return empty community metrics structure"""
-        return {
-            "total_contributors": 0,
-            "active_contributors_30d": 0,
-            "commit_frequency_per_month": 0,
-            "avg_issue_response_days": 0,
-            "avg_pr_merge_days": 0,
-        }
-
-    def _empty_security_metrics(self) -> Dict:
-        """Return empty security metrics structure"""
-        return {
-            "vulnerability_count": 0,
-            "security_advisories": 0,
-            "has_security_policy": False,
-            "security_score": 0,
-        }
-
-    def _empty_documentation_metrics(self) -> Dict:
-        """Return empty documentation metrics structure"""
-        return {
-            "has_readme": False,
-            "readme_score": 0,
-            "has_api_docs": False,
-            "has_tutorials": False,
-            "documentation_score": 0,
-        }
-
-    def _empty_sustainability_metrics(self) -> Dict:
-        """Return empty sustainability metrics structure"""
-        return {
-            "is_actively_maintained": False,
-            "bus_factor": 0,
-            "has_funding": False,
-            "has_roadmap": False,
-            "sustainability_score": 0,
-        }
 
     async def process_all_software(
         self, filter_software: Optional[str] = None, dry_run: bool = False
