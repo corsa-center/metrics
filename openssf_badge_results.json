@@ -1,0 +1,419 @@
+[
+  {
+    "package_name": "curl",
+    "repository": "curl/curl",
+    "timestamp": "2025-12-16T17:46:14.713503Z",
+    "badge_status": {
+      "has_badge": true,
+      "badge_level": "in_progress",
+      "badge_id": 63,
+      "badge_url": "https://bestpractices.coreinfrastructure.org/projects/63",
+      "percentage": 100
+    },
+    "governance_criteria": {
+      "met": 4,
+      "total": 6,
+      "percentage": 66.67,
+      "details": [
+        {
+          "criterion": "governance",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "contribution",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "contribution_requirements",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "governance_doc",
+          "status": "Unknown",
+          "met": false
+        },
+        {
+          "criterion": "code_of_conduct",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "governance_implementation",
+          "status": "Unknown",
+          "met": false
+        }
+      ]
+    },
+    "security_criteria": {
+      "met": 3,
+      "total": 4,
+      "percentage": 75.0,
+      "details": [
+        {
+          "criterion": "vulnerability_report_process",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "vulnerability_report_private",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "vulnerability_report_response",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "security_policy",
+          "status": "Unknown",
+          "met": false
+        }
+      ]
+    },
+    "quality_criteria": {
+      "met": 6,
+      "total": 6,
+      "percentage": 100.0,
+      "details": [
+        {
+          "criterion": "test",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_invocation",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_most",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_continuous_integration",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "documentation_basics",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "documentation_interface",
+          "status": "Met",
+          "met": true
+        }
+      ]
+    },
+    "criteria_details": {
+      "name": "curl",
+      "description": "curl is a command line tool and library for internet transfers",
+      "homepage_url": "https://curl.se",
+      "repo_url": "https://github.com/curl/curl",
+      "created_at": "2016-02-15T18:53:27.501Z",
+      "updated_at": "2024-11-14T09:21:59.932Z",
+      "badge_percentage": 100,
+      "tiered_percentage": 300
+    },
+    "overall_score": {
+      "score": 52.08,
+      "max_score": 100,
+      "badge_level": "in_progress",
+      "category_scores": {
+        "governance": 66.67,
+        "security": 75.0,
+        "quality": 100.0
+      },
+      "details": [
+        "Badge Level: IN_PROGRESS",
+        "Governance: 66.7% (4/6)",
+        "Security: 75.0% (3/4)",
+        "Quality: 100.0% (6/6)"
+      ]
+    }
+  },
+  {
+    "package_name": "openssl",
+    "repository": "openssl/openssl",
+    "timestamp": "2025-12-16T17:46:15.006641Z",
+    "badge_status": {
+      "has_badge": true,
+      "badge_level": "in_progress",
+      "badge_id": 54,
+      "badge_url": "https://bestpractices.coreinfrastructure.org/projects/54",
+      "percentage": 100
+    },
+    "governance_criteria": {
+      "met": 2,
+      "total": 6,
+      "percentage": 33.33,
+      "details": [
+        {
+          "criterion": "governance",
+          "status": "?",
+          "met": false
+        },
+        {
+          "criterion": "contribution",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "contribution_requirements",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "governance_doc",
+          "status": "Unknown",
+          "met": false
+        },
+        {
+          "criterion": "code_of_conduct",
+          "status": "?",
+          "met": false
+        },
+        {
+          "criterion": "governance_implementation",
+          "status": "Unknown",
+          "met": false
+        }
+      ]
+    },
+    "security_criteria": {
+      "met": 3,
+      "total": 4,
+      "percentage": 75.0,
+      "details": [
+        {
+          "criterion": "vulnerability_report_process",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "vulnerability_report_private",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "vulnerability_report_response",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "security_policy",
+          "status": "Unknown",
+          "met": false
+        }
+      ]
+    },
+    "quality_criteria": {
+      "met": 6,
+      "total": 6,
+      "percentage": 100.0,
+      "details": [
+        {
+          "criterion": "test",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_invocation",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_most",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_continuous_integration",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "documentation_basics",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "documentation_interface",
+          "status": "Met",
+          "met": true
+        }
+      ]
+    },
+    "criteria_details": {
+      "name": "OpenSSL",
+      "description": "OpenSSL is an open source project that provides a robust, commercial-grade, and full-featured toolkit for the Transport Layer Security (TLS) and Secure Sockets Layer (SSL) protocols. It is also a general-purpose cryptography library.",
+      "homepage_url": "https://www.openssl-library.org",
+      "repo_url": "https://github.com/openssl/openssl",
+      "created_at": "2016-01-25T20:18:15.236Z",
+      "updated_at": "2025-08-26T09:07:18.725Z",
+      "badge_percentage": 100,
+      "tiered_percentage": 105
+    },
+    "overall_score": {
+      "score": 45.42,
+      "max_score": 100,
+      "badge_level": "in_progress",
+      "category_scores": {
+        "governance": 33.33,
+        "security": 75.0,
+        "quality": 100.0
+      },
+      "details": [
+        "Badge Level: IN_PROGRESS",
+        "Governance: 33.3% (2/6)",
+        "Security: 75.0% (3/4)",
+        "Quality: 100.0% (6/6)"
+      ]
+    }
+  },
+  {
+    "package_name": "hdf5",
+    "repository": "HDFGroup/hdf5",
+    "timestamp": "2025-12-16T17:46:15.379003Z",
+    "badge_status": {
+      "has_badge": true,
+      "badge_level": "in_progress",
+      "badge_id": 7802,
+      "badge_url": "https://bestpractices.coreinfrastructure.org/projects/7802",
+      "percentage": 93
+    },
+    "governance_criteria": {
+      "met": 2,
+      "total": 6,
+      "percentage": 33.33,
+      "details": [
+        {
+          "criterion": "governance",
+          "status": "?",
+          "met": false
+        },
+        {
+          "criterion": "contribution",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "contribution_requirements",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "governance_doc",
+          "status": "Unknown",
+          "met": false
+        },
+        {
+          "criterion": "code_of_conduct",
+          "status": "?",
+          "met": false
+        },
+        {
+          "criterion": "governance_implementation",
+          "status": "Unknown",
+          "met": false
+        }
+      ]
+    },
+    "security_criteria": {
+      "met": 2,
+      "total": 4,
+      "percentage": 50.0,
+      "details": [
+        {
+          "criterion": "vulnerability_report_process",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "vulnerability_report_private",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "vulnerability_report_response",
+          "status": "Unmet",
+          "met": false
+        },
+        {
+          "criterion": "security_policy",
+          "status": "Unknown",
+          "met": false
+        }
+      ]
+    },
+    "quality_criteria": {
+      "met": 6,
+      "total": 6,
+      "percentage": 100.0,
+      "details": [
+        {
+          "criterion": "test",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_invocation",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_most",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "test_continuous_integration",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "documentation_basics",
+          "status": "Met",
+          "met": true
+        },
+        {
+          "criterion": "documentation_interface",
+          "status": "Met",
+          "met": true
+        }
+      ]
+    },
+    "criteria_details": {
+      "name": "HDF5 Library and File Format",
+      "description": "Official HDF5\u00ae Library Repository",
+      "homepage_url": "https://github.com/HDFGroup/hdf5",
+      "repo_url": "https://github.com/HDFGroup/hdf5",
+      "created_at": "2023-09-05T17:54:26.295Z",
+      "updated_at": "2025-12-03T17:51:05.305Z",
+      "badge_percentage": 93,
+      "tiered_percentage": 93
+    },
+    "overall_score": {
+      "score": 41.67,
+      "max_score": 100,
+      "badge_level": "in_progress",
+      "category_scores": {
+        "governance": 33.33,
+        "security": 50.0,
+        "quality": 100.0
+      },
+      "details": [
+        "Badge Level: IN_PROGRESS",
+        "Governance: 33.3% (2/6)",
+        "Security: 50.0% (2/4)",
+        "Quality: 100.0% (6/6)"
+      ]
+    }
+  }
+]
