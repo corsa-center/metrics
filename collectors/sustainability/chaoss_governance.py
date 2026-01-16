@@ -895,10 +895,10 @@ async def main():
 
     # Save results to JSON
     import json
-    with open("chaoss_activity_results.json", "w") as f:
+    with open("4.2.-chaoss_activity.json", "w") as f:
         json.dump(results, f, indent=2)
 
-    print(f"\nResults saved to chaoss_activity_results.json")
+    print(f"\n4.2.-chaoss_activity.json")
 
 
 if __name__ == "__main__":
