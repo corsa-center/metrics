@@ -1,3 +1,9 @@
+"""
+CI/CD Metric Collector for CASS Framework
+
+Collects and aggregates basic CI/CD-related metrics.
+"""
+
 import asyncio
 import logging
 import datetime
@@ -13,8 +19,6 @@ class CICDMetricsCollector:
     """
     Collects metrics for CI/CD metrics from Gitlab and Github.
     """
-
-
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -52,6 +56,14 @@ class CICDMetricsCollector:
     
 
     async def collect(self, package: Dict[str, Any],) -> Dict[str, Any]:
+        """
+        Collect metrics.
+        
+        Args:
+            package: Repostiory Information
+         Returns:
+            Dict containing metric information.
+        """
         owner, repo = self._parse_repo_url(package.get("repo_url", ""))
         repo_url = f"{owner}/{repo}"
         branch = package.get("repo_branch", "main")
@@ -65,8 +77,7 @@ class CICDMetricsCollector:
         return output
     
 
-
-    async def _get_last_n_workflow_runs(self, repo_url, num_workflows=10, branch="main", status=None):
+    async def _get_last_n_workflow_runs(self, repo_url: str, num_workflows: int = 100, branch: str = "main", status: str = None) -> list:
         repo = self.github.get_repo(repo_url)
         if status:
             workflow_runs = repo.get_workflow_runs(branch=branch, status=status)
@@ -78,24 +89,41 @@ class CICDMetricsCollector:
         return workflow_runs
         
 
-    async def workflow_execution_time(self, repo_url, branch):
+    async def workflow_execution_time(self, repo_url: str, branch: str) -> dict[str, float]:
+        """
+        Collect the average workflow execution time for the last 100 workflow runs.
+        
+        Args:
+            repo_url: Repostiory Owner and Name in the format 'owner/repo_name'
+            branch: Which branch in repository to pull info from.
+         Returns:
+            Dict containing metric information.
+        """
         avg_workflow_execution_time = 0
         workflows = await self._get_last_n_workflow_runs(repo_url=repo_url, branch=branch)
         for w in workflows:
             workflow_duration = w.updated_at.timestamp() - w.created_at.timestamp()
             avg_workflow_execution_time += workflow_duration
-        self.logger.debug(f"Average Workflow Execution Time: {avg_workflow_execution_time / 10}")
-        return {"average_workflow_execution_time": avg_workflow_execution_time / 10}
+        self.logger.debug(f"Average Workflow Execution Time: {avg_workflow_execution_time / 100}")
+        return {"average_workflow_execution_time": avg_workflow_execution_time / 100}
 
 
-    async def percentage_workflow_success(self, repo_url):
+    async def percentage_workflow_success(self, repo_url: str) -> dict[str, float]:
+        """
+        Collect the percentage of workflow runs that succeed for each workflow in repo.
+        
+        Args:
+            repo_url: Repostiory Owner and Name in the format 'owner/repo_name'
+         Returns:
+            Dict containing metric information.
+        """
         workflows = self.github.get_repo(repo_url).get_workflows()
         workflow_success_percentage = {}
         successes = 0
         for w in workflows:
             runs = w.get_runs(exclude_pull_requests=True)
             if runs.totalCount > 0:
-                runs = list(runs)[-10:]
+                runs = list(runs)[-100:]
                 for r in runs:
                     if r.completed and r.status == "success":
                         successes +=1     
@@ -104,7 +132,16 @@ class CICDMetricsCollector:
         return {"workflow_success_percentage": workflow_success_percentage}
 
 
-    async def deployment_frequency(self, repo_url, days_to_measure=30):
+    async def deployment_frequency(self, repo_url: str, days_to_measure: int = 30) -> dict[str, int]:
+        """
+        Collect metrics on how many deployments over the specified time period from this repo.
+        
+        Args:
+            repo_url: Repostiory Owner and Name in the format 'owner/repo_name'
+            days_to_measure: Time period in days in which to measure metric.
+         Returns:
+            Dict containing metric information.
+        """
         deployments = self.github.get_repo(repo_url).get_deployments()
         start_date = datetime.datetime.now() - datetime.timedelta(days_to_measure)
         deployment_count = 0
@@ -120,21 +157,36 @@ class CICDMetricsCollector:
         return {f"num_of_deployments_last_{days_to_measure}_days": deployment_count}
 
 
-
-    async def average_time_failure(self, repo_url, branch):
-        workflows_runs = await self._get_last_n_workflow_runs(repo_url, 10, branch, "failure")
+    async def average_time_failure(self, repo_url: str, branch: str) -> dict[str, float]:
+        """
+        Collect the average time a failed workflow takes to finish (over the last 100 workflow runs).
+        
+        Args:
+            repo_url: Repostiory Owner and Name in the format 'owner/repo_name'
+            branch: Which branch in repository to pull info from.
+         Returns:
+            Dict containing metric information.
+        """
+        workflows_runs = await self._get_last_n_workflow_runs(repo_url, 100, branch, "failure")
         average_time_to_failure = 0
         for w in workflows_runs:
             workflow_duration = w.updated_at.timestamp() - w.created_at.timestamp()
             average_time_to_failure += workflow_duration
-        self.logger.debug(f"Average Time to Failure: {average_time_to_failure / 10}")
-        return {"average_time_to_failure": average_time_to_failure / 10}
+        self.logger.debug(f"Average Time to Failure: {average_time_to_failure / 100}")
+        return {"average_time_to_failure": average_time_to_failure / 100}
             
 
-
-    async def avg_cycle_time(self, repo_url):
+    async def avg_cycle_time(self, repo_url: str) -> dict[str, float]:
+        """
+        Collect the average time it takes from a commit to be first committed until it is merged into another branch from where it started.
+        
+        Args:
+            repo_url: Repostiory Owner and Name in the format 'owner/repo_name'
+         Returns:
+            Dict containing metric information.
+        """
         pull_requests = self.github.get_repo(repo_url).get_pulls(state="closed")
-        pull_requests = list(pull_requests)[-10:]
+        pull_requests = list(pull_requests)[-100:]
         avg_cycle_time = 0
         for pull_request in pull_requests:
             first_commit = pull_request.get_commits()[0]
@@ -151,7 +203,7 @@ class CICDMetricsCollector:
         if len(pull_requests) > 0:
             self.logger.debug(f"Average Cycle Time: {avg_cycle_time / len(pull_requests.totalCount)}")
             return {"avg_cycle_time": avg_cycle_time / len(pull_requests.totalCount)}
-        return {"avg_cycle_time": 0}
+        return {"avg_cycle_time": 0.0}
 
 
 # Example usage
@@ -168,7 +220,7 @@ async def main():
             "zenodo": {},
         }
     }
-         # Example package
+    # Example package
     package = {
         "repo_url": "https://github.com/galaxyproject/galaxy",
         "repo_branch": "dev"
