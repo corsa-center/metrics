@@ -2,11 +2,11 @@
 """
 Orchestrator: Coordinates metrics collection and dashboard integration
 
-This script:
-1. Reads the software catalog from dashboard repository
-2. Collects metrics for each software package
-3. Transforms data to dashboard format
-4. Exports to dashboard repository
+Collects metrics across the three CASS dimensions defined in the
+CASS Sustainability Metrics Report v3:
+  - Impact (4.1): Citation, adoption, field research impact
+  - Sustainability (4.2): Governance, licensing, maintenance, engagement, etc.
+  - Quality (4.3): Reliability, dev practices, reproducibility, usability, etc.
 
 Usage:
     python orchestrator.py --config config.yaml [--dry-run] [--software HDF5]
@@ -16,11 +16,14 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import httpx
+import re
 import yaml
 
 # Setup logging
@@ -40,45 +43,61 @@ class MetricsOrchestrator:
             config_path: Path to configuration file
         """
         self.config = self._load_config(config_path)
-        self.dashboard_path = Path(
-            self.config.get("dashboard_repo_path", "../dashboard")
-        )
+        self.dashboard_base_url = self.config.get(
+            "dashboard_base_url", "https://corsa.center/dashboard"
+        ).rstrip("/")
         self.output_path = Path(self.config.get("output_path", "./output"))
         self.collectors_enabled = self.config.get("collectors", {})
 
     def _load_config(self, config_path: str) -> Dict:
-        """Load configuration from YAML file"""
+        """Load configuration from YAML file, resolving ${ENV_VAR} references"""
         with open(config_path, "r") as f:
-            return yaml.safe_load(f)
+            config = yaml.safe_load(f)
+        return self._resolve_env_vars(config)
+
+    def _resolve_env_vars(self, obj):
+        """Recursively resolve ${ENV_VAR} references in config values"""
+        if isinstance(obj, str):
+            return re.sub(
+                r"\$\{(\w+)\}",
+                lambda m: os.environ.get(m.group(1), ""),
+                obj,
+            )
+        if isinstance(obj, dict):
+            return {k: self._resolve_env_vars(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._resolve_env_vars(v) for v in obj]
+        return obj
+
+    def _fetch_json(self, url: str) -> Optional[Dict]:
+        """Fetch a JSON file from a URL
+
+        Args:
+            url: URL to fetch
+
+        Returns:
+            Parsed JSON as dict, or None on failure
+        """
+        logger.info(f"Fetching {url}")
+        try:
+            response = httpx.get(url, timeout=30.0, follow_redirects=True)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to fetch {url}: {e}")
+            return None
 
     def load_software_catalog(self) -> Dict:
-        """Load software catalog from dashboard repository
+        """Load software catalog from the dashboard (fetched via HTTP)
 
         Returns:
             Dictionary of software packages with metadata
         """
-        catalog_path = self.dashboard_path / "explore/github-data/intReposInfo.json"
-        logger.info(f"Loading catalog from {catalog_path}")
-
-        if not catalog_path.exists():
-            logger.error(f"Catalog not found at {catalog_path}")
+        url = f"{self.dashboard_base_url}/explore/github-data/intReposInfo.json"
+        data = self._fetch_json(url)
+        if data is None:
             return {}
-
-        with open(catalog_path, "r") as f:
-            data = json.load(f)
-            return data.get("data", {})
-
-    def load_cass_mapping(self) -> Dict:
-        """Load CASS category mapping"""
-        mapping_path = self.dashboard_path / "catalog/cass_category_mapping.json"
-
-        if not mapping_path.exists():
-            logger.warning(f"CASS mapping not found at {mapping_path}")
-            return {}
-
-        with open(mapping_path, "r") as f:
-            data = json.load(f)
-            return data.get("data", {})
+        return data.get("data", {})
 
     def prepare_software_list(
         self, filter_software: Optional[str] = None
@@ -92,13 +111,6 @@ class MetricsOrchestrator:
             List of software packages with required metadata
         """
         catalog = self.load_software_catalog()
-        cass_mapping = self.load_cass_mapping()
-
-        # Find which category each software belongs to
-        repo_to_category = {}
-        for category, repos in cass_mapping.items():
-            for repo in repos:
-                repo_to_category[repo] = category
 
         software_list = []
         for repo_name, metadata in catalog.items():
@@ -111,7 +123,6 @@ class MetricsOrchestrator:
                 "repository": repo_name,
                 "repo_url": metadata.get("url", f"https://github.com/{repo_name}"),
                 "description": metadata.get("description", ""),
-                "category": repo_to_category.get(repo_name, "Uncategorized"),
                 "homepage": metadata.get("homepageUrl"),
                 "license": metadata.get("licenseInfo", {}).get("spdxId"),
                 "primary_language": metadata.get("primaryLanguage", {}).get("name")
@@ -124,7 +135,7 @@ class MetricsOrchestrator:
         return software_list
 
     async def collect_impact_dimension(self, package: Dict) -> Dict:
-        """Collect Impact dimension metrics
+        """Collect Impact dimension metrics (CASS Report Section 4.1)
 
         Args:
             package: Package metadata dictionary
@@ -138,67 +149,88 @@ class MetricsOrchestrator:
         logger.info(f"Collecting Impact dimension for {package['name']}")
 
         try:
-            # Try citation collector first (if implemented)
             from collectors.impact.citation import CitationMetricCollector
 
             collector = CitationMetricCollector(self.config)
             result = await collector.collect(package)
-            return {"dimension": "impact", "score": result.get("score", 0), "max_score": 100.0}
+            score = result.get("score", 0) if result else 0
+            return {
+                "dimension": "impact",
+                "score": score,
+                "max_score": 100.0,
+                "sub_results": result,
+            }
         except ImportError:
-            # Fall back to dimension placeholder
-            try:
-                from collectors.impact.dimension import ImpactDimensionCollector
+            pass
+        except Exception as e:
+            logger.error(f"Citation collection failed for {package['name']}: {e}")
 
-                collector = ImpactDimensionCollector(self.config)
-                return await collector.collect(package)
-            except Exception as e:
-                logger.error(f"Impact dimension collection failed for {package['name']}: {e}")
-                return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
-
-    async def collect_community_dimension(self, package: Dict) -> Dict:
-        """Collect Community dimension metrics"""
-        if not self.collectors_enabled.get("community", False):
-            return {"dimension": "community", "score": 0.0, "max_score": 100.0}
-
-        logger.info(f"Collecting Community dimension for {package['name']}")
-
+        # Fall back to dimension placeholder
         try:
-            from collectors.community.dimension import CommunityDimensionCollector
+            from collectors.impact.dimension import ImpactDimensionCollector
 
-            collector = CommunityDimensionCollector(self.config)
+            collector = ImpactDimensionCollector(self.config)
             return await collector.collect(package)
         except Exception as e:
-            logger.error(f"Community dimension collection failed for {package['name']}: {e}")
-            return {"dimension": "community", "score": 0.0, "max_score": 100.0}
+            logger.error(f"Impact dimension collection failed for {package['name']}: {e}")
+            return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
-    async def collect_viability_dimension(self, package: Dict) -> Dict:
-        """Collect Viability dimension metrics"""
-        if not self.collectors_enabled.get("viability", False):
-            return {"dimension": "viability", "score": 0.0, "max_score": 100.0}
+    def _get_github_token(self) -> Optional[str]:
+        """Extract GitHub token from resolved config"""
+        token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
+        return token if token else None
 
-        logger.info(f"Collecting Viability dimension for {package['name']}")
+    async def collect_sustainability_dimension(self, package: Dict) -> Dict:
+        """Collect Sustainability dimension metrics (CASS Report Section 4.2)
 
+        Runs all implemented sustainability sub-collectors and combines scores.
+        """
+        if not self.collectors_enabled.get("sustainability", False):
+            return {"dimension": "sustainability", "score": 0.0, "max_score": 100.0}
+
+        logger.info(f"Collecting Sustainability dimension for {package['name']}")
+
+        github_token = self._get_github_token()
+        sub_results = {}
+
+        # 4.2.1 CoC, Governance, and Contributor Guidelines
         try:
-            # Try licensing collector first (if implemented)
-            from collectors.viability.licensing import LicensingCollector
+            from collectors.sustainability.community_health import CommunityHealthCollector
+            collector = CommunityHealthCollector(github_token=github_token)
+            sub_results["governance"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Governance collection failed for {package['name']}: {e}")
 
-            collector = LicensingCollector(self.config)
-            result = await collector.collect(package)
-            # Use clarity_score as the viability score for now
-            return {"dimension": "viability", "score": result.get("clarity_score", 0), "max_score": 100.0}
-        except ImportError:
-            # Fall back to dimension placeholder
-            try:
-                from collectors.viability.dimension import ViabilityDimensionCollector
+        # 4.2.2 Licensing and FAIR Compliance
+        try:
+            from collectors.sustainability.licensing import LicensingCollector
+            collector = LicensingCollector(github_token=github_token)
+            sub_results["licensing"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Licensing collection failed for {package['name']}: {e}")
 
-                collector = ViabilityDimensionCollector(self.config)
-                return await collector.collect(package)
-            except Exception as e:
-                logger.error(f"Viability dimension collection failed for {package['name']}: {e}")
-                return {"dimension": "viability", "score": 0.0, "max_score": 100.0}
+        # Calculate combined sustainability score from available sub-collectors
+        scores = []
+        if "governance" in sub_results:
+            scores.append(sub_results["governance"].get("overall_score", {}).get("percentage", 0))
+        if "licensing" in sub_results:
+            scores.append(sub_results["licensing"].get("compliance_score", {}).get("percentage", 0))
+
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+
+        return {
+            "dimension": "sustainability",
+            "score": round(avg_score, 2),
+            "max_score": 100.0,
+            "sub_results": sub_results,
+        }
 
     async def collect_quality_dimension(self, package: Dict) -> Dict:
-        """Collect Quality dimension metrics"""
+        """Collect Quality dimension metrics (CASS Report Section 4.3)
+
+        Includes: reliability, development practices, reproducibility,
+        usability, accessibility, maintainability, performance.
+        """
         if not self.collectors_enabled.get("quality", False):
             return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
 
@@ -214,7 +246,7 @@ class MetricsOrchestrator:
             return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
 
     async def collect_all_metrics(self, package: Dict) -> Dict:
-        """Collect all metrics for a package
+        """Collect all metrics for a package across the 3 CASS dimensions
 
         Args:
             package: Package metadata
@@ -226,22 +258,15 @@ class MetricsOrchestrator:
             f"Starting metrics collection for {package['name']} ({package['repository']})"
         )
 
-        # Collect all 4 CASS dimensions in parallel
-        impact_task = self.collect_impact_dimension(package)
-        community_task = self.collect_community_dimension(package)
-        viability_task = self.collect_viability_dimension(package)
-        quality_task = self.collect_quality_dimension(package)
-
+        # Collect all 3 CASS dimensions in parallel
         (
             impact_metrics,
-            community_metrics,
-            viability_metrics,
+            sustainability_metrics,
             quality_metrics,
         ) = await asyncio.gather(
-            impact_task,
-            community_task,
-            viability_task,
-            quality_task,
+            self.collect_impact_dimension(package),
+            self.collect_sustainability_dimension(package),
+            self.collect_quality_dimension(package),
             return_exceptions=True,
         )
 
@@ -250,23 +275,18 @@ class MetricsOrchestrator:
             logger.error(f"Impact dimension error: {impact_metrics}")
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
-        if isinstance(community_metrics, Exception):
-            logger.error(f"Community dimension error: {community_metrics}")
-            community_metrics = {"dimension": "community", "score": 0.0, "max_score": 100.0}
-
-        if isinstance(viability_metrics, Exception):
-            logger.error(f"Viability dimension error: {viability_metrics}")
-            viability_metrics = {"dimension": "viability", "score": 0.0, "max_score": 100.0}
+        if isinstance(sustainability_metrics, Exception):
+            logger.error(f"Sustainability dimension error: {sustainability_metrics}")
+            sustainability_metrics = {"dimension": "sustainability", "score": 0.0, "max_score": 100.0}
 
         if isinstance(quality_metrics, Exception):
             logger.error(f"Quality dimension error: {quality_metrics}")
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
 
-        # Calculate overall score (weighted average of 4 dimensions)
+        # Calculate overall score (weighted average of 3 dimensions)
         overall_score = self._calculate_overall_score(
             impact_metrics,
-            community_metrics,
-            viability_metrics,
+            sustainability_metrics,
             quality_metrics,
         )
 
@@ -274,46 +294,40 @@ class MetricsOrchestrator:
             "overall_score": overall_score,
             "dimensions": {
                 "impact": impact_metrics,
-                "community": community_metrics,
-                "viability": viability_metrics,
+                "sustainability": sustainability_metrics,
                 "quality": quality_metrics,
             },
-            "last_updated": datetime.utcnow().isoformat() + "Z",
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
     def _calculate_overall_score(
         self,
         impact: Dict,
-        community: Dict,
-        viability: Dict,
+        sustainability: Dict,
         quality: Dict,
     ) -> int:
-        """Calculate weighted overall sustainability score based on 4 CASS dimensions
+        """Calculate weighted overall sustainability score based on 3 CASS dimensions
 
         Default weights (can be configured):
-        - Impact: 25%
-        - Community: 25%
-        - Viability: 25%
-        - Quality: 25%
+        - Impact: 33%
+        - Sustainability: 34%
+        - Quality: 33%
         """
         # Get weights from config or use defaults
         weights = self.config.get("metric_weights", {})
-        impact_weight = weights.get("impact", 0.25)
-        community_weight = weights.get("community", 0.25)
-        viability_weight = weights.get("viability", 0.25)
-        quality_weight = weights.get("quality", 0.25)
+        impact_weight = weights.get("impact", 0.33)
+        sustainability_weight = weights.get("sustainability", 0.34)
+        quality_weight = weights.get("quality", 0.33)
 
         # Extract scores from dimension results
         impact_score = impact.get("score", 0)
-        community_score = community.get("score", 0)
-        viability_score = viability.get("score", 0)
+        sustainability_score = sustainability.get("score", 0)
         quality_score = quality.get("score", 0)
 
         # Calculate weighted average
         overall = (
             impact_score * impact_weight
-            + community_score * community_weight
-            + viability_score * viability_weight
+            + sustainability_score * sustainability_weight
             + quality_score * quality_weight
         )
 
@@ -351,23 +365,9 @@ class MetricsOrchestrator:
 
         # Write output
         if not dry_run:
-            self._write_dashboard_output(all_metrics)
             self._write_summary_report(all_metrics)
 
         return all_metrics
-
-    def _write_dashboard_output(self, metrics: Dict):
-        """Write metrics in dashboard format"""
-        output_file = (
-            self.dashboard_path / "explore/github-data/sustainabilityMetrics.json"
-        )
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"Writing dashboard output to {output_file}")
-        with open(output_file, "w") as f:
-            json.dump(metrics, f, indent=2)
-
-        logger.info(f"✓ Dashboard metrics written: {len(metrics)} packages")
 
     def _write_summary_report(self, metrics: Dict):
         """Write summary report"""
@@ -375,7 +375,7 @@ class MetricsOrchestrator:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         summary = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_packages": len(metrics),
             "avg_overall_score": sum(m["overall_score"] for m in metrics.values())
             / len(metrics)
@@ -405,7 +405,7 @@ class MetricsOrchestrator:
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
 
-        logger.info(f"✓ Summary report written to {output_file}")
+        logger.info(f"Summary report written to {output_file}")
 
 
 async def main():

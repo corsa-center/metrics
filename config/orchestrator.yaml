@@ -1,17 +1,18 @@
 # Orchestrator Configuration
 # Coordinates metrics collection and dashboard integration
+#
+# Based on CASS Sustainability Metrics Report v3 (3 dimensions):
+#   4.1 Impact, 4.2 Sustainability, 4.3 Quality
 
-# Repository paths
-dashboard_repo_path: "../dashboard"  # Path to dashboard repository
+# Dashboard catalog URL (served via GitHub Pages)
+dashboard_base_url: "https://corsa.center/dashboard"
 output_path: "./output"              # Local output directory
 
 # Enable/disable CASS dimension collectors
-# ✅ = Implemented, 🔄 = Placeholder (returns zeros/false)
 collectors:
-  impact: true          # ✅ Impact dimension (citations, adoption, field research impact)
-  community: false      # 🔄 Community dimension (health, engagement, diversity)
-  viability: true       # ✅ Viability dimension (sustainability, security, licensing)
-  quality: false        # 🔄 Quality dimension (documentation, code quality, testing)
+  impact: true              # 4.1 Impact (citation, adoption, field research impact)
+  sustainability: true      # 4.2 Sustainability (governance, licensing, maintenance, engagement, ...)
+  quality: false            # 4.3 Quality (reliability, dev practices, reproducibility, usability, ...)
 
 # API credentials
 api_credentials:
@@ -27,10 +28,9 @@ api_credentials:
 # Metric weights for overall score calculation (CASS dimensions)
 # Note: Weights should sum to 1.0
 metric_weights:
-  impact: 0.25       # 25% weight - Research impact, citation, and adoption
-  community: 0.25    # 25% weight - Community health, engagement, and diversity
-  viability: 0.25    # 25% weight - Sustainability, security, and licensing
-  quality: 0.25      # 25% weight - Documentation, code quality, and testing
+  impact: 0.33             # 33% weight - Research impact, citation, and adoption
+  sustainability: 0.34     # 34% weight - Governance, licensing, maintenance, engagement
+  quality: 0.33            # 33% weight - Reliability, dev practices, usability
 
 # Rate limiting
 rate_limiting:
