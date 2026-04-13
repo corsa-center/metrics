@@ -65,7 +65,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sustainability-metrics
-          path: output/sustainabilityMetrics.json
+          path: output/*-metrics/
           retention-days: 90
 
       - name: Upload reports artifact

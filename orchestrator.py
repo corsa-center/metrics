@@ -366,8 +366,7 @@ class MetricsOrchestrator:
         # Write output
         if not dry_run:
             self._write_summary_report(all_metrics)
-            dashboard_metrics = self._transform_for_dashboard(all_metrics)
-            self._write_dashboard_output(dashboard_metrics)
+            self._write_dashboard_output(all_metrics)
 
         return all_metrics
 
@@ -409,108 +408,117 @@ class MetricsOrchestrator:
 
         logger.info(f"Summary report written to {output_file}")
 
-    def _transform_for_dashboard(self, all_metrics: Dict) -> Dict:
-        """Transform internal metrics format to the dashboard's sustainabilityMetrics.json format.
+    def _transform_for_dashboard(self, repo_name: str, metrics: Dict) -> Dict:
+        """Transform internal metrics into the per-package CASS v3 format.
 
-        The dashboard JS (catalog.js renderSustainabilityMetrics) expects:
-          { "owner/repo": { overall_score, impact_metrics, community_metrics, licensing_metrics, last_updated } }
+        The dashboard expects per-package files at:
+          explore/github-data/{repo}-metrics/metrics.json
+
+        Structure keyed by CASS Report section numbers (4.1.x, 4.2.x, 4.3.x),
+        each with a ``title`` and ``data`` (HTML string or None).
         """
-        dashboard = {}
+        dims = metrics.get("dimensions", {})
+        sust = dims.get("sustainability", {}).get("sub_results", {})
 
-        for repo_name, metrics in all_metrics.items():
-            dims = metrics.get("dimensions", {})
-
-            # --- Licensing metrics transform ---
-            licensing_raw = (
-                dims.get("sustainability", {})
-                .get("sub_results", {})
-                .get("licensing", {})
-            )
-            analysis = licensing_raw.get("license_analysis", {})
-            compliance = licensing_raw.get("compliance_score", {})
-
-            # Map category to compatibility label used by the dashboard CSS classes
-            category = (analysis.get("category") or "").lower()
-            if category in ("permissive", "public domain"):
-                compat = "high"
-            elif "weak" in category:
-                compat = "medium"
-            elif category in ("copyleft",):
-                compat = "low"
+        # --- 4.2.1 CoC, Governance, and Contributor Guidelines ---
+        governance = sust.get("governance", {})
+        gov_lines = []
+        for label, key in [
+            ("Code of Conduct", "code_of_conduct"),
+            ("Governance", "governance"),
+            ("Contributing Guidelines", "contributing_guidelines"),
+        ]:
+            info = governance.get(key, {})
+            if info.get("exists"):
+                url = info.get("url", "")
+                link = f'<a href="{url}">{info.get("file_path", "")}</a>' if url else info.get("file_path", "")
+                gov_lines.append(f"<p><strong>{label}:</strong> {link}</p>")
             else:
-                compat = "unknown"
+                gov_lines.append(f"<p><strong>{label}:</strong> Not found</p>")
+        gov_score = governance.get("overall_score", {})
+        if gov_score:
+            gov_lines.append(
+                f'<p><strong>Score:</strong> {gov_score.get("score", 0)}/{gov_score.get("max_score", 3)}</p>'
+            )
+        section_421_data = "\n".join(gov_lines) if governance else None
 
+        # --- 4.2.2 Licensing and FAIR Compliance ---
+        licensing = sust.get("licensing", {})
+        analysis = licensing.get("license_analysis", {})
+        compliance = licensing.get("compliance_score", {})
+        if licensing:
             spdx_id = analysis.get("spdx_id") or ""
-            # GitHub returns "NOASSERTION" when it can't match a standard license
             if spdx_id in ("NOASSERTION", ""):
                 spdx_id = None
+            license_name = spdx_id or analysis.get("license_type") or "Unknown"
+            lic_lines = [
+                f"<p><strong>License:</strong> {license_name}</p>",
+                f"<p><strong>Category:</strong> {analysis.get('category', 'Unknown')}</p>",
+                f"<p><strong>OSI Approved:</strong> {'Yes' if analysis.get('osi_approved') else 'No' if analysis.get('osi_approved') is False else 'Unknown'}</p>",
+                f"<p><strong>Compliance Score:</strong> {compliance.get('score', 0)}/{compliance.get('max_score', 3)} ({compliance.get('percentage', 0):.0f}%)</p>",
+            ]
+            # Include detail checklist
+            for detail in compliance.get("details", []):
+                lic_lines.append(f"<p>{detail}</p>")
+            section_422_data = "\n".join(lic_lines)
+        else:
+            section_422_data = None
 
-            licensing_metrics = {
-                "license": spdx_id or analysis.get("license_type") or "Unknown",
-                "license_compatibility": compat,
-                "outbound_licenses": [],
-                "license_clarity_score": int(round(compliance.get("percentage", 0))),
-            }
+        return {
+            "package": repo_name,
+            "impact": {
+                "4.1.1": {"title": "Software Citation and Adoption", "data": None},
+                "4.1.2": {"title": "Field Research Impact", "data": None},
+            },
+            "sustainability": {
+                "4.2.1": {
+                    "title": "Codes of Conduct (CoC), Governance, and Contributor Guidelines",
+                    "data": section_421_data,
+                },
+                "4.2.2": {
+                    "title": "Open-Source Licensing and FAIR Compliance",
+                    "data": section_422_data,
+                },
+                "4.2.3": {"title": "Active Maintenance", "data": None},
+                "4.2.4": {"title": "Engagement", "data": None},
+                "4.2.5": {"title": "Outreach", "data": None},
+                "4.2.6": {"title": "Welcomeness", "data": None},
+                "4.2.7": {"title": "Collaboration", "data": None},
+                "4.2.8": {"title": "Financial Sustainability", "data": None},
+                "4.2.9": {"title": "Institutional & Organizational Support", "data": None},
+                "4.2.10": {"title": "Project Longevity and Community Health", "data": None},
+            },
+            "quality": {
+                "4.3.1": {"title": "Reliability and Robustness", "data": None},
+                "4.3.2": {"title": "Development Practices", "data": None},
+                "4.3.3": {"title": "Reproducibility", "data": None},
+                "4.3.4": {"title": "Usability", "data": None},
+                "4.3.5": {"title": "Accessibility", "data": None},
+                "4.3.6": {"title": "Maintainability and Understandability", "data": None},
+                "4.3.7": {"title": "Performance and Efficiency", "data": None},
+            },
+        }
 
-            # --- Impact metrics (stub / from sub_results when available) ---
-            impact_raw = dims.get("impact", {}).get("sub_results") or {}
-            impact_metrics = {
-                "citation_score": impact_raw.get("citation_score", 0.0),
-                "formal_citations": impact_raw.get("formal_citations", 0),
-                "informal_mentions": impact_raw.get("informal_mentions", 0),
-                "dependent_packages": impact_raw.get("dependent_packages", 0),
-                "doi_resolutions": impact_raw.get("doi_resolutions", 0),
-            }
+    def _write_dashboard_output(self, all_metrics: Dict):
+        """Write per-package metrics.json files for the dashboard.
 
-            # --- Community metrics (stub / from sub_results when available) ---
-            governance_raw = (
-                dims.get("sustainability", {})
-                .get("sub_results", {})
-                .get("governance", {})
-            )
-            community_metrics = {
-                "total_contributors": governance_raw.get("total_contributors", 0),
-                "active_contributors_30d": governance_raw.get("active_contributors_30d", 0),
-                "commit_frequency_per_month": governance_raw.get("commit_frequency_per_month", 0.0),
-                "avg_issue_response_days": governance_raw.get("avg_issue_response_days", 0.0),
-                "avg_pr_merge_days": governance_raw.get("avg_pr_merge_days", 0.0),
-            }
-
-            dashboard[repo_name] = {
-                "overall_score": metrics.get("overall_score", 0),
-                "impact_metrics": impact_metrics,
-                "community_metrics": community_metrics,
-                "licensing_metrics": licensing_metrics,
-                "last_updated": metrics.get("last_updated", datetime.now(timezone.utc).isoformat()),
-            }
-
-        return dashboard
-
-    def _write_dashboard_output(self, dashboard_metrics: Dict):
-        """Write sustainabilityMetrics.json to the output directory.
-
-        This file is published to GitHub Pages so the dashboard can fetch it.
-        Merges new results into any existing file so that running for a
-        single package doesn't erase data for other packages.
+        Creates: output/{repo-name}-metrics/metrics.json for each package.
+        These are uploaded as workflow artifacts and downloaded by the
+        dashboard's update workflow into explore/github-data/.
         """
-        output_file = self.output_path / "sustainabilityMetrics.json"
+        for repo_name, metrics in all_metrics.items():
+            dashboard_data = self._transform_for_dashboard(repo_name, metrics)
 
-        # Load existing data so a single-package run is additive
-        existing = {}
-        if output_file.exists():
-            try:
-                with open(output_file, "r") as f:
-                    existing = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                existing = {}
+            # Extract repo part from "Owner/repo" for directory name
+            repo_short = repo_name.split("/")[-1]
+            metrics_dir = self.output_path / f"{repo_short}-metrics"
+            metrics_dir.mkdir(parents=True, exist_ok=True)
 
-        existing.update(dashboard_metrics)
+            output_file = metrics_dir / "metrics.json"
+            with open(output_file, "w") as f:
+                json.dump(dashboard_data, f, indent=2)
 
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_file, "w") as f:
-            json.dump(existing, f, indent=2)
-
-        logger.info(f"Dashboard metrics written to {output_file}")
+            logger.info(f"Dashboard metrics written to {output_file}")
 
 
 async def main():
