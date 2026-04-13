@@ -418,6 +418,38 @@ class MetricsOrchestrator:
         each with a ``title`` and ``data`` (HTML string or None).
         """
         dims = metrics.get("dimensions", {})
+
+        # --- 4.1.1 Software Citation and Adoption ---
+        impact_sub = dims.get("impact", {}).get("sub_results") or {}
+        sub_metrics = impact_sub.get("sub_metrics", {})
+        if sub_metrics:
+            citation_lines = []
+            formal = sub_metrics.get("formal_citations", {})
+            if formal.get("raw_value", 0) > 0:
+                citation_lines.append(
+                    f'<p><strong>Formal Citations:</strong> {formal["raw_value"]:,}</p>'
+                )
+            informal = sub_metrics.get("informal_mentions", {})
+            if informal.get("raw_value", 0) > 0:
+                citation_lines.append(
+                    f'<p><strong>Informal Mentions:</strong> {informal["raw_value"]:,}</p>'
+                )
+            dependents = sub_metrics.get("dependent_packages", {})
+            if dependents.get("raw_value", 0) > 0:
+                citation_lines.append(
+                    f'<p><strong>Dependent Packages:</strong> {dependents["raw_value"]:,}</p>'
+                )
+            dois = sub_metrics.get("doi_resolutions", {})
+            if dois.get("raw_value", 0) > 0:
+                citation_lines.append(
+                    f'<p><strong>DOI Resolutions:</strong> {dois["raw_value"]:,}</p>'
+                )
+            score = impact_sub.get("score", 0)
+            citation_lines.append(f'<p><strong>Citation Score:</strong> {score:.1f}/100</p>')
+            section_411_data = "\n".join(citation_lines) if citation_lines else None
+        else:
+            section_411_data = None
+
         sust = dims.get("sustainability", {}).get("sub_results", {})
 
         # --- 4.2.1 CoC, Governance, and Contributor Guidelines ---
@@ -467,7 +499,7 @@ class MetricsOrchestrator:
         return {
             "package": repo_name,
             "impact": {
-                "4.1.1": {"title": "Software Citation and Adoption", "data": None},
+                "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},
                 "4.1.2": {"title": "Field Research Impact", "data": None},
             },
             "sustainability": {

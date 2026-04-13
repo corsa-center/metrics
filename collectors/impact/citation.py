@@ -40,11 +40,11 @@ class CitationMetricCollector:
         credentials = config.get("api_credentials", {})
 
         self.semantic_scholar = SemanticScholarClient(
-            credentials.get("semantic_scholar", {})
+            credentials.get("semantic_scholar") or {}
         )
-        self.openalex = OpenAlexClient(credentials.get("openalex", {}))
-        self.zenodo = ZenodoClient(credentials.get("zenodo", {}))
-        self.github = GitHubClient(credentials.get("github", {}))
+        self.openalex = OpenAlexClient(credentials.get("openalex") or {})
+        self.zenodo = ZenodoClient(credentials.get("zenodo") or {})
+        self.github = GitHubClient(credentials.get("github") or {})
 
         # Get metric weights from config
         weights = (
