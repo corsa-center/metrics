@@ -366,6 +366,8 @@ class MetricsOrchestrator:
         # Write output
         if not dry_run:
             self._write_summary_report(all_metrics)
+            dashboard_metrics = self._transform_for_dashboard(all_metrics)
+            self._write_dashboard_output(dashboard_metrics)
 
         return all_metrics
 
@@ -406,6 +408,109 @@ class MetricsOrchestrator:
             json.dump(summary, f, indent=2)
 
         logger.info(f"Summary report written to {output_file}")
+
+    def _transform_for_dashboard(self, all_metrics: Dict) -> Dict:
+        """Transform internal metrics format to the dashboard's sustainabilityMetrics.json format.
+
+        The dashboard JS (catalog.js renderSustainabilityMetrics) expects:
+          { "owner/repo": { overall_score, impact_metrics, community_metrics, licensing_metrics, last_updated } }
+        """
+        dashboard = {}
+
+        for repo_name, metrics in all_metrics.items():
+            dims = metrics.get("dimensions", {})
+
+            # --- Licensing metrics transform ---
+            licensing_raw = (
+                dims.get("sustainability", {})
+                .get("sub_results", {})
+                .get("licensing", {})
+            )
+            analysis = licensing_raw.get("license_analysis", {})
+            compliance = licensing_raw.get("compliance_score", {})
+
+            # Map category to compatibility label used by the dashboard CSS classes
+            category = (analysis.get("category") or "").lower()
+            if category in ("permissive", "public domain"):
+                compat = "high"
+            elif "weak" in category:
+                compat = "medium"
+            elif category in ("copyleft",):
+                compat = "low"
+            else:
+                compat = "unknown"
+
+            spdx_id = analysis.get("spdx_id") or ""
+            # GitHub returns "NOASSERTION" when it can't match a standard license
+            if spdx_id in ("NOASSERTION", ""):
+                spdx_id = None
+
+            licensing_metrics = {
+                "license": spdx_id or analysis.get("license_type") or "Unknown",
+                "license_compatibility": compat,
+                "outbound_licenses": [],
+                "license_clarity_score": int(round(compliance.get("percentage", 0))),
+            }
+
+            # --- Impact metrics (stub / from sub_results when available) ---
+            impact_raw = dims.get("impact", {}).get("sub_results") or {}
+            impact_metrics = {
+                "citation_score": impact_raw.get("citation_score", 0.0),
+                "formal_citations": impact_raw.get("formal_citations", 0),
+                "informal_mentions": impact_raw.get("informal_mentions", 0),
+                "dependent_packages": impact_raw.get("dependent_packages", 0),
+                "doi_resolutions": impact_raw.get("doi_resolutions", 0),
+            }
+
+            # --- Community metrics (stub / from sub_results when available) ---
+            governance_raw = (
+                dims.get("sustainability", {})
+                .get("sub_results", {})
+                .get("governance", {})
+            )
+            community_metrics = {
+                "total_contributors": governance_raw.get("total_contributors", 0),
+                "active_contributors_30d": governance_raw.get("active_contributors_30d", 0),
+                "commit_frequency_per_month": governance_raw.get("commit_frequency_per_month", 0.0),
+                "avg_issue_response_days": governance_raw.get("avg_issue_response_days", 0.0),
+                "avg_pr_merge_days": governance_raw.get("avg_pr_merge_days", 0.0),
+            }
+
+            dashboard[repo_name] = {
+                "overall_score": metrics.get("overall_score", 0),
+                "impact_metrics": impact_metrics,
+                "community_metrics": community_metrics,
+                "licensing_metrics": licensing_metrics,
+                "last_updated": metrics.get("last_updated", datetime.now(timezone.utc).isoformat()),
+            }
+
+        return dashboard
+
+    def _write_dashboard_output(self, dashboard_metrics: Dict):
+        """Write sustainabilityMetrics.json to the output directory.
+
+        This file is published to GitHub Pages so the dashboard can fetch it.
+        Merges new results into any existing file so that running for a
+        single package doesn't erase data for other packages.
+        """
+        output_file = self.output_path / "sustainabilityMetrics.json"
+
+        # Load existing data so a single-package run is additive
+        existing = {}
+        if output_file.exists():
+            try:
+                with open(output_file, "r") as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                existing = {}
+
+        existing.update(dashboard_metrics)
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "w") as f:
+            json.dump(existing, f, indent=2)
+
+        logger.info(f"Dashboard metrics written to {output_file}")
 
 
 async def main():

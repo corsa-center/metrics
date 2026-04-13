@@ -6,7 +6,7 @@
 
 # Dashboard catalog URL (served via GitHub Pages)
 dashboard_base_url: "https://corsa.center/dashboard"
-output_path: "./output"              # Local output directory
+output_path: "./output"              # Local output directory (published to GitHub Pages)
 
 # Enable/disable CASS dimension collectors
 collectors:
