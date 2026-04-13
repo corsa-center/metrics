@@ -209,12 +209,22 @@ class MetricsOrchestrator:
         except Exception as e:
             logger.warning(f"Licensing collection failed for {package['name']}: {e}")
 
+        # 4.2.3 Active Maintenance
+        try:
+            from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+            collector = ActiveMaintenanceCollector(github_token=github_token)
+            sub_results["maintenance"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
+
         # Calculate combined sustainability score from available sub-collectors
         scores = []
         if "governance" in sub_results:
             scores.append(sub_results["governance"].get("overall_score", {}).get("percentage", 0))
         if "licensing" in sub_results:
             scores.append(sub_results["licensing"].get("compliance_score", {}).get("percentage", 0))
+        if "maintenance" in sub_results:
+            scores.append(sub_results["maintenance"].get("score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -496,6 +506,68 @@ class MetricsOrchestrator:
         else:
             section_422_data = None
 
+        # --- 4.2.3 Active Maintenance ---
+        maintenance = sust.get("maintenance", {})
+        if maintenance:
+            maint_lines = []
+            # Maintenance indicators
+            indicators = maintenance.get("maintenance_indicators", {})
+            if indicators.get("archived"):
+                maint_lines.append("<p><strong>Status:</strong> Archived</p>")
+            elif indicators.get("maintenance_signals"):
+                signals = ", ".join(indicators["maintenance_signals"])
+                maint_lines.append(f"<p><strong>Status:</strong> {signals}</p>")
+            else:
+                maint_lines.append("<p><strong>Status:</strong> Active</p>")
+
+            # Commit activity
+            commits = maintenance.get("commit_activity", {})
+            if commits.get("days_since_last_commit") is not None:
+                maint_lines.append(
+                    f'<p><strong>Last Commit:</strong> {commits["days_since_last_commit"]} days ago</p>'
+                )
+            if commits.get("total_commits_52w"):
+                maint_lines.append(
+                    f'<p><strong>Commits (52 weeks):</strong> {commits["total_commits_52w"]:,} '
+                    f'({commits.get("active_weeks_52w", 0)} active weeks)</p>'
+                )
+            if commits.get("recent_trend") and commits["recent_trend"] != "unknown":
+                maint_lines.append(
+                    f'<p><strong>Trend:</strong> {commits["recent_trend"].capitalize()}</p>'
+                )
+
+            # Release activity
+            releases = maintenance.get("release_activity", {})
+            if releases.get("latest_release"):
+                maint_lines.append(
+                    f'<p><strong>Latest Release:</strong> {releases["latest_release"]}'
+                    f' ({releases.get("days_since_latest_release", "?")} days ago)</p>'
+                )
+            if releases.get("releases_last_year"):
+                maint_lines.append(
+                    f'<p><strong>Releases (last year):</strong> {releases["releases_last_year"]}</p>'
+                )
+
+            # Contributor activity
+            contribs = maintenance.get("contributor_activity", {})
+            if contribs.get("total_contributors"):
+                maint_lines.append(
+                    f'<p><strong>Contributors:</strong> {contribs["total_contributors"]}'
+                    f' (bus factor: {contribs.get("bus_factor", 0)})</p>'
+                )
+
+            # Score
+            score = maintenance.get("score", {})
+            if score:
+                maint_lines.append(
+                    f'<p><strong>Score:</strong> {score.get("score", 0)}/{score.get("max_score", 5)}'
+                    f' ({score.get("percentage", 0):.0f}%)</p>'
+                )
+
+            section_423_data = "\n".join(maint_lines) if maint_lines else None
+        else:
+            section_423_data = None
+
         return {
             "package": repo_name,
             "impact": {
@@ -511,7 +583,7 @@ class MetricsOrchestrator:
                     "title": "Open-Source Licensing and FAIR Compliance",
                     "data": section_422_data,
                 },
-                "4.2.3": {"title": "Active Maintenance", "data": None},
+                "4.2.3": {"title": "Active Maintenance", "data": section_423_data},
                 "4.2.4": {"title": "Engagement", "data": None},
                 "4.2.5": {"title": "Outreach", "data": None},
                 "4.2.6": {"title": "Welcomeness", "data": None},
