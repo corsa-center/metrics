@@ -233,6 +233,14 @@ class MetricsOrchestrator:
         except Exception as e:
             logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
 
+        # OpenSSF Scorecard
+        try:
+            from collectors.sustainability.openssf_scorecard import OpenSSFScorecardCollector
+            collector = OpenSSFScorecardCollector(github_token=github_token)
+            sub_results["openssf_scorecard"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")
+
         # Calculate combined sustainability score from available sub-collectors
         scores = []
         if "governance" in sub_results:
@@ -245,6 +253,10 @@ class MetricsOrchestrator:
             scores.append(sub_results["chaoss_activity"].get("overall_score", {}).get("score", 0))
         if "openssf_badge" in sub_results:
             scores.append(sub_results["openssf_badge"].get("overall_score", {}).get("score", 0))
+        if "openssf_scorecard" in sub_results:
+            pct = sub_results["openssf_scorecard"].get("percentage")
+            if pct is not None:
+                scores.append(pct)
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -266,6 +278,7 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Quality dimension for {package['name']}")
 
+        github_token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
         sub_results = {}
 
         # 4.3.2 Development Practices — CI/CD metrics
@@ -276,9 +289,19 @@ class MetricsOrchestrator:
         except Exception as e:
             logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
 
+        # 4.3.5 Accessibility — portable build systems and containers
+        try:
+            from collectors.quality.accessibility import AccessibilityCollector
+            collector = AccessibilityCollector(github_token=github_token)
+            sub_results["accessibility"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
+
         scores = []
         if "ci_cd" in sub_results:
             scores.append(sub_results["ci_cd"].get("percentage", 0))
+        if "accessibility" in sub_results:
+            scores.append(sub_results["accessibility"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -516,6 +539,21 @@ class MetricsOrchestrator:
             gov_lines.append(
                 f'<p><strong>Score:</strong> {gov_score.get("score", 0)}/{gov_score.get("max_score", 3)}</p>'
             )
+        scorecard = sust.get("openssf_scorecard", {})
+        if scorecard and scorecard.get("scorecard_exists"):
+            score_val = scorecard.get("score")
+            sc_url = scorecard.get("scorecard_url", "")
+            checks_label = f'{scorecard.get("checks_passed", 0)}/{scorecard.get("checks_total", 0)} checks passed'
+            if sc_url and score_val is not None:
+                gov_lines.append(
+                    f'<p><strong>OpenSSF Scorecard:</strong> <a href="{sc_url}">{score_val}/10</a> ({checks_label})</p>'
+                )
+            elif score_val is not None:
+                gov_lines.append(
+                    f'<p><strong>OpenSSF Scorecard:</strong> {score_val}/10 ({checks_label})</p>'
+                )
+        elif scorecard and not scorecard.get("scorecard_exists") and scorecard.get("recommendation"):
+            gov_lines.append('<p><strong>OpenSSF Scorecard:</strong> Not available</p>')
         section_421_data = "\n".join(gov_lines) if governance else None
 
         # --- 4.2.2 Licensing and FAIR Compliance ---
@@ -602,6 +640,72 @@ class MetricsOrchestrator:
         else:
             section_423_data = None
 
+        qual = dims.get("quality", {}).get("sub_results", {})
+
+        # --- 4.3.2 Development Practices ---
+        ci_cd = qual.get("ci_cd", {})
+        openssf_badge = sust.get("openssf_badge", {})
+        section_432_lines = []
+        if ci_cd:
+            section_432_lines.append("<p><strong>CI/CD</strong></p>")
+            section_432_lines.append(
+                f'<p><strong>Score:</strong> {ci_cd.get("score", 0)}/{ci_cd.get("max_score", 6)}'
+                f' ({ci_cd.get("percentage", 0):.0f}%)</p>'
+            )
+            for key, val in ci_cd.get("details", []):
+                if key == "total_workflow_success_percentage" and val:
+                    section_432_lines.append(
+                        f'<p><strong>Workflow Success Rate:</strong> {val:.0f}%</p>'
+                    )
+        if openssf_badge:
+            section_432_lines.append("<p><strong>OpenSSF Best Practices Badge</strong></p>")
+            badge_status = openssf_badge.get("badge_status", {})
+            if openssf_badge.get("badge_exists"):
+                level = badge_status.get("level", "").capitalize()
+                badge_url = badge_status.get("url", "")
+                pct = badge_status.get("progress_percentage", 0)
+                if badge_url:
+                    section_432_lines.append(
+                        f'<p><strong>Badge:</strong> <a href="{badge_url}">{level}</a> ({pct:.0f}%)</p>'
+                    )
+                else:
+                    section_432_lines.append(f'<p><strong>Badge:</strong> {level} ({pct:.0f}%)</p>')
+            else:
+                section_432_lines.append('<p><strong>Badge:</strong> Not registered</p>')
+                overall = openssf_badge.get("overall_score", {})
+                if openssf_badge.get("assessment_method") == "repository_scan" and overall.get("percentage"):
+                    section_432_lines.append(
+                        f'<p><strong>Estimated readiness:</strong> {overall["percentage"]:.0f}%</p>'
+                    )
+                if openssf_badge.get("recommendation"):
+                    section_432_lines.append(f'<p>{openssf_badge["recommendation"]}</p>')
+        section_432_data = "\n".join(section_432_lines) if section_432_lines else None
+
+        # --- 4.3.5 Accessibility ---
+        accessibility = qual.get("accessibility", {})
+        if accessibility:
+            acc_lines = [
+                f'<p><strong>Container:</strong> {"Yes" if accessibility.get("has_container") else "No"}</p>',
+                f'<p><strong>Portable Build System:</strong> {"Yes" if accessibility.get("has_portable_build_system") else "No"}</p>',
+            ]
+            cats = accessibility.get("categories", {})
+            for cat_key, label in [
+                ("containers", "Containers"),
+                ("build_systems", "Build systems"),
+                ("python_packaging", "Python packaging"),
+            ]:
+                found = cats.get(cat_key, {}).get("found", [])
+                if found:
+                    acc_lines.append(f'<p><strong>{label}:</strong> {", ".join(found)}</p>')
+            overall = accessibility.get("overall_score", {})
+            acc_lines.append(
+                f'<p><strong>Score:</strong> {overall.get("score", 0)}/{overall.get("max_score", 0)}'
+                f' ({overall.get("percentage", 0):.0f}%)</p>'
+            )
+            section_435_data = "\n".join(acc_lines)
+        else:
+            section_435_data = None
+
         return {
             "package": repo_name,
             "impact": {
@@ -628,10 +732,10 @@ class MetricsOrchestrator:
             },
             "quality": {
                 "4.3.1": {"title": "Reliability and Robustness", "data": None},
-                "4.3.2": {"title": "Development Practices", "data": None},
+                "4.3.2": {"title": "Development Practices", "data": section_432_data},
                 "4.3.3": {"title": "Reproducibility", "data": None},
                 "4.3.4": {"title": "Usability", "data": None},
-                "4.3.5": {"title": "Accessibility", "data": None},
+                "4.3.5": {"title": "Accessibility", "data": section_435_data},
                 "4.3.6": {"title": "Maintainability and Understandability", "data": None},
                 "4.3.7": {"title": "Performance and Efficiency", "data": None},
             },
