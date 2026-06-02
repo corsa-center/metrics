@@ -1,0 +1,27 @@
+collectors/sustainability/engagement.py
+  s_7d596e2d7c6cb7::t_23148d23956820 1-300
+tests/test_engagement.py
+  s_7d596e2d7c6cb7::t_17e88b7c46b053 1-160
+orchestrator.py
+  s_7d596e2d7c6cb7::t_12168ca4fdfe18 666-695
+  s_7d596e2d7c6cb7::t_b06a574f725fca 267-268
+  s_7d596e2d7c6cb7::t_c850e7b2511e16 809
+  s_7d596e2d7c6cb7::t_055f039bbb73d2 117-119
+  s_7d596e2d7c6cb7::t_8b7d56c1c9be4e 239-246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "40156b8963bdda5c7fd8d3186cc6fc48d8c5454d",
+  "prompts": {},
+  "sessions": {
+    "s_7d596e2d7c6cb7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9707fd5a-bf97-48d5-8c1a-9af7b8b5cd9c",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
