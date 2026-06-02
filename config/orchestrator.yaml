@@ -14,6 +14,14 @@ collectors:
   sustainability: true      # 4.2 Sustainability (governance, licensing, maintenance, engagement, ...)
   quality: false            # 4.3 Quality (reliability, dev practices, reproducibility, usability, ...)
 
+# Fine-grained toggles for individual sustainability sub-collectors (4.2.x)
+sustainability_collectors:
+  community_health: true    # 4.2.1 CoC, Governance, Contributor Guidelines
+  licensing: true           # 4.2.2 Licensing and FAIR Compliance
+  active_maintenance: true  # 4.2.3 Active Maintenance
+  chaoss_activity: true     # 4.2.4 CHAOSS Activity Metrics (issues, PRs, releases, docs)
+  openssf_badge: true       # 4.2.5 OpenSSF Best Practices Badge
+
 # API credentials
 api_credentials:
   github:
