@@ -289,6 +289,14 @@ class MetricsOrchestrator:
         except Exception as e:
             logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
 
+        # 4.3.3 Reproducibility — containers, lock files, FAIR4RS metadata, semver
+        try:
+            from collectors.quality.reproducibility import ReproducibilityCollector
+            collector = ReproducibilityCollector(github_token=github_token)
+            sub_results["reproducibility"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Reproducibility collection failed for {package['name']}: {e}")
+
         # 4.3.5 Accessibility — portable build systems and containers
         try:
             from collectors.quality.accessibility import AccessibilityCollector
@@ -300,6 +308,8 @@ class MetricsOrchestrator:
         scores = []
         if "ci_cd" in sub_results:
             scores.append(sub_results["ci_cd"].get("percentage", 0))
+        if "reproducibility" in sub_results:
+            scores.append(sub_results["reproducibility"].get("overall_score", {}).get("percentage", 0))
         if "accessibility" in sub_results:
             scores.append(sub_results["accessibility"].get("overall_score", {}).get("percentage", 0))
 
@@ -642,6 +652,37 @@ class MetricsOrchestrator:
 
         qual = dims.get("quality", {}).get("sub_results", {})
 
+        # --- 4.3.3 Reproducibility ---
+        reproducibility = qual.get("reproducibility", {})
+        if reproducibility:
+            repr_lines = [
+                f'<p><strong>Container:</strong> {"Yes" if reproducibility.get("has_container") else "No"}</p>',
+                f'<p><strong>Dependency Pinning:</strong> {"Yes" if reproducibility.get("has_dependency_pinning") else "No"}</p>',
+                f'<p><strong>FAIR4RS Metadata:</strong> {"Yes" if reproducibility.get("has_fair4rs_metadata") else "No"}</p>',
+                f'<p><strong>Semantic Versioning:</strong> {"Yes" if reproducibility.get("uses_semantic_versioning") else "No"}</p>',
+            ]
+            cats = reproducibility.get("categories", {})
+            for cat_key, label in [
+                ("containers", "Containers"),
+                ("dependency_pinning", "Lock files"),
+                ("fair4rs_metadata", "FAIR4RS files"),
+            ]:
+                found = cats.get(cat_key, {}).get("found", [])
+                if found:
+                    repr_lines.append(f'<p><strong>{label}:</strong> {", ".join(found)}</p>')
+            semver = cats.get("semantic_versioning", {})
+            if semver.get("example_tags"):
+                repr_lines.append(
+                    f'<p><strong>Example tags:</strong> {", ".join(semver["example_tags"])}</p>'
+                )
+            overall = reproducibility.get("overall_score", {})
+            repr_lines.append(
+                f'<p><strong>Score:</strong> {overall.get("percentage", 0):.0f}/100</p>'
+            )
+            section_433_data = "\n".join(repr_lines)
+        else:
+            section_433_data = None
+
         # --- 4.3.2 Development Practices ---
         ci_cd = qual.get("ci_cd", {})
         openssf_badge = sust.get("openssf_badge", {})
@@ -733,7 +774,7 @@ class MetricsOrchestrator:
             "quality": {
                 "4.3.1": {"title": "Reliability and Robustness", "data": None},
                 "4.3.2": {"title": "Development Practices", "data": section_432_data},
-                "4.3.3": {"title": "Reproducibility", "data": None},
+                "4.3.3": {"title": "Reproducibility", "data": section_433_data},
                 "4.3.4": {"title": "Usability", "data": None},
                 "4.3.5": {"title": "Accessibility", "data": section_435_data},
                 "4.3.6": {"title": "Maintainability and Understandability", "data": None},
@@ -787,7 +828,7 @@ async def main():
         )
 
         logger.info(f"\n{'='*60}")
-        logger.info(f"Orchestration complete!")
+        logger.info("Orchestration complete!")
         logger.info(f"Processed {len(metrics)} packages")
         logger.info(f"{'='*60}\n")
 
