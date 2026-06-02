@@ -114,6 +114,9 @@ class MetricsOrchestrator:
 
         software_list = []
         for repo_name, metadata in catalog.items():
+            if not isinstance(metadata, dict):
+                logger.warning(f"Skipping {repo_name}: metadata is not a dict ({type(metadata).__name__})")
+                continue
             # Apply filter if specified
             if filter_software and filter_software.lower() not in repo_name.lower():
                 continue
@@ -233,6 +236,14 @@ class MetricsOrchestrator:
         except Exception as e:
             logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
 
+        # 4.2.4 Engagement — issue/PR response times, open/close ratios
+        try:
+            from collectors.sustainability.engagement import EngagementCollector
+            collector = EngagementCollector(github_token=github_token)
+            sub_results["engagement"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Engagement collection failed for {package['name']}: {e}")
+
         # OpenSSF Scorecard
         try:
             from collectors.sustainability.openssf_scorecard import OpenSSFScorecardCollector
@@ -253,6 +264,8 @@ class MetricsOrchestrator:
             scores.append(sub_results["chaoss_activity"].get("overall_score", {}).get("score", 0))
         if "openssf_badge" in sub_results:
             scores.append(sub_results["openssf_badge"].get("overall_score", {}).get("score", 0))
+        if "engagement" in sub_results:
+            scores.append(sub_results["engagement"].get("overall_score", {}).get("percentage", 0))
         if "openssf_scorecard" in sub_results:
             pct = sub_results["openssf_scorecard"].get("percentage")
             if pct is not None:
@@ -650,6 +663,36 @@ class MetricsOrchestrator:
         else:
             section_423_data = None
 
+        # --- 4.2.4 Engagement ---
+        engagement = sust.get("engagement", {})
+        if engagement:
+            issue_stats = engagement.get("issue_stats", {})
+            pr_stats = engagement.get("pr_stats", {})
+            backlog = engagement.get("backlog", {})
+            eng_lines = []
+            frt = issue_stats.get("median_first_response_hours")
+            if frt is not None:
+                eng_lines.append(f'<p><strong>Median First Response:</strong> {frt:.0f} hours</p>')
+            mct = issue_stats.get("median_close_time_hours")
+            if mct is not None:
+                eng_lines.append(f'<p><strong>Median Issue Close Time:</strong> {mct:.0f} hours</p>')
+            mrp = pr_stats.get("merge_rate_pct")
+            if mrp is not None:
+                eng_lines.append(f'<p><strong>PR Merge Rate:</strong> {mrp:.0f}%</p>')
+            mpr_ct = pr_stats.get("median_cycle_time_hours")
+            if mpr_ct is not None:
+                eng_lines.append(f'<p><strong>Median PR Cycle Time:</strong> {mpr_ct:.0f} hours</p>')
+            ratio = backlog.get("sample_open_to_closed_ratio")
+            if ratio is not None:
+                eng_lines.append(f'<p><strong>Open/Closed Issue Ratio:</strong> {ratio:.2f}</p>')
+            eng_score = engagement.get("overall_score", {})
+            eng_lines.append(
+                f'<p><strong>Score:</strong> {eng_score.get("score", 0)}/100</p>'
+            )
+            section_424_data = "\n".join(eng_lines) if eng_lines else None
+        else:
+            section_424_data = None
+
         qual = dims.get("quality", {}).get("sub_results", {})
 
         # --- 4.3.3 Reproducibility ---
@@ -763,7 +806,7 @@ class MetricsOrchestrator:
                     "data": section_422_data,
                 },
                 "4.2.3": {"title": "Active Maintenance", "data": section_423_data},
-                "4.2.4": {"title": "Engagement", "data": None},
+                "4.2.4": {"title": "Engagement", "data": section_424_data},
                 "4.2.5": {"title": "Outreach", "data": None},
                 "4.2.6": {"title": "Welcomeness", "data": None},
                 "4.2.7": {"title": "Collaboration", "data": None},
