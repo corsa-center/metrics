@@ -217,6 +217,22 @@ class MetricsOrchestrator:
         except Exception as e:
             logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
 
+        # 4.2.4 CHAOSS Activity Metrics
+        try:
+            from collectors.sustainability.chaoss_governance import CHAOSSGovernanceCollector
+            collector = CHAOSSGovernanceCollector(github_token=github_token)
+            sub_results["chaoss_activity"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")
+
+        # 4.2.5 OpenSSF Best Practices Badge
+        try:
+            from collectors.sustainability.openssf_badge import OpenSSFBadgeCollector
+            collector = OpenSSFBadgeCollector(github_token=github_token)
+            sub_results["openssf_badge"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
+
         # Calculate combined sustainability score from available sub-collectors
         scores = []
         if "governance" in sub_results:
@@ -225,6 +241,10 @@ class MetricsOrchestrator:
             scores.append(sub_results["licensing"].get("compliance_score", {}).get("percentage", 0))
         if "maintenance" in sub_results:
             scores.append(sub_results["maintenance"].get("score", {}).get("percentage", 0))
+        if "chaoss_activity" in sub_results:
+            scores.append(sub_results["chaoss_activity"].get("overall_score", {}).get("score", 0))
+        if "openssf_badge" in sub_results:
+            scores.append(sub_results["openssf_badge"].get("overall_score", {}).get("score", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
