@@ -266,14 +266,28 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Quality dimension for {package['name']}")
 
-        try:
-            from collectors.quality.dimension import QualityDimensionCollector
+        sub_results = {}
 
-            collector = QualityDimensionCollector(self.config)
-            return await collector.collect(package)
+        # 4.3.2 Development Practices — CI/CD metrics
+        try:
+            from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
+            collector = CICDMetricsCollector(self.config)
+            sub_results["ci_cd"] = await collector.collect(package)
         except Exception as e:
-            logger.error(f"Quality dimension collection failed for {package['name']}: {e}")
-            return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+            logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
+
+        scores = []
+        if "ci_cd" in sub_results:
+            scores.append(sub_results["ci_cd"].get("percentage", 0))
+
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+
+        return {
+            "dimension": "quality",
+            "score": round(avg_score, 2),
+            "max_score": 100.0,
+            "sub_results": sub_results,
+        }
 
     async def collect_all_metrics(self, package: Dict) -> Dict:
         """Collect all metrics for a package across the 3 CASS dimensions

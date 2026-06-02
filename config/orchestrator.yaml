@@ -12,7 +12,7 @@ output_path: "./output"              # Local output directory (published to GitH
 collectors:
   impact: true              # 4.1 Impact (citation, adoption, field research impact)
   sustainability: true      # 4.2 Sustainability (governance, licensing, maintenance, engagement, ...)
-  quality: false            # 4.3 Quality (reliability, dev practices, reproducibility, usability, ...)
+  quality: true             # 4.3 Quality (reliability, dev practices, reproducibility, usability, ...)
 
 # Fine-grained toggles for individual sustainability sub-collectors (4.2.x)
 sustainability_collectors:
