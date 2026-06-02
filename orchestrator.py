@@ -127,10 +127,8 @@ class MetricsOrchestrator:
                 "repo_url": metadata.get("url", f"https://github.com/{repo_name}"),
                 "description": metadata.get("description", ""),
                 "homepage": metadata.get("homepageUrl"),
-                "license": metadata.get("licenseInfo", {}).get("spdxId"),
-                "primary_language": metadata.get("primaryLanguage", {}).get("name")
-                if metadata.get("primaryLanguage")
-                else None,
+                "license": (metadata.get("licenseInfo") or {}).get("spdxId"),
+                "primary_language": (metadata.get("primaryLanguage") or {}).get("name"),
             }
             software_list.append(package)
 
@@ -652,7 +650,7 @@ async def main():
         )
 
         logger.info(f"\n{'='*60}")
-        logger.info(f"Orchestration complete!")
+        logger.info("Orchestration complete!")
         logger.info(f"Processed {len(metrics)} packages")
         logger.info(f"{'='*60}\n")
 
