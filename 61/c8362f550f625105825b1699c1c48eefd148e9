@@ -1,0 +1,27 @@
+collectors/quality/development_practices/ci_cd.py
+  s_f121cba9740155::t_4dce65c3a1e477 97,99
+  s_f121cba9740155::t_436dcb2b46fd28 1-96,98,100-132,134,136-405
+  s_f121cba9740155::t_1774b7b4ca2e52 133,135
+orchestrator.py
+  s_f121cba9740155::t_490f963256fac4 269,271-275,277-290
+config/orchestrator.yaml
+  s_f121cba9740155::t_eb9838e6d4c9f3 15
+tests/test_cicd.py
+  s_f121cba9740155::t_a2c5e6050a0eb9 1-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "61c8362f550f625105825b1699c1c48eefd148e9",
+  "prompts": {},
+  "sessions": {
+    "s_f121cba9740155": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ffd829d-5dcc-485a-8dc0-6aa3fe005911",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
