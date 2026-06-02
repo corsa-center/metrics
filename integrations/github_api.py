@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import Optional, Dict, Any
 from github import Github, GithubException
+from urllib3.util.retry import Retry
 from integrations.base import BaseAPIClient
 
 
@@ -28,18 +29,28 @@ class GitHubClient(BaseAPIClient):
         api_key = credentials.get("token")
         super().__init__(api_key, rate_limit=5000)  # GitHub allows 5000 requests/hour
 
+        # Only retry on transient server errors — never on 403 (permission/rate-limit
+        # errors from PyGithub back off for thousands of seconds if 403 is included).
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+
         if not api_key:
             self.logger.warning("No GitHub token provided - API will be rate limited")
-            self.client = Github()  # Anonymous access (60 requests/hour)
+            self.client = Github(retry=retry)
         else:
-            self.client = Github(api_key)
+            self.client = Github(api_key, retry=retry)
 
-        # Test the connection
+        # Validate with get_rate_limit() — works for Actions tokens unlike get_user().
         try:
-            user = self.client.get_user()
-            self.logger.info(f"GitHub client initialized for user: {user.login}")
+            rl = self.client.get_rate_limit()
+            self.logger.info(
+                f"GitHub client initialised. Rate limit: {rl.core.remaining}/{rl.core.limit}"
+            )
         except GithubException as e:
-            self.logger.error(f"GitHub authentication failed: {e}")
+            self.logger.warning(f"GitHub rate-limit check failed (continuing): {e}")
 
     def _parse_repo_url(self, repo_url: str) -> tuple:
         """
