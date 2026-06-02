@@ -114,6 +114,9 @@ class MetricsOrchestrator:
 
         software_list = []
         for repo_name, metadata in catalog.items():
+            if not isinstance(metadata, dict):
+                logger.warning(f"Skipping {repo_name}: metadata is not a dict ({type(metadata).__name__})")
+                continue
             # Apply filter if specified
             if filter_software and filter_software.lower() not in repo_name.lower():
                 continue
