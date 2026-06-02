@@ -25,3 +25,7 @@ data/cache/*
 # OS
 .DS_Store
 Thumbs.db
+
+
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
