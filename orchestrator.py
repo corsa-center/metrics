@@ -542,123 +542,172 @@ class MetricsOrchestrator:
 
         sust = dims.get("sustainability", {}).get("sub_results", {})
 
-        # --- 4.2.1 CoC, Governance, and Contributor Guidelines ---
+        # --- 4.2.1 CoC, Governance, and Contributor Guidelines (PDF §4.2.1 — 5 sub-metrics) ---
+        # 1. Enhanced Document Detection  2. Governance Keyword Analysis
+        # 3. OpenSSF Badge Integration    4. CHAOSS Governance Metrics
+        # 5. Governance Effectiveness Assessment
         governance = sust.get("governance", {})
-        gov_lines = []
-        for label, key in [
-            ("Code of Conduct", "code_of_conduct"),
-            ("Governance", "governance"),
-            ("Contributing Guidelines", "contributing_guidelines"),
-        ]:
-            info = governance.get(key, {})
-            if info.get("exists"):
-                url = info.get("url", "")
-                link = f'<a href="{url}">{info.get("file_path", "")}</a>' if url else info.get("file_path", "")
-                gov_lines.append(f"<p><strong>{label}:</strong> {link}</p>")
+        scorecard  = sust.get("openssf_scorecard", {})
+        gov_lines  = []
+        gov_pts    = 0
+        if governance or scorecard:
+            # 1. Enhanced Document Detection — CoC, Governance, Contributing files
+            if governance:
+                doc_found = 0
+                for label, key in [
+                    ("Code of Conduct", "code_of_conduct"),
+                    ("Governance", "governance"),
+                    ("Contributing Guidelines", "contributing_guidelines"),
+                ]:
+                    info = governance.get(key, {})
+                    if info.get("exists"):
+                        url = info.get("url", "")
+                        link = f'<a href="{url}">{info.get("file_path", "")}</a>' if url else info.get("file_path", "")
+                        gov_lines.append(f"<p><strong>{label}:</strong> {link}</p>")
+                        doc_found += 1
+                    else:
+                        gov_lines.append(f"<p><strong>{label}:</strong> Not found</p>")
+                gov_score = governance.get("overall_score", {})
+                doc_total = gov_score.get("max_score", 3)
+                passing = doc_found >= doc_total
+                gov_pts += 1 if passing else 0
+                gov_lines.append(
+                    f'<p><strong>Enhanced Document Detection:</strong> {doc_found}/{doc_total} {"✓" if passing else "✗"}</p>'
+                )
             else:
-                gov_lines.append(f"<p><strong>{label}:</strong> Not found</p>")
-        gov_score = governance.get("overall_score", {})
-        if gov_score:
-            gov_lines.append(
-                f'<p><strong>Score:</strong> {gov_score.get("score", 0)}/{gov_score.get("max_score", 3)}</p>'
-            )
-        scorecard = sust.get("openssf_scorecard", {})
-        if scorecard and scorecard.get("scorecard_exists"):
-            score_val = scorecard.get("score")
-            sc_url = scorecard.get("scorecard_url", "")
-            checks_label = f'{scorecard.get("checks_passed", 0)}/{scorecard.get("checks_total", 0)} checks passed'
-            if sc_url and score_val is not None:
-                gov_lines.append(
-                    f'<p><strong>OpenSSF Scorecard:</strong> <a href="{sc_url}">{score_val}/10</a> ({checks_label})</p>'
-                )
-            elif score_val is not None:
-                gov_lines.append(
-                    f'<p><strong>OpenSSF Scorecard:</strong> {score_val}/10 ({checks_label})</p>'
-                )
-        elif scorecard and not scorecard.get("scorecard_exists") and scorecard.get("recommendation"):
-            gov_lines.append('<p><strong>OpenSSF Scorecard:</strong> Not available</p>')
-        section_421_data = "\n".join(gov_lines) if governance else None
+                gov_lines.append('<p><strong>Enhanced Document Detection:</strong> Not yet collected</p>')
 
-        # --- 4.2.2 Licensing and FAIR Compliance ---
+            # 2. Governance Keyword Analysis — not yet collected
+            gov_lines.append('<p><strong>Governance Keyword Analysis:</strong> Not yet collected</p>')
+
+            # 3. OpenSSF Badge Integration — use Scorecard as proxy (passes if score ≥ 7.0)
+            if scorecard and scorecard.get("scorecard_exists"):
+                sc_val = scorecard.get("score")
+                sc_url = scorecard.get("scorecard_url", "")
+                checks = f'{scorecard.get("checks_passed", 0)}/{scorecard.get("checks_total", 0)} checks passed'
+                passing = sc_val is not None and sc_val >= 7.0
+                gov_pts += 1 if passing else 0
+                mark = "✓" if passing else "✗"
+                link = f'<a href="{sc_url}">{sc_val}/10</a>' if sc_url else f'{sc_val}/10'
+                gov_lines.append(f'<p><strong>OpenSSF Scorecard:</strong> {link} ({checks}) {mark}</p>')
+            else:
+                gov_lines.append('<p><strong>OpenSSF Badge Integration:</strong> Not yet collected</p>')
+
+            # 4–5. Not yet collected
+            gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+            gov_lines.append('<p><strong>Governance Effectiveness Assessment:</strong> Not yet collected</p>')
+
+            gov_lines.append(f'<p><strong>Score:</strong> {gov_pts}/5</p>')
+        section_421_data = "\n".join(gov_lines) if gov_lines else None
+
+        # --- 4.2.2 Licensing and FAIR Compliance (PDF §4.2.2 — 5 sub-metrics) ---
+        # 1. Enhanced License Detection  2. Automated FAIR4RS Assessment
+        # 3. OSI License Validation      4. License Exception Handling
+        # 5. FAIR Metadata Assessment
         licensing = sust.get("licensing", {})
-        analysis = licensing.get("license_analysis", {})
+        analysis  = licensing.get("license_analysis", {})
         compliance = licensing.get("compliance_score", {})
         if licensing:
             spdx_id = analysis.get("spdx_id") or ""
             if spdx_id in ("NOASSERTION", ""):
                 spdx_id = None
             license_name = spdx_id or analysis.get("license_type") or "Unknown"
-            lic_lines = [
+            lic_pts  = 0
+            lic_lines = []
+
+            # 1. Enhanced License Detection — passes if file found AND identified
+            file_found = bool(compliance.get("details", []) and
+                              any("exists" in d for d in compliance.get("details", [])))
+            identified = license_name not in ("Unknown", "")
+            ld_passing = identified  # file found and identified
+            lic_pts += 1 if ld_passing else 0
+            lic_lines += [
                 f"<p><strong>License:</strong> {license_name}</p>",
                 f"<p><strong>Category:</strong> {analysis.get('category', 'Unknown')}</p>",
-                f"<p><strong>OSI Approved:</strong> {'Yes' if analysis.get('osi_approved') else 'No' if analysis.get('osi_approved') is False else 'Unknown'}</p>",
-                f"<p><strong>Compliance Score:</strong> {compliance.get('score', 0)}/{compliance.get('max_score', 3)} ({compliance.get('percentage', 0):.0f}%)</p>",
+                f'<p><strong>Enhanced License Detection:</strong> {"✓" if ld_passing else "✗"}</p>',
             ]
-            # Include detail checklist
-            for detail in compliance.get("details", []):
-                lic_lines.append(f"<p>{detail}</p>")
+
+            # 2. Automated FAIR4RS Assessment — not yet collected
+            lic_lines.append('<p><strong>Automated FAIR4RS Assessment:</strong> Not yet collected</p>')
+
+            # 3. OSI License Validation — passes if osi_approved is True
+            osi = analysis.get("osi_approved")
+            osi_label = "Yes" if osi is True else ("No" if osi is False else "Unknown")
+            osi_passing = osi is True
+            lic_pts += 1 if osi_passing else 0
+            lic_lines.append(
+                f'<p><strong>OSI License Validation:</strong> {osi_label} {"✓" if osi_passing else "✗"}</p>'
+            )
+
+            # 4–5. Not yet collected
+            lic_lines.append('<p><strong>License Exception Handling:</strong> Not yet collected</p>')
+            lic_lines.append('<p><strong>FAIR Metadata Assessment:</strong> Not yet collected</p>')
+
+            lic_lines.append(f'<p><strong>Score:</strong> {lic_pts}/5</p>')
             section_422_data = "\n".join(lic_lines)
         else:
             section_422_data = None
 
-        # --- 4.2.3 Active Maintenance ---
+        # --- 4.2.3 Active Maintenance (PDF §4.2.3 — 6 sub-metrics) ---
+        # 1. Commit Activity Pattern Analysis   2. Maintenance Mode Indicator Detection
+        # 3. Activity Trend Monitoring          4. Release Pattern Assessment
+        # 5. Multi-Channel Communication        6. Contributor Abandonment Forecasting
         maintenance = sust.get("maintenance", {})
         if maintenance:
             maint_lines = []
-            # Maintenance indicators
-            indicators = maintenance.get("maintenance_indicators", {})
-            if indicators.get("archived"):
-                maint_lines.append("<p><strong>Status:</strong> Archived</p>")
-            elif indicators.get("maintenance_signals"):
-                signals = ", ".join(indicators["maintenance_signals"])
-                maint_lines.append(f"<p><strong>Status:</strong> {signals}</p>")
-            else:
-                maint_lines.append("<p><strong>Status:</strong> Active</p>")
+            maint_pts   = 0
+            indicators  = maintenance.get("maintenance_indicators", {})
+            commits     = maintenance.get("commit_activity", {})
+            releases    = maintenance.get("release_activity", {})
+            contribs    = maintenance.get("contributor_activity", {})
+            score       = maintenance.get("score", {})
 
-            # Commit activity
-            commits = maintenance.get("commit_activity", {})
+            # 1. Commit Activity Pattern Analysis
+            status = "Archived" if indicators.get("archived") else (
+                ", ".join(indicators["maintenance_signals"]) if indicators.get("maintenance_signals") else "Active"
+            )
+            commit_ok = commits.get("total_commits_52w", 0) > 0
+            maint_pts += 1 if commit_ok else 0
+            maint_lines.append(f'<p><strong>Commit Activity Pattern Analysis:</strong> {status} '
+                                f'— {commits.get("total_commits_52w", 0):,} commits (52 weeks) '
+                                f'{"✓" if commit_ok else "✗"}</p>')
             if commits.get("days_since_last_commit") is not None:
-                maint_lines.append(
-                    f'<p><strong>Last Commit:</strong> {commits["days_since_last_commit"]} days ago</p>'
-                )
-            if commits.get("total_commits_52w"):
-                maint_lines.append(
-                    f'<p><strong>Commits (52 weeks):</strong> {commits["total_commits_52w"]:,} '
-                    f'({commits.get("active_weeks_52w", 0)} active weeks)</p>'
-                )
-            if commits.get("recent_trend") and commits["recent_trend"] != "unknown":
-                maint_lines.append(
-                    f'<p><strong>Trend:</strong> {commits["recent_trend"].capitalize()}</p>'
-                )
+                maint_lines.append(f'<p><strong>Last Commit:</strong> {commits["days_since_last_commit"]} days ago</p>')
 
-            # Release activity
-            releases = maintenance.get("release_activity", {})
-            if releases.get("latest_release"):
-                maint_lines.append(
-                    f'<p><strong>Latest Release:</strong> {releases["latest_release"]}'
-                    f' ({releases.get("days_since_latest_release", "?")} days ago)</p>'
-                )
-            if releases.get("releases_last_year"):
-                maint_lines.append(
-                    f'<p><strong>Releases (last year):</strong> {releases["releases_last_year"]}</p>'
-                )
+            # 2. Maintenance Mode Indicator Detection
+            not_archived = not indicators.get("archived") and not indicators.get("maintenance_signals")
+            maint_pts += 1 if not_archived else 0
+            maint_lines.append(f'<p><strong>Maintenance Mode Indicator Detection:</strong> '
+                                f'No maintenance flags {"✓" if not_archived else "✗"}</p>')
 
-            # Contributor activity
-            contribs = maintenance.get("contributor_activity", {})
+            # 3. Activity Trend Monitoring
+            trend = commits.get("recent_trend", "unknown")
+            trend_ok = trend in ("stable", "increasing")
+            maint_pts += 1 if trend_ok else 0
+            maint_lines.append(f'<p><strong>Activity Trend Monitoring:</strong> '
+                                f'{trend.capitalize()} {"✓" if trend_ok else "✗"}</p>')
+
+            # 4. Release Pattern Assessment
+            rel_count = releases.get("releases_last_year", 0)
+            rel_ok = rel_count >= 1
+            maint_pts += 1 if rel_ok else 0
+            rel_detail = (f'{releases["latest_release"]} ({releases.get("days_since_latest_release", "?")} days ago)'
+                          if releases.get("latest_release") else "No releases")
+            maint_lines.append(f'<p><strong>Release Pattern Assessment:</strong> '
+                                f'{rel_detail}, {rel_count}/yr {"✓" if rel_ok else "✗"}</p>')
+
+            # Contributor context (not a scored blade — supporting info)
             if contribs.get("total_contributors"):
                 maint_lines.append(
                     f'<p><strong>Contributors:</strong> {contribs["total_contributors"]}'
                     f' (bus factor: {contribs.get("bus_factor", 0)})</p>'
                 )
 
-            # Score
-            score = maintenance.get("score", {})
-            if score:
-                maint_lines.append(
-                    f'<p><strong>Score:</strong> {score.get("score", 0)}/{score.get("max_score", 5)}'
-                    f' ({score.get("percentage", 0):.0f}%)</p>'
-                )
+            # 5–6. Not yet collected
+            maint_lines.append('<p><strong>Multi-Channel Communication Activity:</strong> Not yet collected</p>')
+            maint_lines.append('<p><strong>Contributor Abandonment Forecasting:</strong> Not yet collected</p>')
 
+            maint_lines.append(f'<p><strong>Score:</strong> {maint_pts}/6</p>')
             section_423_data = "\n".join(maint_lines) if maint_lines else None
         else:
             section_423_data = None
@@ -707,95 +756,129 @@ class MetricsOrchestrator:
 
         # --- 4.3.3 Reproducibility ---
         reproducibility = qual.get("reproducibility", {})
+        # --- 4.3.3 Reproducibility (PDF §4.3.3 — 5 sub-metrics) ---
+        # 1. FAIR4RS Compliance   2. Containerization   3. Version Control Best Practices
+        # 4. Environment Management   5. Reproducibility Documentation
         if reproducibility:
-            repr_lines = [
-                f'<p><strong>Container:</strong> {"Yes" if reproducibility.get("has_container") else "No"}</p>',
-                f'<p><strong>Dependency Pinning:</strong> {"Yes" if reproducibility.get("has_dependency_pinning") else "No"}</p>',
-                f'<p><strong>FAIR4RS Metadata:</strong> {"Yes" if reproducibility.get("has_fair4rs_metadata") else "No"}</p>',
-                f'<p><strong>Semantic Versioning:</strong> {"Yes" if reproducibility.get("uses_semantic_versioning") else "No"}</p>',
-            ]
             cats = reproducibility.get("categories", {})
-            for cat_key, label in [
-                ("containers", "Containers"),
-                ("dependency_pinning", "Lock files"),
-                ("fair4rs_metadata", "FAIR4RS files"),
-            ]:
-                found = cats.get(cat_key, {}).get("found", [])
-                if found:
-                    repr_lines.append(f'<p><strong>{label}:</strong> {", ".join(found)}</p>')
+            repr_pts = 0
+
+            def _repr_row(label, passing, detail=None):
+                nonlocal repr_pts
+                repr_pts += 1 if passing else 0
+                mark = "✓" if passing else "✗"
+                suffix = f" ({detail})" if detail else ""
+                return f'<p><strong>{label}:</strong>{suffix} {mark}</p>'
+
+            fair4rs_found = cats.get("fair4rs_metadata", {}).get("found", [])
+            container_found = cats.get("containers", {}).get("found", [])
+            dep_found = cats.get("dependency_pinning", {}).get("found", [])
             semver = cats.get("semantic_versioning", {})
-            if semver.get("example_tags"):
-                repr_lines.append(
-                    f'<p><strong>Example tags:</strong> {", ".join(semver["example_tags"])}</p>'
-                )
-            overall = reproducibility.get("overall_score", {})
-            repr_lines.append(
-                f'<p><strong>Score:</strong> {overall.get("percentage", 0):.0f}/100</p>'
-            )
+
+            repr_lines = [
+                _repr_row("FAIR4RS Compliance Assessment",
+                          reproducibility.get("has_fair4rs_metadata"),
+                          ", ".join(fair4rs_found) if fair4rs_found else None),
+                _repr_row("Containerization Excellence",
+                          reproducibility.get("has_container"),
+                          ", ".join(container_found) if container_found else None),
+                _repr_row("Version Control Best Practices",
+                          reproducibility.get("uses_semantic_versioning"),
+                          ", ".join(semver.get("example_tags", [])[:2]) if semver.get("example_tags") else None),
+                _repr_row("Environment Management",
+                          reproducibility.get("has_dependency_pinning"),
+                          ", ".join(dep_found) if dep_found else None),
+                "<p><strong>Reproducibility Documentation:</strong> Not yet collected</p>",
+                f'<p><strong>Score:</strong> {repr_pts}/5</p>',
+            ]
             section_433_data = "\n".join(repr_lines)
         else:
             section_433_data = None
 
-        # --- 4.3.2 Development Practices ---
+        # --- 4.3.2 Development Practices (PDF §4.3.2 — 5 sub-metrics) ---
+        # 1. CI/CD Effectiveness   2. Testing Framework   3. Code Review Quality
+        # 4. Dev Tool Integration  5. Community Contribution Facilitation
         ci_cd = qual.get("ci_cd", {})
         openssf_badge = sust.get("openssf_badge", {})
         section_432_lines = []
-        if ci_cd:
-            section_432_lines.append("<p><strong>CI/CD</strong></p>")
-            section_432_lines.append(
-                f'<p><strong>Score:</strong> {ci_cd.get("score", 0)}/{ci_cd.get("max_score", 6)}'
-                f' ({ci_cd.get("percentage", 0):.0f}%)</p>'
-            )
-            for key, val in ci_cd.get("details", []):
-                if key == "total_workflow_success_percentage" and val:
+        dp_pts = 0
+        if ci_cd or openssf_badge:
+            # 1. CI/CD Effectiveness Assessment
+            if ci_cd:
+                cicd_score = ci_cd.get("score", 0)
+                cicd_max   = ci_cd.get("max_score", 6)
+                passing    = cicd_score > 0
+                dp_pts    += 1 if passing else 0
+                mark       = "✓" if passing else "✗"
+                section_432_lines.append(
+                    f'<p><strong>CI/CD Effectiveness Assessment:</strong> {cicd_score}/{cicd_max} {mark}</p>'
+                )
+            else:
+                section_432_lines.append(
+                    '<p><strong>CI/CD Effectiveness Assessment:</strong> Not yet collected</p>'
+                )
+            # 2–4. Not yet collected
+            for label in [
+                "Testing Framework Excellence",
+                "Code Review Quality Analysis",
+                "Development Tool Integration",
+            ]:
+                section_432_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
+            # 5. Community Contribution Facilitation — OpenSSF badge as proxy
+            if openssf_badge:
+                badge_status = openssf_badge.get("badge_status", {})
+                if openssf_badge.get("badge_exists"):
+                    level = badge_status.get("level", "").capitalize()
+                    badge_url = badge_status.get("url", "")
+                    pct = badge_status.get("progress_percentage", 0)
+                    passing = pct >= 100
+                    dp_pts += 1 if passing else 0
+                    mark = "✓" if passing else "✗"
+                    link = f'<a href="{badge_url}">{level}</a>' if badge_url else level
                     section_432_lines.append(
-                        f'<p><strong>Workflow Success Rate:</strong> {val:.0f}%</p>'
-                    )
-        if openssf_badge:
-            section_432_lines.append("<p><strong>OpenSSF Best Practices Badge</strong></p>")
-            badge_status = openssf_badge.get("badge_status", {})
-            if openssf_badge.get("badge_exists"):
-                level = badge_status.get("level", "").capitalize()
-                badge_url = badge_status.get("url", "")
-                pct = badge_status.get("progress_percentage", 0)
-                if badge_url:
-                    section_432_lines.append(
-                        f'<p><strong>Badge:</strong> <a href="{badge_url}">{level}</a> ({pct:.0f}%)</p>'
+                        f'<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge {link} ({pct:.0f}%) {mark}</p>'
                     )
                 else:
-                    section_432_lines.append(f'<p><strong>Badge:</strong> {level} ({pct:.0f}%)</p>')
-            else:
-                section_432_lines.append('<p><strong>Badge:</strong> Not registered</p>')
-                overall = openssf_badge.get("overall_score", {})
-                if openssf_badge.get("assessment_method") == "repository_scan" and overall.get("percentage"):
                     section_432_lines.append(
-                        f'<p><strong>Estimated readiness:</strong> {overall["percentage"]:.0f}%</p>'
+                        '<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge not registered ✗</p>'
                     )
-                if openssf_badge.get("recommendation"):
-                    section_432_lines.append(f'<p>{openssf_badge["recommendation"]}</p>')
+            else:
+                section_432_lines.append(
+                    '<p><strong>Community Contribution Facilitation:</strong> Not yet collected</p>'
+                )
+            section_432_lines.append(f'<p><strong>Score:</strong> {dp_pts}/5</p>')
         section_432_data = "\n".join(section_432_lines) if section_432_lines else None
 
-        # --- 4.3.5 Accessibility ---
+        # --- 4.3.5 Accessibility (PDF §4.3.5 — 5 sub-metrics) ---
+        # 1. Portable Build System   2. Container Availability   3. Architecture Compatibility
+        # 4. Platform Documentation  5. Deployment Environment Testing
         accessibility = qual.get("accessibility", {})
         if accessibility:
-            acc_lines = [
-                f'<p><strong>Container:</strong> {"Yes" if accessibility.get("has_container") else "No"}</p>',
-                f'<p><strong>Portable Build System:</strong> {"Yes" if accessibility.get("has_portable_build_system") else "No"}</p>',
-            ]
             cats = accessibility.get("categories", {})
-            for cat_key, label in [
-                ("containers", "Containers"),
-                ("build_systems", "Build systems"),
-                ("python_packaging", "Python packaging"),
-            ]:
-                found = cats.get(cat_key, {}).get("found", [])
-                if found:
-                    acc_lines.append(f'<p><strong>{label}:</strong> {", ".join(found)}</p>')
-            overall = accessibility.get("overall_score", {})
-            acc_lines.append(
-                f'<p><strong>Score:</strong> {overall.get("score", 0)}/{overall.get("max_score", 0)}'
-                f' ({overall.get("percentage", 0):.0f}%)</p>'
-            )
+            acc_pts = 0
+
+            def _acc_row(label, passing, detail=None):
+                nonlocal acc_pts
+                acc_pts += 1 if passing else 0
+                mark = "✓" if passing else "✗"
+                suffix = f" ({detail})" if detail else ""
+                return f'<p><strong>{label}:</strong>{suffix} {mark}</p>'
+
+            build_found = cats.get("build_systems", {}).get("found", [])
+            container_found = cats.get("containers", {}).get("found", [])
+
+            acc_lines = [
+                _acc_row("Portable Build System Detection",
+                         accessibility.get("has_portable_build_system"),
+                         ", ".join(build_found) if build_found else None),
+                _acc_row("Container Availability Assessment",
+                         accessibility.get("has_container"),
+                         ", ".join(container_found) if container_found else None),
+                "<p><strong>Architecture Compatibility Analysis:</strong> Not yet collected</p>",
+                "<p><strong>Platform Documentation Evaluation:</strong> Not yet collected</p>",
+                "<p><strong>Deployment Environment Testing:</strong> Not yet collected</p>",
+                f'<p><strong>Score:</strong> {acc_pts}/5</p>',
+            ]
             section_435_data = "\n".join(acc_lines)
         else:
             section_435_data = None
