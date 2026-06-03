@@ -36,13 +36,33 @@ class GitHubCollectorBase:
     async def _check_file_exists(
         self, client: httpx.AsyncClient, owner: str, repo: str, path: str
     ) -> bool:
-        """Return True if the given path exists in the repository."""
+        """Return True if the given path exists in the repository.
+
+        Retries once on 429 (rate limit) or 5xx errors to handle transient
+        CI failures that previously caused files to be silently missed.
+        """
+        import asyncio
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        try:
-            response = await client.get(url, headers=self.github_headers)
-            return response.status_code == 200
-        except Exception:
-            return False
+        for attempt in range(2):
+            try:
+                response = await client.get(url, headers=self.github_headers)
+                if response.status_code == 200:
+                    return True
+                if response.status_code == 404:
+                    return False
+                # Rate limit or server error — wait and retry once
+                if attempt == 0 and response.status_code in (429, 500, 502, 503):
+                    logger.warning(f"HTTP {response.status_code} checking {path}, retrying…")
+                    await asyncio.sleep(2)
+                    continue
+                return False
+            except Exception as e:
+                if attempt == 0:
+                    logger.debug(f"Error checking {path}: {e}, retrying…")
+                    await asyncio.sleep(1)
+                    continue
+                return False
+        return False
 
     def _get_timestamp(self) -> str:
         """Return current UTC timestamp in ISO format."""
