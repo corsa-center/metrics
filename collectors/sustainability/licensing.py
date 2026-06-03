@@ -258,10 +258,7 @@ class LicensingCollector:
                     data = response.json()
                     return {
                         "exists": True,
-                        "url": data.get(
-                            "html_url",
-                            f"https://github.com/{owner}/{repo}/blob/main/{file_path}",
-                        ),
+                        "url": data.get("html_url", ""),
                         "size": data.get("size", 0),
                         "download_url": data.get("download_url", ""),
                     }

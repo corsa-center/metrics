@@ -35,11 +35,16 @@ class GitHubCollectorBase:
 
     async def _check_file_exists(
         self, client: httpx.AsyncClient, owner: str, repo: str, path: str
-    ) -> bool:
-        """Return True if the given path exists in the repository.
+    ) -> Optional[str]:
+        """Return the file's html_url if it exists, None otherwise.
 
-        Retries once on 429 (rate limit) or 5xx errors to handle transient
-        CI failures that previously caused files to be silently missed.
+        Using the GitHub Contents API without a ?ref= parameter so the
+        repo's actual default branch is used (works for develop, main, master,
+        or any other default).  Retries once on transient errors.
+
+        The return value is truthy when the file exists (non-empty URL string)
+        and falsy when it does not (None), so callers using `if result:` work
+        without change.  Callers that need the URL can use the returned string.
         """
         import asyncio
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
@@ -47,22 +52,21 @@ class GitHubCollectorBase:
             try:
                 response = await client.get(url, headers=self.github_headers)
                 if response.status_code == 200:
-                    return True
+                    return response.json().get("html_url", url)
                 if response.status_code == 404:
-                    return False
-                # Rate limit or server error — wait and retry once
+                    return None
                 if attempt == 0 and response.status_code in (429, 500, 502, 503):
                     logger.warning(f"HTTP {response.status_code} checking {path}, retrying…")
                     await asyncio.sleep(2)
                     continue
-                return False
+                return None
             except Exception as e:
                 if attempt == 0:
                     logger.debug(f"Error checking {path}: {e}, retrying…")
                     await asyncio.sleep(1)
                     continue
-                return False
-        return False
+                return None
+        return None
 
     def _get_timestamp(self) -> str:
         """Return current UTC timestamp in ISO format."""

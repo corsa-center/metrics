@@ -227,12 +227,13 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
 
         for criterion, patterns in file_map.items():
             for pattern in patterns:
-                if await self._check_file_exists(client, owner, repo, pattern):
+                html_url = await self._check_file_exists(client, owner, repo, pattern)
+                if html_url:
                     found.append(criterion)
                     details[criterion] = {
                         "exists": True,
                         "file": pattern,
-                        "url": f"https://github.com/{owner}/{repo}/blob/main/{pattern}",
+                        "url": html_url,
                     }
                     logger.info(f"  {criterion}: {pattern}")
                     break

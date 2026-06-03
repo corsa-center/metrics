@@ -95,21 +95,23 @@ class AccessibilityCollector(GitHubCollectorBase):
             # Check each item in the category concurrently.
             async def check_item(label: str, paths: List[str]) -> tuple:
                 for path in paths:
-                    if await self._check_file_exists(client, owner, repo, path):
-                        return label, path, True
-                return label, paths[0], False
+                    html_url = await self._check_file_exists(client, owner, repo, path)
+                    if html_url:
+                        return label, path, html_url
+                return label, paths[0], None
 
             results = await asyncio.gather(
                 *[check_item(label, paths) for label, paths in items.items()]
             )
 
-            for label, matched_path, exists in results:
+            for label, matched_path, html_url in results:
+                exists = bool(html_url)
                 if exists:
                     found.append(label)
                     details[label] = {
                         "exists": True,
                         "file": matched_path,
-                        "url": f"https://github.com/{owner}/{repo}/blob/main/{matched_path}",
+                        "url": html_url,
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
                 else:
