@@ -569,7 +569,7 @@ class MetricsOrchestrator:
                         gov_lines.append(f"<p><strong>{label}:</strong> Not found</p>")
                 gov_score = governance.get("overall_score", {})
                 doc_total = gov_score.get("max_score", 3)
-                passing = doc_found >= doc_total
+                passing = doc_found >= 2  # CoC + Contributing is sufficient; Governance is optional
                 gov_pts += 1 if passing else 0
                 gov_lines.append(
                     f'<p><strong>Enhanced Document Detection:</strong> {doc_found}/{doc_total} {"✓" if passing else "✗"}</p>'
