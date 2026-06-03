@@ -122,29 +122,44 @@ class TestScore:
             {"sample_open_to_closed_ratio": ratio},
         )
 
-    def test_perfect_score(self, collector):
+    def test_perfect_collected_score(self, collector):
+        # All 4 collected sub-metrics passing → 4/7
         result = self._score(collector, frt=1.0, mct=24.0, mrp=80.0, ratio=0.2)
-        assert result["score"] == 100
+        assert result["score"] == 4
+        assert result["max_score"] == 7
 
     def test_zero_score_when_all_none(self, collector):
         result = self._score(collector)
         assert result["score"] == 0
 
-    def test_fast_response_scores_25(self, collector):
+    def test_fast_response_passes(self, collector):
+        # frt < 168 h → 1 pt
         result = self._score(collector, frt=1.0)
-        assert result["score"] == 25
+        assert result["score"] == 1
+        assert result["sub_scores"]["response_time_tracking"]["passing"] is True
 
-    def test_slow_response_scores_5(self, collector):
-        result = self._score(collector, frt=200.0)  # ~8 days
-        assert result["score"] == 5
+    def test_slow_response_fails(self, collector):
+        # frt >= 168 h → 0 pt
+        result = self._score(collector, frt=200.0)
+        assert result["sub_scores"]["response_time_tracking"]["passing"] is False
 
-    def test_high_merge_rate_scores_25(self, collector):
+    def test_high_merge_rate_passes(self, collector):
+        # mrp > 50 % → 1 pt
         result = self._score(collector, mrp=80.0)
-        assert result["score"] == 25
+        assert result["score"] == 1
+        assert result["sub_scores"]["pr_flow"]["passing"] is True
 
-    def test_low_backlog_scores_25(self, collector):
+    def test_low_backlog_passes(self, collector):
+        # ratio < 2.0 → 1 pt
         result = self._score(collector, ratio=0.3)
-        assert result["score"] == 25
+        assert result["score"] == 1
+        assert result["sub_scores"]["support_closure"]["passing"] is True
+
+    def test_uncollected_sub_metrics_flagged(self, collector):
+        result = self._score(collector)
+        for key in ["engagement_quality", "communication_patterns", "community_participation"]:
+            assert result["sub_scores"][key]["not_collected"] is True
+            assert result["sub_scores"][key]["pts"] == 0
 
 
 # ------------------------------------------------------------------ #

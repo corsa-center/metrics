@@ -263,7 +263,9 @@ class MetricsOrchestrator:
         if "openssf_badge" in sub_results:
             scores.append(sub_results["openssf_badge"].get("overall_score", {}).get("score", 0))
         if "engagement" in sub_results:
-            scores.append(sub_results["engagement"].get("overall_score", {}).get("percentage", 0))
+            eng_s = sub_results["engagement"].get("overall_score", {})
+            mx = eng_s.get("max_score", 7)
+            scores.append(round(eng_s.get("score", 0) / mx * 100) if mx else 0)
         if "openssf_scorecard" in sub_results:
             pct = sub_results["openssf_scorecard"].get("percentage")
             if pct is not None:
@@ -664,28 +666,38 @@ class MetricsOrchestrator:
         # --- 4.2.4 Engagement ---
         engagement = sust.get("engagement", {})
         if engagement:
-            issue_stats = engagement.get("issue_stats", {})
-            pr_stats = engagement.get("pr_stats", {})
-            backlog = engagement.get("backlog", {})
+            eng_score = engagement.get("overall_score", {})
+            sub = eng_score.get("sub_scores", {})
             eng_lines = []
-            frt = issue_stats.get("median_first_response_hours")
-            if frt is not None:
-                eng_lines.append(f'<p><strong>Median First Response:</strong> {frt:.0f} hours</p>')
-            mct = issue_stats.get("median_close_time_hours")
-            if mct is not None:
-                eng_lines.append(f'<p><strong>Median Issue Close Time:</strong> {mct:.0f} hours</p>')
-            mrp = pr_stats.get("merge_rate_pct")
-            if mrp is not None:
-                eng_lines.append(f'<p><strong>PR Merge Rate:</strong> {mrp:.0f}%</p>')
+
+            def _fmt_sub(key: str) -> str:
+                s = sub.get(key, {})
+                label = s.get("label", key)
+                if s.get("not_collected"):
+                    return f'<p><strong>{label}:</strong> Not yet collected</p>'
+                val = s.get("value", "N/A")
+                mark = "✓" if s.get("passing") else "✗"
+                return f'<p><strong>{label}:</strong> {val} {mark}</p>'
+
+            for key in [
+                "response_time_tracking",
+                "issue_resolution",
+                "pr_flow",
+                "support_closure",
+                "engagement_quality",
+                "communication_patterns",
+                "community_participation",
+            ]:
+                eng_lines.append(_fmt_sub(key))
+
+            # Also surface PR cycle time as context (not a scored sub-metric)
+            pr_stats = engagement.get("pr_stats", {})
             mpr_ct = pr_stats.get("median_cycle_time_hours")
             if mpr_ct is not None:
                 eng_lines.append(f'<p><strong>Median PR Cycle Time:</strong> {mpr_ct:.0f} hours</p>')
-            ratio = backlog.get("sample_open_to_closed_ratio")
-            if ratio is not None:
-                eng_lines.append(f'<p><strong>Open/Closed Issue Ratio:</strong> {ratio:.2f}</p>')
-            eng_score = engagement.get("overall_score", {})
+
             eng_lines.append(
-                f'<p><strong>Score:</strong> {eng_score.get("score", 0)}/100</p>'
+                f'<p><strong>Score:</strong> {eng_score.get("score", 0)}/{eng_score.get("max_score", 7)}</p>'
             )
             section_424_data = "\n".join(eng_lines) if eng_lines else None
         else:

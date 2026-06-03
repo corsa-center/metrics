@@ -231,7 +231,7 @@ class EngagementCollector(GitHubCollectorBase):
         }
 
     # ------------------------------------------------------------------ #
-    # Scoring (0–100)                                                      #
+    # Scoring (0–7, one point per PDF sub-metric)                         #
     # ------------------------------------------------------------------ #
 
     def _score(
@@ -240,52 +240,76 @@ class EngagementCollector(GitHubCollectorBase):
         pr_stats: Dict[str, Any],
         backlog: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Score each of the 7 measurement methods defined in CASS Report §4.2.4.
+        Each sub-metric contributes 1 point if collected and passing its threshold.
+        Sub-metrics not yet implemented contribute 0 and are flagged not_collected.
+        """
+        sub = {}
         pts = 0
 
-        # First response time (25 pts)
+        # 1. Response Time Tracking — passing if median first response < 168 h (1 week)
         frt = issue_stats.get("median_first_response_hours")
-        if frt is not None:
-            if frt < 24:
-                pts += 25
-            elif frt < 168:
-                pts += 15
-            elif frt < 720:
-                pts += 5
+        passing = frt is not None and frt < 168
+        sub["response_time_tracking"] = {
+            "label": "Response Time Tracking",
+            "value": f"{frt:.0f} hours" if frt is not None else None,
+            "passing": passing,
+            "pts": 1 if passing else 0,
+        }
+        pts += sub["response_time_tracking"]["pts"]
 
-        # Median close time (25 pts)
+        # 2. Issue Resolution Analysis — passing if median close time < 720 h (30 days)
         mct = issue_stats.get("median_close_time_hours")
-        if mct is not None:
-            if mct < 168:
-                pts += 25
-            elif mct < 720:
-                pts += 15
-            elif mct < 2160:
-                pts += 5
+        passing = mct is not None and mct < 720
+        sub["issue_resolution"] = {
+            "label": "Issue Resolution Analysis",
+            "value": f"{mct:.0f} hours" if mct is not None else None,
+            "passing": passing,
+            "pts": 1 if passing else 0,
+        }
+        pts += sub["issue_resolution"]["pts"]
 
-        # PR merge rate (25 pts)
+        # 3. Pull Request Flow Assessment — passing if merge rate > 50 %
         mrp = pr_stats.get("merge_rate_pct")
-        if mrp is not None:
-            if mrp > 75:
-                pts += 25
-            elif mrp > 50:
-                pts += 15
-            elif mrp > 25:
-                pts += 5
+        passing = mrp is not None and mrp > 50
+        sub["pr_flow"] = {
+            "label": "Pull Request Flow Assessment",
+            "value": f"{mrp:.0f}%" if mrp is not None else None,
+            "passing": passing,
+            "pts": 1 if passing else 0,
+        }
+        pts += sub["pr_flow"]["pts"]
 
-        # Open/closed ratio (25 pts) — lower is better
+        # 4. Support Request Closure Analysis — passing if open/closed ratio < 2.0
         ratio = backlog.get("sample_open_to_closed_ratio")
-        if ratio is not None:
-            if ratio < 0.5:
-                pts += 25
-            elif ratio < 1.0:
-                pts += 15
-            elif ratio < 2.0:
-                pts += 5
+        passing = ratio is not None and ratio < 2.0
+        sub["support_closure"] = {
+            "label": "Support Request Closure Analysis",
+            "value": f"{ratio:.2f}" if ratio is not None else None,
+            "passing": passing,
+            "pts": 1 if passing else 0,
+        }
+        pts += sub["support_closure"]["pts"]
+
+        # 5–7. Not yet implemented collectors
+        for key, label in [
+            ("engagement_quality",       "Engagement Quality Metrics"),
+            ("communication_patterns",   "Communication Pattern Analysis"),
+            ("community_participation",  "Community Participation Assessment"),
+        ]:
+            sub[key] = {
+                "label": label,
+                "value": None,
+                "passing": False,
+                "pts": 0,
+                "not_collected": True,
+            }
 
         return {
             "score": pts,
-            "max_score": 100,
-            "percentage": float(pts),
+            "max_score": 7,
+            "sub_scores": sub,
         }
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
