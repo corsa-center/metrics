@@ -554,6 +554,7 @@ class MetricsOrchestrator:
             # 1. Enhanced Document Detection — CoC, Governance, Contributing files
             if governance:
                 doc_found = 0
+                doc_sub_lines = []
                 for label, key in [
                     ("Code of Conduct", "code_of_conduct"),
                     ("Governance", "governance"),
@@ -563,10 +564,10 @@ class MetricsOrchestrator:
                     if info.get("exists"):
                         url = info.get("url", "")
                         link = f'<a href="{url}">{info.get("file_path", "")}</a>' if url else info.get("file_path", "")
-                        gov_lines.append(f"<p><strong>{label}:</strong> {link}</p>")
+                        doc_sub_lines.append(f'<p class="sub-detail">{label}: {link}</p>')
                         doc_found += 1
                     else:
-                        gov_lines.append(f"<p><strong>{label}:</strong> Not found</p>")
+                        doc_sub_lines.append(f'<p class="sub-detail">{label}: Not found</p>')
                 gov_score = governance.get("overall_score", {})
                 doc_total = gov_score.get("max_score", 3)
                 passing = doc_found >= 2  # CoC + Contributing is sufficient; Governance is optional
@@ -574,6 +575,7 @@ class MetricsOrchestrator:
                 gov_lines.append(
                     f'<p><strong>Enhanced Document Detection:</strong> {doc_found}/{doc_total} {"✓" if passing else "✗"}</p>'
                 )
+                gov_lines.extend(doc_sub_lines)
             else:
                 gov_lines.append('<p><strong>Enhanced Document Detection:</strong> Not yet collected</p>')
 
@@ -622,9 +624,9 @@ class MetricsOrchestrator:
             ld_passing = identified  # file found and identified
             lic_pts += 1 if ld_passing else 0
             lic_lines += [
-                f"<p><strong>License:</strong> {license_name}</p>",
-                f"<p><strong>Category:</strong> {analysis.get('category', 'Unknown')}</p>",
                 f'<p><strong>Enhanced License Detection:</strong> {"✓" if ld_passing else "✗"}</p>',
+                f'<p class="sub-detail">License: {license_name}</p>',
+                f'<p class="sub-detail">Category: {analysis.get("category", "Unknown")}</p>',
             ]
 
             # 2. Automated FAIR4RS Assessment — not yet collected
@@ -672,7 +674,7 @@ class MetricsOrchestrator:
                                 f'— {commits.get("total_commits_52w", 0):,} commits (52 weeks) '
                                 f'{"✓" if commit_ok else "✗"}</p>')
             if commits.get("days_since_last_commit") is not None:
-                maint_lines.append(f'<p><strong>Last Commit:</strong> {commits["days_since_last_commit"]} days ago</p>')
+                maint_lines.append(f'<p class="sub-detail">Last Commit: {commits["days_since_last_commit"]} days ago</p>')
 
             # 2. Maintenance Mode Indicator Detection
             not_archived = not indicators.get("archived") and not indicators.get("maintenance_signals")
@@ -696,10 +698,10 @@ class MetricsOrchestrator:
             maint_lines.append(f'<p><strong>Release Pattern Assessment:</strong> '
                                 f'{rel_detail}, {rel_count}/yr {"✓" if rel_ok else "✗"}</p>')
 
-            # Contributor context (not a scored blade — supporting info)
+            # Contributor context — sub-detail under Contributor Abandonment Forecasting
             if contribs.get("total_contributors"):
                 maint_lines.append(
-                    f'<p><strong>Contributors:</strong> {contribs["total_contributors"]}'
+                    f'<p class="sub-detail">Contributors: {contribs["total_contributors"]}'
                     f' (bus factor: {contribs.get("bus_factor", 0)})</p>'
                 )
 
@@ -739,11 +741,11 @@ class MetricsOrchestrator:
             ]:
                 eng_lines.append(_fmt_sub(key))
 
-            # Also surface PR cycle time as context (not a scored sub-metric)
+            # PR cycle time — sub-detail under PR Flow Assessment
             pr_stats = engagement.get("pr_stats", {})
             mpr_ct = pr_stats.get("median_cycle_time_hours")
             if mpr_ct is not None:
-                eng_lines.append(f'<p><strong>Median PR Cycle Time:</strong> {mpr_ct:.0f} hours</p>')
+                eng_lines.append(f'<p class="sub-detail">Median PR Cycle Time: {mpr_ct:.0f} hours</p>')
 
             eng_lines.append(
                 f'<p><strong>Score:</strong> {eng_score.get("score", 0)}/{eng_score.get("max_score", 7)}</p>'
@@ -767,8 +769,10 @@ class MetricsOrchestrator:
                 nonlocal repr_pts
                 repr_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
-                suffix = f" ({detail})" if detail else ""
-                return f'<p><strong>{label}:</strong>{suffix} {mark}</p>'
+                row = f'<p><strong>{label}:</strong> {mark}</p>'
+                if detail:
+                    row += f'<p class="sub-detail">{detail}</p>'
+                return row
 
             fair4rs_found = cats.get("fair4rs_metadata", {}).get("found", [])
             container_found = cats.get("containers", {}).get("found", [])
@@ -861,8 +865,10 @@ class MetricsOrchestrator:
                 nonlocal acc_pts
                 acc_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
-                suffix = f" ({detail})" if detail else ""
-                return f'<p><strong>{label}:</strong>{suffix} {mark}</p>'
+                row = f'<p><strong>{label}:</strong> {mark}</p>'
+                if detail:
+                    row += f'<p class="sub-detail">{detail}</p>'
+                return row
 
             build_found = cats.get("build_systems", {}).get("found", [])
             container_found = cats.get("containers", {}).get("found", [])
