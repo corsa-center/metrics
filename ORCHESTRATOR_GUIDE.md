@@ -55,6 +55,11 @@ collectors:
   citation: true
   community: true
   licensing: true
+  openssf_badge: true
+  openssf_scorecard: true
+  ci_cd: true
+  reproducibility: true
+  accessibility: true
 
 # Configure API credentials via environment variables
 api_credentials:
@@ -160,11 +165,14 @@ Options:
 
 ```yaml
 collectors:
-  citation: true      # Academic impact
-  community: true     # Health metrics
-  licensing: true     # License analysis
-  quality: false      # Code quality (future)
-  viability: false    # Sustainability (future)
+  citation: true          # Academic impact (4.1.1)
+  community: true         # CoC, governance, maintenance, engagement (4.2.x)
+  licensing: true         # License analysis (4.2.2)
+  openssf_badge: true     # OpenSSF best practices badge
+  openssf_scorecard: true # OpenSSF scorecard
+  ci_cd: true             # CI/CD development practices (4.3.2)
+  reproducibility: true   # Reproducibility (4.3.3)
+  accessibility: true     # Accessible build systems (4.3.5)
 ```
 
 ### Adjust Metric Weights
@@ -297,8 +305,8 @@ ls -lh ../dashboard/explore/github-data/sustainabilityMetrics.json
 
 ## Next Steps
 
-1. **Add More Collectors:** Implement quality, viability collectors
-2. **Enhanced Scoring:** Refine overall score calculation
+1. **Remaining Metrics:** Implement 4.2.5 Outreach, 4.3.1 Reliability, 4.3.4 Usability, 4.3.6 Maintainability
+2. **Enhanced Scoring:** Refine overall score calculation and dimension weights
 3. **Trend Analysis:** Track metrics over time
 4. **Alerting:** Notify on significant metric changes
 5. **Caching:** Cache API responses to reduce calls

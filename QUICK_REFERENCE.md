@@ -1,149 +1,79 @@
 # Quick Reference Guide
 
-## What Was Built This Session
+## Implemented Collectors
 
-### 1. CASS Catalog Sync ✅
-- **Script:** `collectors/catalog_sync.py`
-- **Purpose:** Sync CORSA Dashboard with CASS software catalog
-- **Status:** Complete, tested, working
-- **Result:** Dashboard updated with all 36 CASS GitHub repos
-
-### 2. Community Metrics ✅
-- **Collector:** `collectors/community/community_health.py`
-- **Test Script:** `test_community_metrics.py`
-- **Purpose:** Check for CoC, Governance, Contributing docs
-- **Status:** Complete, tested on HDF5
-- **Result:** HDF5 scored 2/3 (66.67%)
+| Collector | Metric | File |
+|-----------|--------|------|
+| Citation | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` |
+| CoC / Governance | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/sustainability/chaoss_governance.py` |
+| Licensing | 4.2.2 Open-Source Licensing & FAIR Compliance | `collectors/sustainability/licensing.py` |
+| Active Maintenance | 4.2.3 Active Maintenance | `collectors/sustainability/active_maintenance.py` |
+| Engagement | 4.2.4 Community Engagement | `collectors/sustainability/engagement.py` |
+| Community Health | 4.2.10 Project Longevity & Community Health | `collectors/sustainability/community_health.py` |
+| OpenSSF Badge | OpenSSF Best Practices Badge | `collectors/sustainability/openssf_badge.py` |
+| OpenSSF Scorecard | OpenSSF Scorecard | `collectors/sustainability/openssf_scorecard.py` |
+| CI/CD | 4.3.2 Development Practices (CI/CD) | `collectors/quality/development_practices/ci_cd.py` |
+| Reproducibility | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` |
+| Accessibility | 4.3.5 Accessibility (portable build systems) | `collectors/quality/accessibility.py` |
 
 ---
 
 ## Quick Commands
 
-### Run CASS Sync
+### Run All Collectors (via Orchestrator)
 ```bash
-cd /home/brtnfld/work/metrics
-python3 collectors/catalog_sync.py
+cd ~/work/metrics
+source venv/bin/activate
+python orchestrator.py --config config/orchestrator.yaml
 ```
 
-### Run Community Metrics
+### Run for a Single Package
 ```bash
-cd /home/brtnfld/work/metrics
-export GITHUB_TOKEN="your_token"  # Optional
-python3 test_community_metrics.py
+python orchestrator.py --config config/orchestrator.yaml --software HDF5
 ```
 
-### View Results
+### Dry Run (no file writes)
 ```bash
-# Community metrics summary
-cat output/community_metrics_summary.json
-
-# Full community metrics
-jq '.[17]' output/community_metrics.json  # HDF5 entry
-
-# Dashboard repo count
-jq '.["https://github.com"].repos | length' /home/brtnfld/work/dashboard/_explore/input_lists.json
+python orchestrator.py --config config/orchestrator.yaml --dry-run
 ```
 
----
-
-## File Locations
-
-### Metrics Collection
-```
-/home/brtnfld/work/metrics/
-├── collectors/
-│   ├── catalog_sync.py                    # CASS sync
-│   └── community/community_health.py      # Community metrics
-├── test_community_metrics.py              # Test script
-└── output/
-    ├── community_metrics.json             # Results
-    └── community_metrics_summary.json     # Summary
-```
-
-### Dashboard
-```
-/home/brtnfld/work/dashboard/
-└── _explore/
-    ├── input_lists.json           # Updated (not committed)
-    └── input_lists.json.backup    # Backup
-```
-
-### Documentation
-```
-CASS_SYNC_SUMMARY.md      # CASS sync details
-SYNC_COMPLETE.md          # CASS completion report
-COMMUNITY_METRICS.md      # Community metrics guide
-SESSION_SUMMARY.md        # Complete session history
-QUICK_REFERENCE.md        # This file
-```
-
----
-
-## Key Results
-
-### CASS Sync
-- ✅ 45 CASS packages extracted
-- ✅ 36 unique GitHub repos mapped
-- ✅ 100% CASS coverage in dashboard
-- ✅ 50 total GitHub repos, 4 GitLab repos
-
-### HDF5 Community Metrics
-- ✅ Code of Conduct: FOUND
-- ❌ Governance: NOT FOUND
-- ✅ Contributing: FOUND
-- **Score: 2/3 (66.67%)**
-
-### Other 49 Packages
-- Status: Placeholder only (loop demonstrated)
-- Ready to expand by removing filter
-
----
-
-## Expand to All Packages
-
-To collect community metrics for ALL packages:
-
-**Edit:** `test_community_metrics.py` line 51
-
-**Change from:**
-```python
-if package['name'].lower() == 'hdf5':
-```
-
-**Change to:**
-```python
-if True:  # Collect for all
-```
-
----
-
-## Next Actions (Not Done)
-
-1. Commit dashboard changes
-2. Expand community metrics to all packages
-3. Add more metrics (issue templates, security policy, etc.)
-4. Integrate with dashboard visualization
-5. Set up automated collection
-
----
-
-## GitHub Token
-
-Set for better rate limits:
+### Generate Citation Metrics Only
 ```bash
-export GITHUB_TOKEN="ghp_your_token_here"
+export GITHUB_TOKEN="your_github_token"
+python scripts/generate_corsa_citations.py \
+  --catalog config/software_catalog.yaml \
+  --output output/citationMetrics.json
 ```
 
-**Limits:**
-- Without token: 60 requests/hour
-- With token: 5,000 requests/hour
+---
+
+## Environment Variables
+
+| Variable | Purpose | Required? |
+|----------|---------|-----------|
+| `GITHUB_TOKEN` | GitHub API — raises limit from 60 to 5,000 req/hr | Strongly recommended |
+| `SEMANTIC_SCHOLAR_KEY` | Higher rate limits for citation lookups | Optional |
+| `OPENALEX_EMAIL` | Polite-pool access for OpenAlex | Optional |
+| `ZENODO_TOKEN` | Zenodo DOI resolution | Optional |
 
 ---
 
-## All 50 Software Packages
+## Output Files
 
-ascent, amrex, aml, caffeine, gasnet, upcxx, cass-community-new, libceed, chipstar, darshan, deephyper, diy, dyninst, e4s, empirical-roofline-toolkit, flang, ginkgo, **hdf5** (✓ collected), hpctoolkit, hypre, magma, papi, kokkos, kokkos-kernels, libensemble, sundials, zfp, llvm-project, mfem, ompi, openaccv-v, openmp_vv, adios2, pnetcdf, spack, strumpack, superlu_dist, tau2, trilinos, visit, viskores, superlu, superlu_mt, xsdk-project, xsdk-issues, mpich, petsc, paraview, albany
+| File | Description |
+|------|-------------|
+| `output/sustainabilityMetrics.json` | Dashboard-ready metrics JSON |
+| `output/orchestrator_summary.json` | Run summary (scores, counts, top packages) |
+| `orchestrator.log` | Detailed collection log |
 
 ---
 
-**For Complete Details:** See `SESSION_SUMMARY.md`
+## Documentation
+
+| File | Purpose |
+|------|---------|
+| [README.md](README.md) | Project overview and setup |
+| [CONFIGURATION.md](CONFIGURATION.md) | API credentials and config details |
+| [ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md) | Orchestrator usage and options |
+| [QUICK_START.md](QUICK_START.md) | Getting started quickly |
+| [METRICS_ROADMAP.md](METRICS_ROADMAP.md) | Implementation status of all metrics |

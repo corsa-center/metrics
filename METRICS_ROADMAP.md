@@ -57,10 +57,10 @@ static analysis tool runs, or non-trivial content parsing.
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
 | [#6](https://github.com/corsa-center/metrics/issues/6) | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` | ✅ Done (partial — CITATION.cff/DOI; advanced deps TBD) |
-| [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | — | 🔲 Todo |
+| [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/sustainability/engagement.py` | ✅ Done |
 | [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | — | 🔲 Todo |
 | [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | — | 🔲 Todo |
-| [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | — | 🔲 Todo |
+| [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done |
 | [#20](https://github.com/corsa-center/metrics/issues/20) | 4.3.4 Usability | — | 🔲 Todo |
 | [#22](https://github.com/corsa-center/metrics/issues/22) | 4.3.6 Maintainability & Understandability | — | 🔲 Todo |
 
