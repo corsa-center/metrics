@@ -909,7 +909,14 @@ class MetricsOrchestrator:
                 "4.2.5": {"title": "Outreach", "data": None},
                 "4.2.6": {"title": "Welcomeness", "data": None},
                 "4.2.7": {"title": "Collaboration", "data": None},
-                "4.2.8": {"title": "Financial Sustainability", "data": None},
+                "4.2.8": {"title": "Financial Sustainability", "data": (
+                    "<p><strong>Enhanced Funding Documentation Analysis:</strong> Not yet collected</p>\n"
+                    "<p><strong>Institutional Affiliation Tracking:</strong> Not yet collected</p>\n"
+                    "<p><strong>NIH R50 Award Tracking:</strong> N/A</p>\n"
+                    "<p><strong>Corporate Sponsorship Detection:</strong> Not yet collected</p>\n"
+                    "<p><strong>Funding Portfolio Analysis:</strong> Not yet collected</p>\n"
+                    "<p><strong>Score:</strong> 0/5</p>"
+                )},
                 "4.2.9": {"title": "Institutional & Organizational Support", "data": None},
                 "4.2.10": {"title": "Project Longevity and Community Health", "data": None},
             },
