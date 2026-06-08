@@ -110,6 +110,41 @@ class MetricsOrchestrator:
         return {}
 
     @staticmethod
+    def _apply_section_overrides(html: Optional[str], section_overrides: Dict[str, str]) -> Optional[str]:
+        """Replace sub-metric lines in a section's HTML with config-supplied values.
+
+        Any <p><strong>Label:</strong> ...> line whose label appears in section_overrides
+        is replaced with the configured value. The Score line is then recalculated from
+        the updated HTML so blade counts remain correct.
+        """
+        if not html or not section_overrides:
+            return html
+
+        lines = html.split('\n')
+        new_lines = []
+        for line in lines:
+            matched = False
+            for label, value in section_overrides.items():
+                if re.match(rf'<p(?! class)[^>]*><strong>{re.escape(label)}:</strong>', line.strip()):
+                    new_lines.append(f'<p><strong>{label}:</strong> {value}</p>')
+                    matched = True
+                    break
+            if not matched:
+                new_lines.append(line)
+
+        result = '\n'.join(new_lines)
+
+        # Recount ✓ hits and total main-metric lines (excludes sub-details and Score)
+        filled = sum(1 for l in new_lines if '✓' in l and 'sub-detail' not in l)
+        total  = len(re.findall(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>', result))
+        result = re.sub(
+            r'<p[^>]*><strong>Score:</strong>[^<]*</p>',
+            f'<p><strong>Score:</strong> {filled}/{total}</p>',
+            result,
+        )
+        return result
+
+    @staticmethod
     def _build_stub_section(section_num: str, overrides: Dict[str, str]) -> str:
         """Build a placeholder HTML block for a section with no collector yet.
 
@@ -953,6 +988,17 @@ class MetricsOrchestrator:
             section_435_data = "\n".join(acc_lines)
         else:
             section_435_data = None
+
+        # Apply per-package overrides to all collected sections
+        ov = pkg_overrides
+        section_411_data = self._apply_section_overrides(section_411_data, ov.get("4.1.1", {}))
+        section_421_data = self._apply_section_overrides(section_421_data, ov.get("4.2.1", {}))
+        section_422_data = self._apply_section_overrides(section_422_data, ov.get("4.2.2", {}))
+        section_423_data = self._apply_section_overrides(section_423_data, ov.get("4.2.3", {}))
+        section_424_data = self._apply_section_overrides(section_424_data, ov.get("4.2.4", {}))
+        section_432_data = self._apply_section_overrides(section_432_data, ov.get("4.3.2", {}))
+        section_433_data = self._apply_section_overrides(section_433_data, ov.get("4.3.3", {}))
+        section_435_data = self._apply_section_overrides(section_435_data, ov.get("4.3.5", {}))
 
         return {
             "package": repo_name,
