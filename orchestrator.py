@@ -33,6 +33,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# Sub-metric labels per section (CASS Sustainability Metrics Report v3)
+SECTION_SUBMETRICS: Dict[str, List[str]] = {
+    "4.1.1": ["Enhanced Citations and Mentions", "Improved DOI Tracking", "Comprehensive Citation Metadata", "Advanced Dependency Analysis", "AI-Enhanced Training Detection"],
+    "4.1.2": ["AI-Enhanced Publication Analysis", "Comprehensive Institutional Tracking", "Impact Narrative Extraction"],
+    "4.2.1": ["Enhanced Document Detection", "Governance Keyword Analysis", "OpenSSF Badge Integration", "CHAOSS Governance Metrics", "Governance Effectiveness Assessment"],
+    "4.2.2": ["Enhanced License Detection", "Automated FAIR4RS Assessment", "OSI License Validation", "License Exception Handling", "FAIR Metadata Assessment"],
+    "4.2.3": ["Commit Activity Pattern Analysis", "Maintenance Mode Indicator Detection", "Activity Trend Monitoring", "Release Pattern Assessment", "Multi-Channel Communication Activity", "Contributor Abandonment Forecasting"],
+    "4.2.4": ["Response Time Tracking", "Issue Resolution Analysis", "Pull Request Flow Assessment", "Support Request Closure Analysis", "Engagement Quality Metrics", "Communication Pattern Analysis", "Community Participation Assessment"],
+    "4.2.5": ["New Contributor Tracking", "Contributor Retention Analysis", "Contributor Lifecycle Mapping", "Contribution Type Diversity", "Good First Issue Effectiveness", "External Event Participation", "Training Material Integration", "Onboarding Infrastructure Assessment"],
+    "4.2.6": ["CHAOSS Community Experience Metrics", "Response Quality and Tone Analysis", "Communication Sentiment Analysis", "Contributor Journey Mapping", "Language and Communication Review", "Leadership Role Representation", "Decision-Making Visibility"],
+    "4.2.7": ["Advanced Dependency Analysis", "Cross-project Reference Detection", "Interoperability Assessment", "Collaboration Network Analysis", "Standards Compliance Tracking"],
+    "4.2.8": ["Enhanced Funding Documentation Analysis", "Institutional Affiliation Tracking", "NIH R50 Award Tracking", "Corporate Sponsorship Detection", "Funding Portfolio Analysis"],
+    "4.2.9": ["RSE Position Detection", "Institutional Support Tracking", "Career Development Indicators", "NIH R50 Award Integration", "Institutional Policy Analysis"],
+    "4.2.10": ["Comprehensive Activity Analysis", "Contributor Viability Assessment", "Maintenance Mode Detection", "Community Health Trends", "Project Lifecycle Assessment"],
+    "4.3.1": ["Advanced Static Analysis", "Enhanced Security Analysis", "CERT Guidelines Compliance", "Test Coverage Excellence", "Reliability Trend Analysis"],
+    "4.3.2": ["CI/CD Effectiveness Assessment", "Testing Framework Excellence", "Code Review Quality Analysis", "Development Tool Integration", "Community Contribution Facilitation"],
+    "4.3.3": ["FAIR4RS Compliance Assessment", "Containerization Excellence", "Version Control Best Practices", "Environment Management", "Reproducibility Documentation"],
+    "4.3.4": ["User Experience Assessment", "Documentation Completeness Analysis", "Accessibility Feature Detection", "Installation Success Tracking", "Usage Analytics Integration"],
+    "4.3.5": ["Portable Build System Detection", "Container Availability Assessment", "Architecture Compatibility Analysis", "Platform Documentation Evaluation", "Deployment Environment Testing"],
+    "4.3.6": ["Advanced Complexity Analysis", "Code Quality Assessment", "Documentation Quality Evaluation", "Knowledge Distribution Analysis", "Refactoring and Evolution Tracking"],
+    "4.3.7": ["Performance Benchmarking Integration", "Environmental Impact Assessment", "Resource Utilization Analysis", "Scalability Assessment", "Optimization Practice Evaluation", "Memory Efficiency Analysis", "I/O Performance Profiling", "Algorithmic Complexity Assessment", "Power Measurement Integration", "Performance Portability Assessment"],
+}
+
+# Directory containing per-package config files (relative to this script)
+PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
+
+
 class MetricsOrchestrator:
     """Orchestrates metrics collection and dashboard integration"""
 
@@ -68,6 +95,34 @@ class MetricsOrchestrator:
         if isinstance(obj, list):
             return [self._resolve_env_vars(v) for v in obj]
         return obj
+
+    def _load_package_config(self, repo_name: str) -> Dict:
+        """Load per-package config file from package_config/ if it exists.
+
+        Config files are named <owner>_<repo>.yaml, e.g. HDFGroup_hdf5.yaml.
+        Returns an empty dict if no config file is found.
+        """
+        safe_name = repo_name.replace("/", "_")
+        config_file = PACKAGE_CONFIG_DIR / f"{safe_name}.yaml"
+        if config_file.exists():
+            with open(config_file) as f:
+                return yaml.safe_load(f) or {}
+        return {}
+
+    @staticmethod
+    def _build_stub_section(section_num: str, overrides: Dict[str, str]) -> str:
+        """Build a placeholder HTML block for a section with no collector yet.
+
+        Sub-metrics default to 'Not yet collected' unless an override is provided.
+        """
+        submetrics = SECTION_SUBMETRICS.get(section_num, [])
+        total = len(submetrics)
+        lines = []
+        for sm in submetrics:
+            value = overrides.get(sm, "Not yet collected")
+            lines.append(f"<p><strong>{sm}:</strong> {value}</p>")
+        lines.append(f"<p><strong>Score:</strong> 0/{total}</p>")
+        return "\n".join(lines)
 
     def _fetch_json(self, url: str) -> Optional[Dict]:
         """Fetch a JSON file from a URL
@@ -509,6 +564,16 @@ class MetricsOrchestrator:
         """
         dims = metrics.get("dimensions", {})
 
+        # Load per-package overrides (e.g. N/A values supplied by maintainers)
+        pkg_config = self._load_package_config(repo_name)
+        pkg_overrides: Dict[str, Dict[str, str]] = pkg_config.get("overrides", {})
+
+        def _stub(section_num: str) -> Optional[str]:
+            """Return a stub HTML block if the section has any overrides, else None."""
+            if section_num in pkg_overrides:
+                return self._build_stub_section(section_num, pkg_overrides[section_num])
+            return None
+
         # --- 4.1.1 Software Citation and Adoption ---
         impact_sub = dims.get("impact", {}).get("sub_results") or {}
         sub_metrics = impact_sub.get("sub_metrics", {})
@@ -909,14 +974,7 @@ class MetricsOrchestrator:
                 "4.2.5": {"title": "Outreach", "data": None},
                 "4.2.6": {"title": "Welcomeness", "data": None},
                 "4.2.7": {"title": "Collaboration", "data": None},
-                "4.2.8": {"title": "Financial Sustainability", "data": (
-                    "<p><strong>Enhanced Funding Documentation Analysis:</strong> Not yet collected</p>\n"
-                    "<p><strong>Institutional Affiliation Tracking:</strong> Not yet collected</p>\n"
-                    "<p><strong>NIH R50 Award Tracking:</strong> N/A</p>\n"
-                    "<p><strong>Corporate Sponsorship Detection:</strong> Not yet collected</p>\n"
-                    "<p><strong>Funding Portfolio Analysis:</strong> Not yet collected</p>\n"
-                    "<p><strong>Score:</strong> 0/5</p>"
-                )},
+                "4.2.8": {"title": "Financial Sustainability", "data": _stub("4.2.8")},
                 "4.2.9": {"title": "Institutional & Organizational Support", "data": None},
                 "4.2.10": {"title": "Project Longevity and Community Health", "data": None},
             },

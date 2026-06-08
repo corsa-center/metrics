@@ -1,0 +1,10 @@
+package: HDFGroup/hdf5
+
+# Per-metric overrides for sub-metrics that are N/A or have known fixed values.
+# Keys are the exact sub-metric labels from the CASS Sustainability Metrics Report v3.
+# Supported values: "N/A", or any descriptive string.
+overrides:
+  "4.2.8":
+    NIH R50 Award Tracking: "N/A"
+  "4.2.9":
+    NIH R50 Award Integration: "N/A"
