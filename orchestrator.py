@@ -1004,7 +1004,7 @@ class MetricsOrchestrator:
             "package": repo_name,
             "impact": {
                 "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},
-                "4.1.2": {"title": "Field Research Impact", "data": None},
+                "4.1.2": {"title": "Field Research Impact", "data": _stub("4.1.2")},
             },
             "sustainability": {
                 "4.2.1": {
@@ -1017,21 +1017,21 @@ class MetricsOrchestrator:
                 },
                 "4.2.3": {"title": "Active Maintenance", "data": section_423_data},
                 "4.2.4": {"title": "Engagement", "data": section_424_data},
-                "4.2.5": {"title": "Outreach", "data": None},
-                "4.2.6": {"title": "Welcomeness", "data": None},
-                "4.2.7": {"title": "Collaboration", "data": None},
-                "4.2.8": {"title": "Financial Sustainability", "data": _stub("4.2.8")},
-                "4.2.9": {"title": "Institutional & Organizational Support", "data": None},
-                "4.2.10": {"title": "Project Longevity and Community Health", "data": None},
+                "4.2.5": {"title": "Outreach",              "data": _stub("4.2.5")},
+                "4.2.6": {"title": "Welcomeness",            "data": _stub("4.2.6")},
+                "4.2.7": {"title": "Collaboration",          "data": _stub("4.2.7")},
+                "4.2.8": {"title": "Financial Sustainability","data": _stub("4.2.8")},
+                "4.2.9": {"title": "Institutional & Organizational Support", "data": _stub("4.2.9")},
+                "4.2.10": {"title": "Project Longevity and Community Health","data": _stub("4.2.10")},
             },
             "quality": {
-                "4.3.1": {"title": "Reliability and Robustness", "data": None},
-                "4.3.2": {"title": "Development Practices", "data": section_432_data},
-                "4.3.3": {"title": "Reproducibility", "data": section_433_data},
-                "4.3.4": {"title": "Usability", "data": None},
-                "4.3.5": {"title": "Accessibility", "data": section_435_data},
-                "4.3.6": {"title": "Maintainability and Understandability", "data": None},
-                "4.3.7": {"title": "Performance and Efficiency", "data": None},
+                "4.3.1": {"title": "Reliability and Robustness",             "data": _stub("4.3.1")},
+                "4.3.2": {"title": "Development Practices",                  "data": section_432_data},
+                "4.3.3": {"title": "Reproducibility",                        "data": section_433_data},
+                "4.3.4": {"title": "Usability",                              "data": _stub("4.3.4")},
+                "4.3.5": {"title": "Accessibility",                          "data": section_435_data},
+                "4.3.6": {"title": "Maintainability and Understandability",  "data": _stub("4.3.6")},
+                "4.3.7": {"title": "Performance and Efficiency",             "data": _stub("4.3.7")},
             },
         }
 
