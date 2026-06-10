@@ -13,7 +13,7 @@ This framework collects metrics from multiple sources and integrates with the [C
 - **CASS Framework**: Four dimensions - Impact, Community, Viability, Quality
 - **Dashboard Integration**: Generate JSON data for CORSA dashboard
 - **Automated Collection**: GitHub Actions workflows
-- **Extensible Framework**: Placeholder metrics for incremental implementation
+- **Extensible Framework**: Modular collector design for incremental implementation
 
 ## Quick Start
 
@@ -71,9 +71,9 @@ The framework follows the CASS (Consortium for Advancement of Scientific Softwar
 | Dimension | Status | Description |
 |----------|--------|-------------|
 | **Impact** | ✅ Implemented | Software citation, adoption, and field research impact |
-| **Community** | 🔄 Placeholder | Community health, engagement, and diversity |
+| **Community** | ✅ Partially Implemented | CoC/governance, licensing, maintenance, engagement, community health |
 | **Viability** | ✅ Implemented | Long-term sustainability, security, and licensing |
-| **Quality** | 🔄 Placeholder | Documentation, code quality, testing, and usability |
+| **Quality** | ✅ Partially Implemented | CI/CD practices, accessibility, reproducibility, OpenSSF badge/scorecard |
 
 Each dimension contains multiple sub-categories and metrics that contribute to an overall sustainability score.
 
@@ -84,16 +84,23 @@ metrics/
 ├── collectors/              # CASS dimension collectors
 │   ├── impact/
 │   │   ├── citation.py     # Citation metrics (✅ implemented)
-│   │   └── dimension.py    # Impact dimension (🔄 placeholder)
-│   ├── community/
-│   │   ├── community_health.py  # Legacy community health collector
-│   │   └── dimension.py         # Community dimension (🔄 placeholder)
-│   ├── viability/
-│   │   ├── licensing.py         # License analysis (✅ implemented)
-│   │   └── dimension.py         # Viability dimension (🔄 placeholder)
+│   │   └── dimension.py    # Impact dimension
+│   ├── sustainability/
+│   │   ├── chaoss_governance.py   # 4.2.1 CoC, governance & contributor guidelines
+│   │   ├── licensing.py           # 4.2.2 Open-source licensing & FAIR compliance
+│   │   ├── active_maintenance.py  # 4.2.3 Active maintenance
+│   │   ├── engagement.py          # 4.2.4 Community engagement
+│   │   ├── community_health.py    # 4.2.10 Project longevity & community health
+│   │   ├── openssf_badge.py       # OpenSSF best practices badge
+│   │   ├── openssf_scorecard.py   # OpenSSF scorecard
+│   │   └── dimension.py           # Sustainability dimension aggregator
 │   ├── quality/
-│   │   └── dimension.py         # Quality dimension (🔄 placeholder)
-│   └── catalog_sync.py          # Catalog synchronization
+│   │   ├── development_practices/
+│   │   │   └── ci_cd.py           # 4.3.2 CI/CD development practices
+│   │   ├── reproducibility.py     # 4.3.3 Reproducibility
+│   │   ├── accessibility.py       # 4.3.5 Accessibility (portable build systems)
+│   │   └── dimension.py           # Quality dimension aggregator
+│   └── catalog_sync.py            # Catalog synchronization
 │
 ├── integrations/            # API integrations
 │   ├── base.py             # Base API client

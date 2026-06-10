@@ -1,0 +1,1 @@
+"""Quality dimension collectors"""

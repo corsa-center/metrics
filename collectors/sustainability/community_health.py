@@ -63,10 +63,9 @@ class CommunityHealthCollector:
     def __init__(self, github_token: Optional[str] = None):
         """Initialize collector with optional GitHub token"""
         self.github_token = github_token
-        self.headers = {}
+        self.headers = {"Accept": "application/vnd.github.v3+json"}
         if github_token:
             self.headers["Authorization"] = f"token {github_token}"
-            self.headers["Accept"] = "application/vnd.github.v3+json"
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -193,10 +192,7 @@ class CommunityHealthCollector:
 
                     return {
                         "exists": True,
-                        "url": data.get(
-                            "html_url",
-                            f"https://github.com/{owner}/{repo}/blob/main/{file_path}",
-                        ),
+                        "url": data.get("html_url", ""),
                         "size": data.get("size", 0),
                         "content_preview": content_preview,
                     }
