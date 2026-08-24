@@ -33,6 +33,7 @@ No significant post-processing required.
 | — | **OpenSSF Best Practices Badge** (Quality) | `collectors/sustainability/openssf_badge.py` | ✅ Done |
 | — | **OpenSSF Scorecard** (Sustainability) | `collectors/sustainability/openssf_scorecard.py` | ✅ Done |
 | — | **CI / GitHub Actions Status** (Quality) | covered by `ci_cd.py` | ✅ Done |
+| — | **Test Coverage %** (Quality) | `collectors/quality/test_coverage.py` | ✅ Done (Codecov only — see note) |
 
 ### Why prioritised
 
@@ -46,6 +47,14 @@ No significant post-processing required.
     achieved "Passing" this quarter and cite it as their #1 quality metric.
   - **CI / GitHub Actions Status**: 4 projects explicitly cite their CI pass
     rate; GitHub API auth already wired in.
+  - **Test Coverage %**: originally assessed as "Hard" (see below) on the
+    assumption that CodeCov/Coveralls need auth. Re-tested during
+    implementation — Codecov's `v2` API (`api.codecov.io/api/v2/github/{owner}/repos/{repo}/`)
+    is public and unauthenticated for public repos and returns real coverage
+    totals (confirmed live: zfp 94.8%, DeepHyper 52.4%). Coveralls' public
+    JSON endpoint returns HTTP 403 for non-browser requests, so only Codecov
+    is used; repos without an active Codecov integration report "No Codecov
+    data found" rather than a number.
 
 ---
 
@@ -59,7 +68,7 @@ static analysis tool runs, or non-trivial content parsing.
 | [#6](https://github.com/corsa-center/metrics/issues/6) | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` | ✅ Done (partial — CITATION.cff/DOI; advanced deps TBD) |
 | [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/sustainability/engagement.py` | ✅ Done |
 | [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | — | 🔲 Todo |
-| [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | — | 🔲 Todo |
+| [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | `collectors/quality/test_coverage.py` | ✅ Done (partial — Test Coverage Excellence via Codecov; static analysis/CERT/trend TBD) |
 | [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done |
 | [#20](https://github.com/corsa-center/metrics/issues/20) | 4.3.4 Usability | — | 🔲 Todo |
 | [#22](https://github.com/corsa-center/metrics/issues/22) | 4.3.6 Maintainability & Understandability | — | 🔲 Todo |

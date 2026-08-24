@@ -80,6 +80,7 @@ class CitationMetricCollector:
             self._get_informal_mentions(package),
             self._get_dependent_packages(package),
             self._get_doi_resolutions(package),
+            self._get_github_stats(package),
             return_exceptions=True,
         )
 
@@ -88,6 +89,7 @@ class CitationMetricCollector:
         informal_mentions = results[1] if not isinstance(results[1], Exception) else 0
         dependent_packages = results[2] if not isinstance(results[2], Exception) else 0
         doi_resolutions = results[3] if not isinstance(results[3], Exception) else 0
+        github_stats = results[4] if not isinstance(results[4], Exception) else {"stars": 0, "forks": 0}
 
         # Log any exceptions
         for i, result in enumerate(results):
@@ -97,6 +99,7 @@ class CitationMetricCollector:
                     "informal_mentions",
                     "dependent_packages",
                     "doi_resolutions",
+                    "github_stats",
                 ]
                 self.logger.error(f"Error collecting {metric_names[i]}: {result}")
 
@@ -138,6 +141,12 @@ class CitationMetricCollector:
                     "normalized_score": normalized_scores["doi_resolutions"],
                     "weight": self.sub_metric_weights["doi_resolutions"],
                 },
+            },
+            # Unweighted evidence — GitHub stars/forks, shown in reports but not
+            # part of the weighted score above.
+            "github_stats": {
+                "stars": github_stats.get("stars", 0),
+                "forks": github_stats.get("forks", 0),
             },
             "metadata": {
                 "timestamp": asyncio.get_event_loop().time(),
@@ -220,6 +229,20 @@ class CitationMetricCollector:
         except Exception as e:
             self.logger.warning(f"Error fetching dependent packages: {e}")
             return 0
+
+    async def _get_github_stats(self, package: Dict[str, Any]) -> Dict[str, int]:
+        """Get GitHub stars and forks counts (unweighted evidence, not scored)"""
+        repo_url = package.get("repo_url")
+
+        if not repo_url:
+            return {"stars": 0, "forks": 0}
+
+        try:
+            stats = await self.github.get_repository_stats(repo_url)
+            return {"stars": stats.get("stars", 0), "forks": stats.get("forks", 0)}
+        except Exception as e:
+            self.logger.warning(f"Error fetching GitHub stats: {e}")
+            return {"stars": 0, "forks": 0}
 
     async def _get_doi_resolutions(self, package: Dict[str, Any]) -> int:
         """Get DOI resolution statistics from Zenodo"""

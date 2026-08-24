@@ -408,6 +408,22 @@ class MetricsOrchestrator:
         except Exception as e:
             logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
 
+        # 4.3.1 Test Coverage Excellence — via Codecov public API
+        try:
+            from collectors.quality.test_coverage import TestCoverageCollector
+            collector = TestCoverageCollector(github_token=github_token)
+            sub_results["test_coverage"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
+
+        # 4.3.1 Enhanced Security Analysis — CodeQL workflow presence
+        try:
+            from collectors.quality.static_analysis import StaticAnalysisCollector
+            collector = StaticAnalysisCollector(github_token=github_token)
+            sub_results["static_analysis"] = await collector.collect(package)
+        except Exception as e:
+            logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
+
         scores = []
         if "ci_cd" in sub_results:
             scores.append(sub_results["ci_cd"].get("percentage", 0))
@@ -415,6 +431,10 @@ class MetricsOrchestrator:
             scores.append(sub_results["reproducibility"].get("overall_score", {}).get("percentage", 0))
         if "accessibility" in sub_results:
             scores.append(sub_results["accessibility"].get("overall_score", {}).get("percentage", 0))
+        if sub_results.get("test_coverage", {}).get("coverage_exists"):
+            scores.append(sub_results["test_coverage"].get("coverage_percentage", 0))
+        if "static_analysis" in sub_results:
+            scores.append(100 if sub_results["static_analysis"].get("has_codeql") else 0)
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -634,6 +654,14 @@ class MetricsOrchestrator:
                 citation_lines.append(
                     f'<p><strong>DOI Resolutions:</strong> {dois["raw_value"]:,}</p>'
                 )
+            github_stats = impact_sub.get("github_stats", {})
+            if github_stats.get("stars", 0) > 0 or github_stats.get("forks", 0) > 0:
+                citation_lines.append(
+                    f'<p><strong>GitHub Stars:</strong> {github_stats.get("stars", 0):,}</p>'
+                )
+                citation_lines.append(
+                    f'<p><strong>GitHub Forks:</strong> {github_stats.get("forks", 0):,}</p>'
+                )
             score = impact_sub.get("score", 0)
             citation_lines.append(f'<p><strong>Citation Score:</strong> {score:.1f}/100</p>')
             section_411_data = "\n".join(citation_lines) if citation_lines else None
@@ -692,6 +720,18 @@ class MetricsOrchestrator:
                 mark = "✓" if passing else "✗"
                 link = f'<a href="{sc_url}">{sc_val}/10</a>' if sc_url else f'{sc_val}/10'
                 gov_lines.append(f'<p><strong>OpenSSF Scorecard:</strong> {link} ({checks}) {mark}</p>')
+                failing_checks = {
+                    name: info for name, info in scorecard.get("checks", {}).items()
+                    if info.get("score", 0) < 7
+                }
+                for name, info in sorted(failing_checks.items(), key=lambda kv: kv[1].get("score", 0)):
+                    doc_url = info.get("documentation_url", "")
+                    check_label = f'<a href="{doc_url}">{name}</a>' if doc_url else name
+                    reason = info.get("reason", "")
+                    gov_lines.append(
+                        f'<p class="sub-detail">{check_label}: {info.get("score", 0)}/10'
+                        f'{" — " + reason if reason else ""}</p>'
+                    )
             else:
                 gov_lines.append('<p><strong>OpenSSF Badge Integration:</strong> Not yet collected</p>')
 
@@ -856,6 +896,60 @@ class MetricsOrchestrator:
 
         qual = dims.get("quality", {}).get("sub_results", {})
 
+        # --- 4.3.1 Reliability and Robustness (PDF §4.3.1 — 5 sub-metrics) ---
+        # 1. Advanced Static Analysis    2. Enhanced Security Analysis
+        # 3. CERT Guidelines Compliance  4. Test Coverage Excellence
+        # 5. Reliability Trend Analysis
+        test_coverage = qual.get("test_coverage", {})
+        static_analysis = qual.get("static_analysis", {})
+        section_431_lines = []
+        rel_pts = 0
+        if test_coverage or static_analysis:
+            # 1. Advanced Static Analysis — not yet collected
+            section_431_lines.append('<p><strong>Advanced Static Analysis:</strong> Not yet collected</p>')
+
+            # 2. Enhanced Security Analysis — CodeQL workflow presence
+            if static_analysis:
+                if static_analysis.get("has_codeql"):
+                    rel_pts += 1
+                    url = static_analysis.get("workflow_url", "")
+                    link = f'<a href="{url}">CodeQL enabled</a>' if url else "CodeQL enabled"
+                    section_431_lines.append(f'<p><strong>Enhanced Security Analysis:</strong> {link} ✓</p>')
+                else:
+                    section_431_lines.append(
+                        '<p><strong>Enhanced Security Analysis:</strong> No CodeQL workflow found ✗</p>'
+                    )
+            else:
+                section_431_lines.append('<p><strong>Enhanced Security Analysis:</strong> Not yet collected</p>')
+
+            # 3. CERT Guidelines Compliance — not yet collected
+            section_431_lines.append('<p><strong>CERT Guidelines Compliance:</strong> Not yet collected</p>')
+
+            # 4. Test Coverage Excellence — via Codecov public API
+            if test_coverage.get("coverage_exists"):
+                pct = test_coverage["coverage_percentage"]
+                url = test_coverage.get("coverage_url", "")
+                passing = pct >= 80
+                rel_pts += 1 if passing else 0
+                mark = "✓" if passing else "✗"
+                link = f'<a href="{url}">{pct}%</a>' if url else f'{pct}%'
+                section_431_lines.append(
+                    f'<p><strong>Test Coverage Excellence:</strong> {link} (Codecov) {mark}</p>'
+                )
+                lines_total = test_coverage.get("lines_total")
+                if lines_total:
+                    section_431_lines.append(
+                        f'<p class="sub-detail">{test_coverage.get("lines_covered", 0):,}/{lines_total:,} lines covered</p>'
+                    )
+            else:
+                section_431_lines.append(
+                    '<p><strong>Test Coverage Excellence:</strong> No Codecov data found ✗</p>'
+                )
+
+            section_431_lines.append('<p><strong>Reliability Trend Analysis:</strong> Not yet collected</p>')
+            section_431_lines.append(f'<p><strong>Score:</strong> {rel_pts}/5</p>')
+        section_431_data = "\n".join(section_431_lines) if section_431_lines else None
+
         # --- 4.3.3 Reproducibility ---
         reproducibility = qual.get("reproducibility", {})
         # --- 4.3.3 Reproducibility (PDF §4.3.3 — 5 sub-metrics) ---
@@ -946,6 +1040,17 @@ class MetricsOrchestrator:
                     section_432_lines.append(
                         '<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge not registered ✗</p>'
                     )
+                for cat_label, cat_key in [
+                    ("Governance", "governance_criteria"),
+                    ("Security", "security_criteria"),
+                    ("Quality", "quality_criteria"),
+                ]:
+                    crit = openssf_badge.get(cat_key, {})
+                    crit_total = crit.get("count_total", 0)
+                    if crit_total:
+                        section_432_lines.append(
+                            f'<p class="sub-detail">{cat_label} criteria: {crit.get("count_found", 0)}/{crit_total} met</p>'
+                        )
             else:
                 section_432_lines.append(
                     '<p><strong>Community Contribution Facilitation:</strong> Not yet collected</p>'
@@ -996,6 +1101,7 @@ class MetricsOrchestrator:
         section_422_data = self._apply_section_overrides(section_422_data, ov.get("4.2.2", {}))
         section_423_data = self._apply_section_overrides(section_423_data, ov.get("4.2.3", {}))
         section_424_data = self._apply_section_overrides(section_424_data, ov.get("4.2.4", {}))
+        section_431_data = self._apply_section_overrides(section_431_data, ov.get("4.3.1", {}))
         section_432_data = self._apply_section_overrides(section_432_data, ov.get("4.3.2", {}))
         section_433_data = self._apply_section_overrides(section_433_data, ov.get("4.3.3", {}))
         section_435_data = self._apply_section_overrides(section_435_data, ov.get("4.3.5", {}))
@@ -1025,7 +1131,7 @@ class MetricsOrchestrator:
                 "4.2.10": {"title": "Project Longevity and Community Health","data": _stub("4.2.10")},
             },
             "quality": {
-                "4.3.1": {"title": "Reliability and Robustness",             "data": _stub("4.3.1")},
+                "4.3.1": {"title": "Reliability and Robustness",             "data": section_431_data},
                 "4.3.2": {"title": "Development Practices",                  "data": section_432_data},
                 "4.3.3": {"title": "Reproducibility",                        "data": section_433_data},
                 "4.3.4": {"title": "Usability",                              "data": _stub("4.3.4")},

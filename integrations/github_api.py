@@ -44,12 +44,13 @@ class GitHubClient(BaseAPIClient):
             self.client = Github(api_key, retry=retry)
 
         # Validate with get_rate_limit() — works for Actions tokens unlike get_user().
+        # PyGithub 2.x exposes this as .rate, not .core (which older versions used).
         try:
             rl = self.client.get_rate_limit()
             self.logger.info(
-                f"GitHub client initialised. Rate limit: {rl.core.remaining}/{rl.core.limit}"
+                f"GitHub client initialised. Rate limit: {rl.rate.remaining}/{rl.rate.limit}"
             )
-        except GithubException as e:
+        except Exception as e:
             self.logger.warning(f"GitHub rate-limit check failed (continuing): {e}")
 
     def _parse_repo_url(self, repo_url: str) -> tuple:
