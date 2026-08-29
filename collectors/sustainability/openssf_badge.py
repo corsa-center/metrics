@@ -291,10 +291,15 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
         }
 
     def _get_badge_level(self, badge_data: Dict[str, Any]) -> str:
-        """Map numeric badge_level field to a human-readable string."""
-        level_map = {"2": "gold", "1": "silver", "0": "passing"}
-        level = level_map.get(str(badge_data.get("badge_level", "")))
-        if level:
+        """Return the badge tier from the live API's `badge_level` field.
+
+        The API already returns a human-readable string directly
+        ("passing", "silver", "gold", "in_progress") — verified live
+        against bestpractices.dev, not a numeric code needing translation.
+        """
+        valid_levels = {"passing", "silver", "gold", "in_progress"}
+        level = (badge_data.get("badge_level") or "").strip().lower()
+        if level in valid_levels:
             return level
         return "in_progress" if badge_data.get("badge_percentage_0", 0) > 0 else "none"
 

@@ -45,6 +45,12 @@ class GitHubCollectorBase:
         The return value is truthy when the file exists (non-empty URL string)
         and falsy when it does not (None), so callers using `if result:` work
         without change.  Callers that need the URL can use the returned string.
+
+        `path` may point at a directory (e.g. ".github/workflows"), in which
+        case the Contents API returns a JSON list rather than a dict — handled
+        explicitly below since a plain `.get("html_url", ...)` on a list raises
+        AttributeError, which previously got swallowed and misreported as
+        "not found".
         """
         import asyncio
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
@@ -52,7 +58,10 @@ class GitHubCollectorBase:
             try:
                 response = await client.get(url, headers=self.github_headers)
                 if response.status_code == 200:
-                    return response.json().get("html_url", url)
+                    data = response.json()
+                    if isinstance(data, list):
+                        return f"https://github.com/{owner}/{repo}/tree/HEAD/{path}"
+                    return data.get("html_url", url)
                 if response.status_code == 404:
                     return None
                 if attempt == 0 and response.status_code in (429, 500, 502, 503):

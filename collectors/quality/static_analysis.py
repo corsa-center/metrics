@@ -9,9 +9,10 @@ workflow-presence proxy pattern as
 collectors/sustainability/openssf_badge.py rather than fetching alert counts.
 """
 
+import asyncio
 import httpx
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from collectors.sustainability.base import GitHubCollectorBase
 
@@ -23,6 +24,10 @@ _CODEQL_WORKFLOW_PATHS: List[str] = [
     ".github/workflows/codeql-analysis.yml",
     ".github/workflows/codeql-analysis.yaml",
 ]
+
+_WORKFLOWS_DIR = ".github/workflows"
+# Bounds worst-case API calls per repo when falling back to a content scan.
+_MAX_WORKFLOWS_TO_SCAN = 25
 
 
 class StaticAnalysisCollector(GitHubCollectorBase):
@@ -53,6 +58,21 @@ class StaticAnalysisCollector(GitHubCollectorBase):
                         "workflow_url": html_url,
                     }
 
+            # None of the common filenames matched — some projects bundle CodeQL
+            # into a differently-named workflow (e.g. ADIOS2's `everything.yml`).
+            # Fall back to scanning workflow file contents for a codeql-action
+            # reference, since filename guessing alone produces false negatives.
+            found = await self._scan_workflows_for_codeql(client, owner, repo)
+            if found:
+                return {
+                    "package_name": repo_name,
+                    "repository": f"{owner}/{repo}",
+                    "timestamp": self._get_timestamp(),
+                    "has_codeql": True,
+                    "workflow_file": found["file"],
+                    "workflow_url": found["url"],
+                }
+
         return {
             "package_name": repo_name,
             "repository": f"{owner}/{repo}",
@@ -61,6 +81,46 @@ class StaticAnalysisCollector(GitHubCollectorBase):
             "workflow_file": None,
             "workflow_url": None,
         }
+
+    async def _scan_workflows_for_codeql(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Optional[Dict[str, str]]:
+        """Scan workflow file contents for a `codeql-action` reference."""
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{_WORKFLOWS_DIR}"
+        try:
+            response = await client.get(url, headers=self.github_headers)
+            if response.status_code != 200:
+                return None
+            entries = response.json()
+            if not isinstance(entries, list):
+                return None
+        except Exception as e:
+            logger.debug(f"Error listing workflows for {owner}/{repo}: {e}")
+            return None
+
+        yaml_files = [
+            e for e in entries if e.get("name", "").endswith((".yml", ".yaml"))
+        ][:_MAX_WORKFLOWS_TO_SCAN]
+
+        async def check_file(entry: Dict[str, Any]) -> Optional[Dict[str, str]]:
+            download_url = entry.get("download_url")
+            if not download_url:
+                return None
+            try:
+                resp = await client.get(download_url)
+                if resp.status_code == 200 and "codeql-action" in resp.text:
+                    return {
+                        "file": f"{_WORKFLOWS_DIR}/{entry['name']}",
+                        "url": entry.get("html_url", download_url),
+                    }
+            except Exception as e:
+                logger.debug(f"Error fetching workflow {entry.get('name')}: {e}")
+            return None
+
+        for result in await asyncio.gather(*[check_file(e) for e in yaml_files]):
+            if result:
+                return result
+        return None
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {

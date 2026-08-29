@@ -14,16 +14,22 @@ def collector():
 # ------------------------------------------------------------------ #
 
 class TestGetBadgeLevel:
+    # bestpractices.dev returns badge_level as a human-readable string
+    # directly ("passing"/"silver"/"gold"/"in_progress") — verified live
+    # against real projects, not a numeric code needing translation.
     def test_gold(self, collector):
-        assert collector._get_badge_level({"badge_level": "2"}) == "gold"
+        assert collector._get_badge_level({"badge_level": "gold"}) == "gold"
 
     def test_silver(self, collector):
-        assert collector._get_badge_level({"badge_level": "1"}) == "silver"
+        assert collector._get_badge_level({"badge_level": "silver"}) == "silver"
 
     def test_passing(self, collector):
-        assert collector._get_badge_level({"badge_level": "0"}) == "passing"
+        assert collector._get_badge_level({"badge_level": "passing"}) == "passing"
 
-    def test_in_progress_when_percentage_nonzero(self, collector):
+    def test_in_progress_from_api_field(self, collector):
+        assert collector._get_badge_level({"badge_level": "in_progress", "badge_percentage_0": 85}) == "in_progress"
+
+    def test_in_progress_when_percentage_nonzero_and_level_missing(self, collector):
         assert collector._get_badge_level({"badge_percentage_0": 45}) == "in_progress"
 
     def test_none_when_no_data(self, collector):
@@ -96,7 +102,7 @@ class TestAssessDelegation:
 class TestCollectWithBadge:
     def test_passing_badge(self, collector):
         badge_data = {
-            "badge_level": "0",
+            "badge_level": "passing",
             "badge_percentage_0": 100,
             "id": 42,
         }

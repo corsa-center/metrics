@@ -153,16 +153,43 @@ class ActiveMaintenanceCollector:
         return []
 
     async def _get_contributors(self, owner: str, repo: str) -> List[Dict]:
-        """Get top contributors."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page=30"
+        """Get contributors, paginated.
+
+        Bounded to 5 pages (500 contributors) to cap worst-case API calls —
+        far more than the portfolio's projects have, but avoids unbounded
+        pagination for an unusually large repository.
+        """
+        contributors: List[Dict] = []
+        url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page=100"
+        max_pages = 5
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code == 200:
-                    return resp.json()
+                for _ in range(max_pages):
+                    resp = await client.get(url, headers=self.headers)
+                    if resp.status_code != 200:
+                        break
+                    page = resp.json()
+                    if not isinstance(page, list) or not page:
+                        break
+                    contributors.extend(page)
+                    next_url = self._get_next_link(resp.headers.get("Link"))
+                    if not next_url:
+                        break
+                    url = next_url
         except Exception as e:
             logger.debug(f"Error fetching contributors: {e}")
-        return []
+        return contributors
+
+    @staticmethod
+    def _get_next_link(link_header: Optional[str]) -> Optional[str]:
+        """Parse the `next` URL out of a GitHub Link pagination header."""
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            segment = part.strip()
+            if 'rel="next"' in segment:
+                return segment.split(";")[0].strip().strip("<>")
+        return None
 
     def _analyze_maintenance_indicators(self, repo_info: Dict) -> Dict:
         """Check for maintenance mode indicators."""

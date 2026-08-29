@@ -74,6 +74,13 @@ class OpenSSFScorecardCollector(GitHubCollectorBase):
             for c in checks
         }
 
+        # Scorecard uses -1 as a sentinel for "not applicable" (e.g. a check
+        # that doesn't apply to this project's tooling/permissions setup) —
+        # exclude those from both the passed count and the applicable total so
+        # "X/Y checks passed" isn't penalized for checks that were never real
+        # failures.
+        na = sum(1 for c in checks if c.get("score", 0) == -1)
+        applicable_total = len(checks) - na
         passed = sum(1 for c in checks if c.get("score", 0) >= 7)
 
         return {
@@ -84,8 +91,9 @@ class OpenSSFScorecardCollector(GitHubCollectorBase):
             "score": round(score, 1),
             "max_score": 10.0,
             "percentage": round(score * 10, 1),
-            "checks_total": len(checks),
+            "checks_total": applicable_total,
             "checks_passed": passed,
+            "checks_na": na,
             "checks": check_details,
             "scorecard_url": f"https://scorecard.dev/viewer/?uri=github.com/{owner}/{repo}",
         }
@@ -103,6 +111,7 @@ class OpenSSFScorecardCollector(GitHubCollectorBase):
             "percentage": None,
             "checks_total": 0,
             "checks_passed": 0,
+            "checks_na": 0,
             "checks": {},
             "scorecard_url": None,
             "recommendation": f"Run Scorecard via: https://scorecard.dev/viewer/?uri=github.com/{owner}/{repo}",
@@ -119,6 +128,7 @@ class OpenSSFScorecardCollector(GitHubCollectorBase):
             "percentage": None,
             "checks_total": 0,
             "checks_passed": 0,
+            "checks_na": 0,
             "checks": {},
             "scorecard_url": None,
         }

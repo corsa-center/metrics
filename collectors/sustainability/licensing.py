@@ -308,9 +308,15 @@ class LicensingCollector:
                 "description": license_meta["description"],
             }
 
-        # Try to detect from content if available
+        # Try to detect from content if available — but only when GitHub's own
+        # classifier didn't already look and actively fail to match a standard
+        # license ("other"/NOASSERTION). Trust that over keyword matching:
+        # a custom/derivative license can mention "BSD" or "3-Clause" in its
+        # text without actually being BSD-3-Clause (e.g. HDF5's license), and
+        # GitHub's classifier already ruled that out.
+        github_could_not_classify = license_key == "other" or spdx_id == "NOASSERTION"
         content = license_info.get("content", "")
-        if content:
+        if content and not github_could_not_classify:
             detected = self._detect_license_from_content(content)
             if detected:
                 return detected

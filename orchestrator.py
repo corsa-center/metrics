@@ -720,9 +720,11 @@ class MetricsOrchestrator:
                 mark = "✓" if passing else "✗"
                 link = f'<a href="{sc_url}">{sc_val}/10</a>' if sc_url else f'{sc_val}/10'
                 gov_lines.append(f'<p><strong>OpenSSF Scorecard:</strong> {link} ({checks}) {mark}</p>')
+                # Exclude Scorecard's -1 "not applicable" sentinel — those
+                # aren't real failures, just checks that don't apply here.
                 failing_checks = {
                     name: info for name, info in scorecard.get("checks", {}).items()
-                    if info.get("score", 0) < 7
+                    if 0 <= info.get("score", 0) < 7
                 }
                 for name, info in sorted(failing_checks.items(), key=lambda kv: kv[1].get("score", 0)):
                     doc_url = info.get("documentation_url", "")
@@ -1110,9 +1112,12 @@ class MetricsOrchestrator:
                 section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
 
             # 4. Knowledge Distribution Analysis — bus factor (reuses 4.2.3 data)
+            # Threshold matches active_maintenance.py's own "healthy bus factor"
+            # definition (>= 3), so a project isn't healthy in one section and
+            # at-risk in another for the same underlying number.
             bus_factor = contributor_activity.get("bus_factor", 0)
             top_pct = contributor_activity.get("top_contributor_pct", 0)
-            healthy = bus_factor >= 2
+            healthy = bus_factor >= 3
             maint436_pts += 1 if healthy else 0
             mark = "✓" if healthy else "✗"
             section_436_lines.append(

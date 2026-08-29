@@ -204,27 +204,18 @@ class CitationMetricCollector:
             return 0
 
     async def _get_dependent_packages(self, package: Dict[str, Any]) -> int:
-        """Get number of packages/repos that depend on this one"""
+        """Get number of packages/repos that depend on this one (forks as a proxy)"""
         repo_url = package.get("repo_url")
 
         if not repo_url:
             return 0
 
         try:
-            # Check if repo has CITATION.cff or similar
-            citation_file = await self.github.get_file_content(repo_url, "CITATION.cff")
-
-            if citation_file:
-                # Parse CITATION.cff to find dependent count
-                # For now, just use GitHub's "Used by" count
-                repo = await self.github.get_repository(repo_url)
-                # Note: PyGithub doesn't directly expose "used by" count
-                # We'd need to scrape the web UI or use GraphQL API
-                # For now, use forks as a proxy
-                stats = await self.github.get_repository_stats(repo_url)
-                return stats.get("forks", 0)
-
-            return 0
+            # GitHub doesn't expose a "used by" count via the REST/PyGithub API
+            # (would need to scrape the web UI or use GraphQL); use forks as a
+            # proxy instead. This is independent of whether CITATION.cff exists.
+            stats = await self.github.get_repository_stats(repo_url)
+            return stats.get("forks", 0)
 
         except Exception as e:
             self.logger.warning(f"Error fetching dependent packages: {e}")
