@@ -1094,6 +1094,39 @@ class MetricsOrchestrator:
         else:
             section_435_data = None
 
+        # --- 4.3.6 Maintainability and Understandability (PDF §4.3.6 — 5 sub-metrics) ---
+        # 1. Advanced Complexity Analysis   2. Code Quality Assessment
+        # 3. Documentation Quality Evaluation   4. Knowledge Distribution Analysis
+        # 5. Refactoring and Evolution Tracking
+        contributor_activity = maintenance.get("contributor_activity", {}) if maintenance else {}
+        section_436_lines = []
+        maint436_pts = 0
+        if contributor_activity:
+            for label in [
+                "Advanced Complexity Analysis",
+                "Code Quality Assessment",
+                "Documentation Quality Evaluation",
+            ]:
+                section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
+
+            # 4. Knowledge Distribution Analysis — bus factor (reuses 4.2.3 data)
+            bus_factor = contributor_activity.get("bus_factor", 0)
+            top_pct = contributor_activity.get("top_contributor_pct", 0)
+            healthy = bus_factor >= 2
+            maint436_pts += 1 if healthy else 0
+            mark = "✓" if healthy else "✗"
+            section_436_lines.append(
+                f'<p><strong>Knowledge Distribution Analysis:</strong> Bus factor {bus_factor} {mark}</p>'
+            )
+            section_436_lines.append(
+                f'<p class="sub-detail">Top contributor: {top_pct}% of commits '
+                f'({contributor_activity.get("total_contributors", 0)} total contributors)</p>'
+            )
+
+            section_436_lines.append('<p><strong>Refactoring and Evolution Tracking:</strong> Not yet collected</p>')
+            section_436_lines.append(f'<p><strong>Score:</strong> {maint436_pts}/5</p>')
+        section_436_data = "\n".join(section_436_lines) if section_436_lines else None
+
         # Apply per-package overrides to all collected sections
         ov = pkg_overrides
         section_411_data = self._apply_section_overrides(section_411_data, ov.get("4.1.1", {}))
@@ -1105,6 +1138,7 @@ class MetricsOrchestrator:
         section_432_data = self._apply_section_overrides(section_432_data, ov.get("4.3.2", {}))
         section_433_data = self._apply_section_overrides(section_433_data, ov.get("4.3.3", {}))
         section_435_data = self._apply_section_overrides(section_435_data, ov.get("4.3.5", {}))
+        section_436_data = self._apply_section_overrides(section_436_data, ov.get("4.3.6", {}))
 
         return {
             "package": repo_name,
@@ -1136,7 +1170,7 @@ class MetricsOrchestrator:
                 "4.3.3": {"title": "Reproducibility",                        "data": section_433_data},
                 "4.3.4": {"title": "Usability",                              "data": _stub("4.3.4")},
                 "4.3.5": {"title": "Accessibility",                          "data": section_435_data},
-                "4.3.6": {"title": "Maintainability and Understandability",  "data": _stub("4.3.6")},
+                "4.3.6": {"title": "Maintainability and Understandability",  "data": section_436_data},
                 "4.3.7": {"title": "Performance and Efficiency",             "data": _stub("4.3.7")},
             },
         }
