@@ -24,7 +24,7 @@ is a stub
 | 4.2.1 | CoC, Governance, and Contributor Guidelines | 3/5 |
 | 4.2.2 | Open-Source Licensing and FAIR Compliance | 2/5 |
 | 4.2.3 | Active Maintenance | 4/6 |
-| 4.2.4 | Engagement | 4/7 |
+| 4.2.4 | Engagement | 7/7 |
 | 4.2.5 | Outreach | 5/8 |
 | 4.2.6 | Welcomeness | 1/7 |
 | 4.2.7 | Collaboration | 2/5 |
@@ -124,9 +124,23 @@ literature plus facility web scraping; see the "Hard" tier in
 | Issue Resolution Analysis | ✅ | `/issues`, close rate |
 | Pull Request Flow Assessment | ✅ | `/pulls`, median cycle time |
 | Support Request Closure Analysis | ✅ | `/issues` |
-| Engagement Quality Metrics | 🔲 | — |
-| Communication Pattern Analysis | 🔲 | — |
-| Community Participation Assessment | 🔲 | — |
+| Engagement Quality Metrics | ✅ | median comments per issue; passes at ≥2 |
+| Communication Pattern Analysis | ✅ | share of issues answered within a week; passes at ≥70% |
+| Community Participation Assessment | ✅ | share of issues and PRs opened outside the maintainer group (`author_association`); passes at ≥15% |
+
+**The issue sample was silently 4 items.** GitHub's `/issues` endpoint returns
+pull requests too and offers no way to exclude them, so one page of 30 yielded
+26 PRs and 4 real issues on HDF5 — every median in this section was computed
+from those four. Pages of 100 are now pulled until 30 issues are in hand.
+Fixing it moved HDF5's median first response from 301 hours to 26, its median
+close time from 1463 to 928, and its backlog ratio from 3.00 to 2.00.
+
+**Consistency is measured absolutely, not as a p90/median ratio.** The ratio is
+scale-sensitive: a project that usually replies within minutes scores
+thousands-to-one the moment one issue waits a fortnight, which says more about
+the arithmetic than the project. ADIOS2 measured 3846×. The share answered
+within a week separates the portfolio meaningfully instead — HDF5 43%,
+ADIOS2 53%, zfp 93%.
 
 ### 4.2.5 Outreach
 **Collector:** [`outreach.py`](collectors/sustainability/outreach.py)

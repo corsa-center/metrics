@@ -72,7 +72,7 @@ static analysis tool runs, or non-trivial content parsing.
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
 | [#6](https://github.com/corsa-center/metrics/issues/6) | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` | ✅ Done (partial — CITATION.cff/DOI; advanced deps TBD) |
-| [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/sustainability/engagement.py` | ✅ Done |
+| [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/sustainability/engagement.py` | ✅ Done (7/7) |
 | [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | `collectors/sustainability/outreach.py` | ✅ Done (partial — 5/8; event & training data not in the repo) |
 | [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | `collectors/quality/test_coverage.py` | ✅ Done (partial — Test Coverage Excellence via Codecov; static analysis/CERT/trend TBD) |
 | [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done (5/5) |

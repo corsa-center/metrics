@@ -26,6 +26,9 @@ from collectors.sustainability.base import GitHubCollectorBase
 logger = logging.getLogger(__name__)
 
 _SAMPLE = 30
+# Pages of 100 to pull while filtering out pull requests. Four is enough to
+# reach 30 issues even when ~87% of recent activity is PRs, as on HDF5.
+_MAX_ISSUE_PAGES = 4
 _MAINTAINER_ROLES = {"COLLABORATOR", "MEMBER", "OWNER"}
 _API = "https://api.github.com/repos/{owner}/{repo}"
 
@@ -47,6 +50,25 @@ def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
     if a and b:
         return abs((b - a).total_seconds()) / 3600
     return None
+
+
+# Interaction depth: an issue that draws a couple of replies has been engaged
+# with, not just filed and closed.
+_MIN_MEDIAN_COMMENTS = 2
+
+# Response consistency, measured as the share of issues answered inside a week
+# rather than as a p90/median ratio. The ratio is scale-sensitive: a project
+# that usually replies within minutes scores thousands-to-one the moment a
+# single issue waits a fortnight, which says more about the arithmetic than
+# about the project. The absolute question — does everyone get an answer, or
+# only some people — is what the report is actually asking.
+_RESPONSE_WINDOW_HOURS = 168
+_MIN_TIMELY_RESPONSE_SHARE = 0.70
+
+# Share of issues and PRs opened by people outside the maintainer group.
+# GitHub's author_association marks OWNER / MEMBER / COLLABORATOR as inside.
+_INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+_MIN_OUTSIDE_SHARE = 0.15
 
 
 class EngagementCollector(GitHubCollectorBase):
@@ -100,15 +122,34 @@ class EngagementCollector(GitHubCollectorBase):
     async def _fetch_issues(
         self, client: httpx.AsyncClient, base: str
     ) -> List[Dict]:
+        """Fetch a real sample of issues, paging past pull requests.
+
+        The issues endpoint returns PRs as well and offers no way to exclude
+        them, so a single page of _SAMPLE items yields almost no issues on a
+        PR-heavy repository — HDF5's most recent 30 entries are 26 PRs and 4
+        issues, which is far too small a sample for a median to mean anything.
+        Pages of 100 are pulled until _SAMPLE issues are in hand.
+        """
+        issues: List[Dict] = []
         try:
-            resp = await client.get(
-                f"{base}/issues",
-                headers=self.github_headers,
-                params={"state": "all", "per_page": _SAMPLE, "sort": "updated", "direction": "desc"},
-            )
-            resp.raise_for_status()
-            # Exclude pull requests (GitHub issues API returns both)
-            return [i for i in resp.json() if "pull_request" not in i]
+            for page in range(1, _MAX_ISSUE_PAGES + 1):
+                resp = await client.get(
+                    f"{base}/issues",
+                    headers=self.github_headers,
+                    params={
+                        "state": "all", "per_page": 100, "page": page,
+                        "sort": "updated", "direction": "desc",
+                    },
+                )
+                resp.raise_for_status()
+                batch = resp.json()
+                if not batch:
+                    break
+                # Exclude pull requests (GitHub issues API returns both)
+                issues.extend(i for i in batch if "pull_request" not in i)
+                if len(issues) >= _SAMPLE:
+                    break
+            return issues[:_SAMPLE]
         except Exception as e:
             logger.warning(f"Issues fetch failed: {e}")
             return []
@@ -186,11 +227,32 @@ class EngagementCollector(GitHubCollectorBase):
 
         valid_responses = [t for t in response_times if t is not None]
 
+        # Interaction depth and how evenly responses are distributed.
+        comment_counts = [i.get("comments", 0) for i in issues]
+        median_comments = (
+            round(statistics.median(comment_counts), 1) if comment_counts else None
+        )
+        # Share of the whole sample answered inside the window. Issues with no
+        # response at all count against it — they are the clearest case of
+        # inconsistent engagement.
+        timely_share = None
+        if issues:
+            timely = sum(1 for t in valid_responses if t <= _RESPONSE_WINDOW_HOURS)
+            timely_share = round(timely / len(issues), 3)
+
+        outside = sum(
+            1 for i in issues
+            if i.get("author_association") not in _INSIDE_ASSOCIATIONS
+        )
+
         return {
             "sample_size": len(issues),
             "median_first_response_hours": round(statistics.median(valid_responses), 1) if valid_responses else None,
             "median_close_time_hours": round(statistics.median(close_times), 1) if close_times else None,
             "pct_with_response": round(len(valid_responses) / len(issues) * 100, 1) if issues else 0.0,
+            "median_comments": median_comments,
+            "timely_response_share": timely_share,
+            "outside_authors": outside,
         }
 
     def _compute_pr_stats(self, prs: List[Dict]) -> Dict[str, Any]:
@@ -207,11 +269,17 @@ class EngagementCollector(GitHubCollectorBase):
             else:
                 closed_no_merge += 1
 
+        outside = sum(
+            1 for pr in prs
+            if pr.get("author_association") not in _INSIDE_ASSOCIATIONS
+        )
+
         total = merged + closed_no_merge
         return {
             "sample_size": total,
             "merged": merged,
             "closed_without_merge": closed_no_merge,
+            "outside_authors": outside,
             "merge_rate_pct": round(merged / total * 100, 1) if total else None,
             "median_cycle_time_hours": round(statistics.median(cycle_times), 1) if cycle_times else None,
         }
@@ -292,19 +360,48 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["support_closure"]["pts"]
 
-        # 5–7. Not yet implemented collectors
-        for key, label in [
-            ("engagement_quality",       "Engagement Quality Metrics"),
-            ("communication_patterns",   "Communication Pattern Analysis"),
-            ("community_participation",  "Community Participation Assessment"),
-        ]:
-            sub[key] = {
-                "label": label,
-                "value": None,
-                "passing": False,
-                "pts": 0,
-                "not_collected": True,
-            }
+        # 5. Engagement Quality Metrics — depth of discussion per issue
+        mc = issue_stats.get("median_comments")
+        passing = mc is not None and mc >= _MIN_MEDIAN_COMMENTS
+        sub["engagement_quality"] = {
+            "label": "Engagement Quality Metrics",
+            "value": f"{mc:g} comments per issue (median)" if mc is not None else None,
+            "passing": passing,
+            "pts": 1 if passing else 0,
+        }
+        pts += sub["engagement_quality"]["pts"]
+
+        # 6. Communication Pattern Analysis — whether everyone gets an answer,
+        # not just the typical reporter.
+        timely = issue_stats.get("timely_response_share")
+        passing = timely is not None and timely >= _MIN_TIMELY_RESPONSE_SHARE
+        sub["communication_patterns"] = {
+            "label": "Communication Pattern Analysis",
+            "value": f"{timely * 100:.0f}% of issues answered within a week"
+                     if timely is not None else "No issues to assess",
+            "passing": passing,
+            "pts": 1 if passing else 0,
+        }
+        pts += sub["communication_patterns"]["pts"]
+
+        # 7. Community Participation Assessment — work arriving from outside the
+        # maintainer group, across both issues and pull requests.
+        issue_n = issue_stats.get("sample_size", 0)
+        pr_n = pr_stats.get("sample_size", 0)
+        total_n = issue_n + pr_n
+        outside_n = (
+            issue_stats.get("outside_authors", 0) + pr_stats.get("outside_authors", 0)
+        )
+        share = outside_n / total_n if total_n else None
+        passing = share is not None and share >= _MIN_OUTSIDE_SHARE
+        sub["community_participation"] = {
+            "label": "Community Participation Assessment",
+            "value": f"{share * 100:.0f}% of {total_n} issues and PRs opened from "
+                     f"outside the maintainer group" if share is not None else None,
+            "passing": passing,
+            "pts": 1 if passing else 0,
+        }
+        pts += sub["community_participation"]["pts"]
 
         return {
             "score": pts,

@@ -155,11 +155,97 @@ class TestScore:
         assert result["score"] == 1
         assert result["sub_scores"]["support_closure"]["passing"] is True
 
-    def test_uncollected_sub_metrics_flagged(self, collector):
+    def test_all_seven_sub_metrics_are_collected(self, collector):
+        # These three were previously flagged not_collected.
         result = self._score(collector)
-        for key in ["engagement_quality", "communication_patterns", "community_participation"]:
-            assert result["sub_scores"][key]["not_collected"] is True
-            assert result["sub_scores"][key]["pts"] == 0
+        for key in ["engagement_quality", "communication_patterns",
+                    "community_participation"]:
+            assert not result["sub_scores"][key].get("not_collected")
+
+
+class TestNewSubMetrics:
+    """Engagement quality, communication patterns, community participation."""
+
+    def _score(self, collector, **issue):
+        base = {"median_first_response_hours": None, "median_close_time_hours": None,
+                "sample_size": 30, "median_comments": None,
+                "timely_response_share": None, "outside_authors": 0}
+        base.update(issue)
+        pr = {"merge_rate_pct": None, "sample_size": 30,
+              "outside_authors": issue.pop("pr_outside", 0)}
+        return collector._score(base, pr, {"sample_open_to_closed_ratio": None})
+
+    def test_comment_depth_threshold(self, collector):
+        assert self._score(collector, median_comments=2)["sub_scores"][
+            "engagement_quality"]["passing"]
+        assert not self._score(collector, median_comments=1)["sub_scores"][
+            "engagement_quality"]["passing"]
+
+    def test_timely_response_threshold(self, collector):
+        assert self._score(collector, timely_response_share=0.70)["sub_scores"][
+            "communication_patterns"]["passing"]
+        assert not self._score(collector, timely_response_share=0.69)["sub_scores"][
+            "communication_patterns"]["passing"]
+
+    def test_timely_response_wording(self, collector):
+        info = self._score(collector, timely_response_share=0.43)["sub_scores"][
+            "communication_patterns"]
+        assert info["value"] == "43% of issues answered within a week"
+
+    def test_no_issues_to_assess(self, collector):
+        info = self._score(collector)["sub_scores"]["communication_patterns"]
+        assert not info["passing"]
+        assert info["value"] == "No issues to assess"
+
+    def test_participation_combines_issues_and_prs(self, collector):
+        # 10 of 60 = 17%, over the 15% bar.
+        result = self._score(collector, outside_authors=10)
+        info = result["sub_scores"]["community_participation"]
+        assert info["passing"]
+        assert "60 issues and PRs" in info["value"]
+
+    def test_participation_threshold(self, collector):
+        assert not self._score(collector, outside_authors=8)["sub_scores"][
+            "community_participation"]["passing"]   # 13%
+        assert self._score(collector, outside_authors=9)["sub_scores"][
+            "community_participation"]["passing"]   # 15%
+
+
+class TestIssueStats:
+    """Regression cover for the sampling and consistency computations."""
+
+    def _issues(self, n, comments=0, assoc="MEMBER"):
+        return [{"comments": comments, "author_association": assoc,
+                 "created_at": None, "closed_at": None} for _ in range(n)]
+
+    def test_maintainer_associations_are_not_outside(self, collector):
+        for assoc in ["OWNER", "MEMBER", "COLLABORATOR"]:
+            stats = collector._compute_issue_stats(self._issues(3, assoc=assoc), [None] * 3)
+            assert stats["outside_authors"] == 0
+
+    def test_outside_associations_counted(self, collector):
+        for assoc in ["CONTRIBUTOR", "NONE", None]:
+            stats = collector._compute_issue_stats(self._issues(3, assoc=assoc), [None] * 3)
+            assert stats["outside_authors"] == 3
+
+    def test_unanswered_issues_count_against_timeliness(self, collector):
+        # Two answered quickly, two never answered -> 50%, not 100%.
+        stats = collector._compute_issue_stats(self._issues(4), [1.0, 2.0, None, None])
+        assert stats["timely_response_share"] == 0.5
+
+    def test_slow_responses_are_not_timely(self, collector):
+        stats = collector._compute_issue_stats(self._issues(2), [1.0, 500.0])
+        assert stats["timely_response_share"] == 0.5
+
+    def test_median_comments(self, collector):
+        issues = [{"comments": c, "author_association": "NONE",
+                   "created_at": None, "closed_at": None} for c in [0, 4, 6]]
+        assert collector._compute_issue_stats(issues, [None] * 3)["median_comments"] == 4
+
+    def test_empty_sample(self, collector):
+        stats = collector._compute_issue_stats([], [])
+        assert stats["timely_response_share"] is None
+        assert stats["median_comments"] is None
 
 
 # ------------------------------------------------------------------ #
