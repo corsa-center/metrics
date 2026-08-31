@@ -27,14 +27,14 @@ is a stub
 | 4.2.4 | Engagement | 4/7 |
 | 4.2.5 | Outreach | 5/8 |
 | 4.2.6 | Welcomeness | 1/7 |
-| 4.2.7 | Collaboration | ⬜ 0/5 |
+| 4.2.7 | Collaboration | 2/5 |
 | 4.2.8 | Financial Sustainability | 4/5 |
 | 4.2.9 | Institutional & Organizational Support | 1/5 |
 | 4.2.10 | Project Longevity and Community Health | 5/5 |
 | 4.3.1 | Reliability and Robustness | 2/5 |
 | 4.3.2 | Development Practices | 5/5 |
 | 4.3.3 | Reproducibility | 5/5 |
-| 4.3.4 | Usability | ⬜ 0/5 |
+| 4.3.4 | Usability | 2/5 |
 | 4.3.5 | Accessibility | 3/5 |
 | 4.3.6 | Maintainability and Understandability | 1/5 |
 | 4.3.7 | Performance and Efficiency | ⬜ 0/10 |
@@ -161,11 +161,32 @@ literature plus facility web scraping; see the "Hard" tier in
 | Decision-Making Visibility | ✅ | `has_discussions` / `has_wiki` / `has_pages` plus roadmap, meeting notes, decision records, governance doc; passes at ≥2 signals |
 
 ### 4.2.7 Collaboration
-**Collector:** none — ⬜ stub
+**Collector:** [`collaboration.py`](collectors/sustainability/collaboration.py)
 
-Advanced Dependency Analysis · Cross-project Reference Detection ·
-Interoperability Assessment · Collaboration Network Analysis · Standards
-Compliance Tracking.
+| Sub-metric | Status | Source |
+|---|---|---|
+| Advanced Dependency Analysis | ✅ | distinct package ecosystems carrying the software; passes at ≥2 |
+| Cross-project Reference Detection | 🔲 | the report specifies AI analysis of issues and PRs |
+| Interoperability Assessment | 🔲 | needs domain-specific standards knowledge |
+| Collaboration Network Analysis | ✅ | downstream dependents; passes at ≥10 dependent packages **or** ≥50 dependent repositories |
+| Standards Compliance Tracking | 🔲 | needs domain-specific standards knowledge |
+
+Data comes from the free, unauthenticated **ecosyste.ms** APIs, looked up by
+**repository URL** rather than by guessing a package name — HDF5's PyPI
+presence is `h5py`, a different project entirely.
+
+Spack is additionally looked up by name, because Spack recipes usually record
+the project's own homepage as their repository URL rather than the GitHub repo.
+HDF5's Spack entry points at `support.hdfgroup.org`, so the repository-URL
+lookup alone misses the single most relevant package manager for this portfolio
+— and with it HDF5's 161 Spack dependents.
+
+Duplicate entries for one package are collapsed keeping the highest count:
+conda-forge and anaconda.org both index `hdf5`, and summing would double-count.
+
+Either downstream signal passes on its own. A library can be depended on by many
+packages (HDF5: 176 conda packages) or by many repositories (zfp: 111 repos from
+only 9 packages); both are real evidence of ecosystem integration.
 
 ### 4.2.8 Financial Sustainability
 **Collector:** [`funding.py`](collectors/sustainability/funding.py)
@@ -268,11 +289,26 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | Reproducibility Documentation | ✅ | install/build guide, release notes, environment spec (`environment.yml`, `spack.yaml`, devcontainer) |
 
 ### 4.3.4 Usability
-**Collector:** none — ⬜ stub
+**Collectors:** [`usability.py`](collectors/quality/usability.py),
+[`collaboration.py`](collectors/sustainability/collaboration.py)
 
-User Experience Assessment · Documentation Completeness Analysis ·
-Accessibility Feature Detection · Installation Success Tracking · Usage
-Analytics Integration.
+| Sub-metric | Status | Source |
+|---|---|---|
+| User Experience Assessment | 🔲 | the report specifies the UEQ instrument, which needs a survey |
+| Documentation Completeness Analysis | ✅ | README headings (installation / usage / examples / support), `docs/` tree, published documentation site |
+| Accessibility Feature Detection | 🔲 | — |
+| Installation Success Tracking | ✅ | distinct package managers with an install command, from 4.2.7's registry data |
+| Usage Analytics Integration | 🔲 | — |
+
+README sections are matched against **heading text only**, so "you can install
+it somehow" in a paragraph doesn't count as an installation section.
+
+A thin README still passes when it is backed by both a `docs/` tree and a
+published site — HDF5's README covers 2 of 4 sections but its real
+documentation lives elsewhere.
+
+Installation Success reuses the 4.2.7 registry lookup rather than querying
+ecosyste.ms a second time for the same answer.
 
 ### 4.3.5 Accessibility
 **Collectors:** [`accessibility.py`](collectors/quality/accessibility.py),
@@ -356,6 +392,7 @@ sustainability_collectors:
   engagement: true          # 4.2.4
   outreach: true            # 4.2.5
   welcomeness: true         # 4.2.6
+  collaboration: true       # 4.2.7 + 4.3.4 install paths
   funding: true             # 4.2.8 + 4.2.9
 
 quality_collectors:
@@ -364,6 +401,7 @@ quality_collectors:
   ci_cd: true               # 4.3.2
   dev_tooling: true         # 4.3.2
   reproducibility: true     # 4.3.3
+  usability: true           # 4.3.4
   accessibility: true       # 4.3.5
   deployment_environments: true  # 4.3.5
 ```

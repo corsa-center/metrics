@@ -76,7 +76,7 @@ static analysis tool runs, or non-trivial content parsing.
 | [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | `collectors/sustainability/outreach.py` | ✅ Done (partial — 5/8; event & training data not in the repo) |
 | [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | `collectors/quality/test_coverage.py` | ✅ Done (partial — Test Coverage Excellence via Codecov; static analysis/CERT/trend TBD) |
 | [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done (5/5) |
-| [#20](https://github.com/corsa-center/metrics/issues/20) | 4.3.4 Usability | — | 🔲 Todo |
+| [#20](https://github.com/corsa-center/metrics/issues/20) | 4.3.4 Usability | `collectors/quality/usability.py` | ✅ Done (partial — 2/5; UEQ needs a survey) |
 | [#22](https://github.com/corsa-center/metrics/issues/22) | 4.3.6 Maintainability & Understandability | `orchestrator.py` (bus factor from `active_maintenance.py`) | ✅ Done (partial — Knowledge Distribution only; complexity/quality/docs TBD) |
 
 ---
@@ -89,7 +89,7 @@ ML models, specialized runtime instrumentation, or qualitative judgment.
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
 | [#7](https://github.com/corsa-center/metrics/issues/7) | 4.1.2 Field Research Impact | — | 🔲 Todo |
-| [#13](https://github.com/corsa-center/metrics/issues/13) | 4.2.7 Collaboration | — | 🔲 Todo |
+| [#13](https://github.com/corsa-center/metrics/issues/13) | 4.2.7 Collaboration | `collectors/sustainability/collaboration.py` | ✅ Done (partial — 2/5 via ecosyste.ms) |
 | [#14](https://github.com/corsa-center/metrics/issues/14) | 4.2.8 Financial Sustainability | `collectors/sustainability/funding.py` | ✅ Done (partial — 4/5; NIH R50 via RePORTER still TBD) |
 | [#15](https://github.com/corsa-center/metrics/issues/15) | 4.2.9 Institutional & Organizational Support | `collectors/sustainability/funding.py` | ✅ Done (partial — 1/5; RSE/policy detection needs directory data) |
 | [#23](https://github.com/corsa-center/metrics/issues/23) | 4.3.7 Performance & Efficiency | — | 🔲 Todo |
@@ -98,8 +98,9 @@ ML models, specialized runtime instrumentation, or qualitative judgment.
 
 - **4.1.2 Field Research Impact**: LLM-powered analysis of scientific literature
   + HPC facility web scraping + DOI cross-referencing.
-- **4.2.7 Collaboration**: Multi-platform dependency mapping and cross-project
-  PR/issue network analysis.
+- **4.2.7 Collaboration**: dependency mapping shipped via ecosyste.ms. What
+  stays hard is cross-project PR/issue network analysis, which the report itself
+  specifies as AI-powered.
 - **4.2.8 / 4.2.9**: the automatable parts (funding manifests, README award
   numbers, contributor affiliations) shipped in `funding.py`. What stays hard is
   funding *amounts*, which are often confidential, and RSE position detection,

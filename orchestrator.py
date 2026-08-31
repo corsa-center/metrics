@@ -368,6 +368,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Welcomeness collection failed for {package['name']}: {e}")
 
+        # 4.2.7 Collaboration — ecosystem reach via ecosyste.ms
+        if self._sub_enabled("sustainability", "collaboration"):
+            try:
+                from collectors.sustainability.collaboration import CollaborationCollector
+                collector = CollaborationCollector(github_token=github_token)
+                sub_results["collaboration"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Collaboration collection failed for {package['name']}: {e}")
+
         # 4.2.8 + 4.2.9 Funding and institutional affiliation
         if self._sub_enabled("sustainability", "funding"):
             try:
@@ -412,6 +421,8 @@ class MetricsOrchestrator:
             scores.append(sub_results["funding"].get("overall_score", {}).get("percentage", 0))
         if "welcomeness" in sub_results:
             scores.append(sub_results["welcomeness"].get("overall_score", {}).get("percentage", 0))
+        if "collaboration" in sub_results:
+            scores.append(sub_results["collaboration"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -472,6 +483,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
 
+        # 4.3.4 Usability — documentation completeness
+        if self._sub_enabled("quality", "usability"):
+            try:
+                from collectors.quality.usability import UsabilityCollector
+                collector = UsabilityCollector(github_token=github_token)
+                sub_results["usability"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Usability collection failed for {package['name']}: {e}")
+
         # 4.3.5 Deployment Environment Testing — CI runner OS families
         if self._sub_enabled("quality", "deployment_environments"):
             try:
@@ -516,6 +536,8 @@ class MetricsOrchestrator:
             scores.append(
                 sub_results["deployment_environments"].get("overall_score", {}).get("percentage", 0)
             )
+        if "usability" in sub_results:
+            scores.append(sub_results["usability"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -1188,6 +1210,26 @@ class MetricsOrchestrator:
         else:
             section_426_data = None
 
+        # --- 4.2.7 Collaboration (PDF §4.2.7 — 5 sub-metrics) ---
+        collaboration = sust.get("collaboration", {})
+        if collaboration:
+            csub = collaboration.get("overall_score", {}).get("sub_scores", {})
+            collab_lines = [
+                _sub_row(csub, key) for key in [
+                    "advanced_dependency_analysis",
+                    "cross_project_reference",
+                    "interoperability",
+                    "collaboration_network",
+                    "standards_compliance",
+                ]
+            ]
+            collab_lines.append(
+                f'<p><strong>Score:</strong> {collaboration.get("overall_score", {}).get("score", 0)}/5</p>'
+            )
+            section_427_data = "\n".join(collab_lines)
+        else:
+            section_427_data = None
+
         # --- 4.2.8 Financial Sustainability / 4.2.9 Institutional Support ---
         # One collector serves both: they rest on the same funding documentation
         # and contributor-affiliation pass.
@@ -1400,6 +1442,36 @@ class MetricsOrchestrator:
             section_432_lines.append(f'<p><strong>Score:</strong> {dp_pts}/5</p>')
         section_432_data = "\n".join(section_432_lines) if section_432_lines else None
 
+        # --- 4.3.4 Usability (PDF §4.3.4 — 5 sub-metrics) ---
+        # Installation Success Tracking comes from the 4.2.7 collector, which
+        # already queried the package registries; repeating that lookup here
+        # would double the ecosyste.ms traffic for the same answer.
+        usability = qual.get("usability", {})
+        if usability:
+            usub = usability.get("overall_score", {}).get("sub_scores", {})
+            install_info = (collaboration.get("overall_score", {})
+                            .get("sub_scores", {}).get("installation_success", {}))
+            use_pts = 0
+            use_lines = []
+            for key in ["user_experience", "documentation_completeness",
+                        "accessibility_features"]:
+                use_lines.append(_sub_row(usub, key))
+                if usub.get(key, {}).get("passing"):
+                    use_pts += 1
+            if install_info:
+                use_lines.append(_sub_row(
+                    {"installation_success": install_info}, "installation_success"))
+                if install_info.get("passing"):
+                    use_pts += 1
+            else:
+                use_lines.append(
+                    '<p><strong>Installation Success Tracking:</strong> Not yet collected</p>')
+            use_lines.append(_sub_row(usub, "usage_analytics"))
+            use_lines.append(f'<p><strong>Score:</strong> {use_pts}/5</p>')
+            section_434_data = "\n".join(use_lines)
+        else:
+            section_434_data = None
+
         # --- 4.3.5 Accessibility (PDF §4.3.5 — 5 sub-metrics) ---
         # 1. Portable Build System   2. Container Availability   3. Architecture Compatibility
         # 4. Platform Documentation  5. Deployment Environment Testing
@@ -1491,12 +1563,14 @@ class MetricsOrchestrator:
         section_424_data = self._apply_section_overrides(section_424_data, ov.get("4.2.4", {}))
         section_425_data = self._apply_section_overrides(section_425_data, ov.get("4.2.5", {}))
         section_426_data = self._apply_section_overrides(section_426_data, ov.get("4.2.6", {}))
+        section_427_data = self._apply_section_overrides(section_427_data, ov.get("4.2.7", {}))
         section_428_data = self._apply_section_overrides(section_428_data, ov.get("4.2.8", {}))
         section_429_data = self._apply_section_overrides(section_429_data, ov.get("4.2.9", {}))
         section_4210_data = self._apply_section_overrides(section_4210_data, ov.get("4.2.10", {}))
         section_431_data = self._apply_section_overrides(section_431_data, ov.get("4.3.1", {}))
         section_432_data = self._apply_section_overrides(section_432_data, ov.get("4.3.2", {}))
         section_433_data = self._apply_section_overrides(section_433_data, ov.get("4.3.3", {}))
+        section_434_data = self._apply_section_overrides(section_434_data, ov.get("4.3.4", {}))
         section_435_data = self._apply_section_overrides(section_435_data, ov.get("4.3.5", {}))
         section_436_data = self._apply_section_overrides(section_436_data, ov.get("4.3.6", {}))
 
@@ -1519,7 +1593,7 @@ class MetricsOrchestrator:
                 "4.2.4": {"title": "Engagement", "data": section_424_data},
                 "4.2.5": {"title": "Outreach",              "data": section_425_data or _stub("4.2.5")},
                 "4.2.6": {"title": "Welcomeness",            "data": section_426_data or _stub("4.2.6")},
-                "4.2.7": {"title": "Collaboration",          "data": _stub("4.2.7")},
+                "4.2.7": {"title": "Collaboration",          "data": section_427_data or _stub("4.2.7")},
                 "4.2.8": {"title": "Financial Sustainability","data": section_428_data or _stub("4.2.8")},
                 "4.2.9": {"title": "Institutional & Organizational Support", "data": section_429_data or _stub("4.2.9")},
                 "4.2.10": {
@@ -1531,7 +1605,7 @@ class MetricsOrchestrator:
                 "4.3.1": {"title": "Reliability and Robustness",             "data": section_431_data},
                 "4.3.2": {"title": "Development Practices",                  "data": section_432_data},
                 "4.3.3": {"title": "Reproducibility",                        "data": section_433_data},
-                "4.3.4": {"title": "Usability",                              "data": _stub("4.3.4")},
+                "4.3.4": {"title": "Usability",                              "data": section_434_data or _stub("4.3.4")},
                 "4.3.5": {"title": "Accessibility",                          "data": section_435_data},
                 "4.3.6": {"title": "Maintainability and Understandability",  "data": section_436_data},
                 "4.3.7": {"title": "Performance and Efficiency",             "data": _stub("4.3.7")},
