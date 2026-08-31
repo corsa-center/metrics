@@ -25,8 +25,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Search allows 30/min; leaving headroom absorbs clock skew and retries.
-_SEARCH_PER_MINUTE = 20
+# Search allows 30/min. 20 was too conservative once it became a process-wide
+# serialization point: at ~12 searches per package a 67-package run spent about
+# 40 minutes purely waiting on this limiter, and the job neared its 120-minute
+# timeout. Collectors now issue ~4 searches per package, so 25 leaves headroom
+# for clock skew and retries without the queue dominating the run.
+_SEARCH_PER_MINUTE = 25
 
 
 class _MinuteLimiter:

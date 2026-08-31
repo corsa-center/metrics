@@ -171,24 +171,26 @@ class OutreachCollector(GitHubCollectorBase):
         Uses the search API rather than paginating /issues, so each label costs
         two requests and returns an exact total instead of a page count.
         """
-        by_label: Dict[str, Dict[str, int]] = {}
-        for label in _NEWCOMER_LABELS:
-            counts = {}
-            for state in ("open", "closed"):
-                q = f'repo:{owner}/{repo} is:issue state:{state} label:"{label}"'
-                url = f"https://api.github.com/search/issues?q={quote(q)}&per_page=1"
-                resp = await search_get(client, url, self.github_headers)
-                counts[state] = resp.json().get("total_count", 0) if resp else 0
-            if counts.get("open") or counts.get("closed"):
-                by_label[label] = counts
+        # All labels in one query per state. Comma-separated values in a
+        # label: qualifier are ORed, so this is two searches rather than one
+        # per label per state — eight became two. Labels containing a space
+        # must be quoted or the parser splits them and drops the remainder.
+        labels = ",".join(
+            f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS
+        )
 
-        total_open = sum(c["open"] for c in by_label.values())
-        total_closed = sum(c["closed"] for c in by_label.values())
+        counts: Dict[str, int] = {}
+        for state in ("open", "closed"):
+            q = f'repo:{owner}/{repo} is:issue state:{state} label:{labels}'
+            url = f"https://api.github.com/search/issues?q={quote(q)}&per_page=1"
+            resp = await search_get(client, url, self.github_headers)
+            counts[state] = resp.json().get("total_count", 0) if resp else 0
+
         return {
-            "by_label": by_label,
-            "open": total_open,
-            "closed": total_closed,
-            "total": total_open + total_closed,
+            "labels_queried": _NEWCOMER_LABELS,
+            "open": counts["open"],
+            "closed": counts["closed"],
+            "total": counts["open"] + counts["closed"],
         }
 
     async def _check_onboarding(

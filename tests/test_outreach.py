@@ -84,12 +84,28 @@ class TestScoring:
         assert not s["sub_scores"]["good_first_issue"]["passing"]
         s = self._score(collector, issues={"total": 5, "open": 2, "closed": 3})
         assert s["sub_scores"]["good_first_issue"]["passing"]
-
     def test_onboarding_threshold(self, collector):
         assert not self._score(collector, onboarding={"found": ["a", "b"]})[
             "sub_scores"]["onboarding_infrastructure"]["passing"]
         assert self._score(collector, onboarding={"found": ["a", "b", "c"]})[
             "sub_scores"]["onboarding_infrastructure"]["passing"]
+
+
+
+class TestNewcomerLabelQuery:
+    def test_all_labels_go_in_one_query(self):
+        # Eight searches (four labels x two states) became two. Comma-separated
+        # values in a label: qualifier are ORed, and the OR form deduplicates
+        # issues carrying more than one of the labels.
+        from collectors.sustainability.outreach import _NEWCOMER_LABELS
+        labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
+        assert labels == '"good first issue","help wanted",good-first-issue,newcomer'
+
+    def test_spaced_labels_are_quoted(self):
+        from collectors.sustainability.outreach import _NEWCOMER_LABELS
+        labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
+        assert '"good first issue"' in labels
+        assert "good-first-issue" in labels and '"good-first-issue"' not in labels
 
 
 class TestPagination:
