@@ -359,6 +359,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Outreach collection failed for {package['name']}: {e}")
 
+        # 4.2.6 Welcomeness — decision-making visibility
+        if self._sub_enabled("sustainability", "welcomeness"):
+            try:
+                from collectors.sustainability.welcomeness import WelcomenessCollector
+                collector = WelcomenessCollector(github_token=github_token)
+                sub_results["welcomeness"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Welcomeness collection failed for {package['name']}: {e}")
+
         # 4.2.8 + 4.2.9 Funding and institutional affiliation
         if self._sub_enabled("sustainability", "funding"):
             try:
@@ -401,6 +410,8 @@ class MetricsOrchestrator:
             scores.append(sub_results["outreach"].get("overall_score", {}).get("percentage", 0))
         if "funding" in sub_results:
             scores.append(sub_results["funding"].get("overall_score", {}).get("percentage", 0))
+        if "welcomeness" in sub_results:
+            scores.append(sub_results["welcomeness"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -461,6 +472,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
 
+        # 4.3.5 Deployment Environment Testing — CI runner OS families
+        if self._sub_enabled("quality", "deployment_environments"):
+            try:
+                from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
+                collector = DeploymentEnvironmentCollector(github_token=github_token)
+                sub_results["deployment_environments"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Deployment environment collection failed for {package['name']}: {e}")
+
         # 4.3.2 Testing frameworks, code review coverage, tooling integration
         if self._sub_enabled("quality", "dev_tooling"):
             try:
@@ -492,6 +512,10 @@ class MetricsOrchestrator:
             scores.append(100 if sub_results["static_analysis"].get("has_codeql") else 0)
         if "dev_tooling" in sub_results:
             scores.append(sub_results["dev_tooling"].get("overall_score", {}).get("percentage", 0))
+        if "deployment_environments" in sub_results:
+            scores.append(
+                sub_results["deployment_environments"].get("overall_score", {}).get("percentage", 0)
+            )
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -1140,6 +1164,30 @@ class MetricsOrchestrator:
         else:
             section_425_data = None
 
+        # --- 4.2.6 Welcomeness (PDF §4.2.6 — 7 sub-metrics) ---
+        # Only Decision-Making Visibility is answerable from repository data;
+        # the other six need sentiment/tone analysis or maintainer demographics.
+        welcomeness = sust.get("welcomeness", {})
+        if welcomeness:
+            wsub = welcomeness.get("overall_score", {}).get("sub_scores", {})
+            wel_lines = [
+                _sub_row(wsub, key) for key in [
+                    "chaoss_community_experience",
+                    "response_quality_tone",
+                    "communication_sentiment",
+                    "contributor_journey",
+                    "language_communication",
+                    "leadership_representation",
+                    "decision_making_visibility",
+                ]
+            ]
+            wel_lines.append(
+                f'<p><strong>Score:</strong> {welcomeness.get("overall_score", {}).get("score", 0)}/7</p>'
+            )
+            section_426_data = "\n".join(wel_lines)
+        else:
+            section_426_data = None
+
         # --- 4.2.8 Financial Sustainability / 4.2.9 Institutional Support ---
         # One collector serves both: they rest on the same funding documentation
         # and contributor-affiliation pass.
@@ -1269,7 +1317,10 @@ class MetricsOrchestrator:
                 _repr_row("Environment Management",
                           reproducibility.get("has_dependency_pinning"),
                           ", ".join(dep_found) if dep_found else None),
-                "<p><strong>Reproducibility Documentation:</strong> Not yet collected</p>",
+                _repr_row("Reproducibility Documentation",
+                          reproducibility.get("has_reproducibility_docs"),
+                          ", ".join(cats.get("reproducibility_docs", {}).get("found", []))
+                          or None),
                 f'<p><strong>Score:</strong> {repr_pts}/5</p>',
             ]
             section_433_data = "\n".join(repr_lines)
@@ -1353,6 +1404,7 @@ class MetricsOrchestrator:
         # 1. Portable Build System   2. Container Availability   3. Architecture Compatibility
         # 4. Platform Documentation  5. Deployment Environment Testing
         accessibility = qual.get("accessibility", {})
+        deployment_envs = qual.get("deployment_environments", {})
         if accessibility:
             cats = accessibility.get("categories", {})
             acc_pts = 0
@@ -1369,6 +1421,12 @@ class MetricsOrchestrator:
             build_found = cats.get("build_systems", {}).get("found", [])
             container_found = cats.get("containers", {}).get("found", [])
 
+            # 5. Deployment Environment Testing comes from its own collector, so
+            #    it is rendered with _sub_row and scored alongside the _acc_row
+            #    rows before the Score line is appended.
+            dep_sub = deployment_envs.get("overall_score", {}).get("sub_scores", {})
+            dep_info = dep_sub.get("deployment_environment_testing", {})
+
             acc_lines = [
                 _acc_row("Portable Build System Detection",
                          accessibility.get("has_portable_build_system"),
@@ -1378,9 +1436,12 @@ class MetricsOrchestrator:
                          ", ".join(container_found) if container_found else None),
                 "<p><strong>Architecture Compatibility Analysis:</strong> Not yet collected</p>",
                 "<p><strong>Platform Documentation Evaluation:</strong> Not yet collected</p>",
-                "<p><strong>Deployment Environment Testing:</strong> Not yet collected</p>",
-                f'<p><strong>Score:</strong> {acc_pts}/5</p>',
+                (_sub_row(dep_sub, "deployment_environment_testing") if deployment_envs
+                 else "<p><strong>Deployment Environment Testing:</strong> Not yet collected</p>"),
             ]
+            if dep_info.get("passing"):
+                acc_pts += 1
+            acc_lines.append(f'<p><strong>Score:</strong> {acc_pts}/5</p>')
             section_435_data = "\n".join(acc_lines)
         else:
             section_435_data = None
@@ -1429,6 +1490,7 @@ class MetricsOrchestrator:
         section_423_data = self._apply_section_overrides(section_423_data, ov.get("4.2.3", {}))
         section_424_data = self._apply_section_overrides(section_424_data, ov.get("4.2.4", {}))
         section_425_data = self._apply_section_overrides(section_425_data, ov.get("4.2.5", {}))
+        section_426_data = self._apply_section_overrides(section_426_data, ov.get("4.2.6", {}))
         section_428_data = self._apply_section_overrides(section_428_data, ov.get("4.2.8", {}))
         section_429_data = self._apply_section_overrides(section_429_data, ov.get("4.2.9", {}))
         section_4210_data = self._apply_section_overrides(section_4210_data, ov.get("4.2.10", {}))
@@ -1456,7 +1518,7 @@ class MetricsOrchestrator:
                 "4.2.3": {"title": "Active Maintenance", "data": section_423_data},
                 "4.2.4": {"title": "Engagement", "data": section_424_data},
                 "4.2.5": {"title": "Outreach",              "data": section_425_data or _stub("4.2.5")},
-                "4.2.6": {"title": "Welcomeness",            "data": _stub("4.2.6")},
+                "4.2.6": {"title": "Welcomeness",            "data": section_426_data or _stub("4.2.6")},
                 "4.2.7": {"title": "Collaboration",          "data": _stub("4.2.7")},
                 "4.2.8": {"title": "Financial Sustainability","data": section_428_data or _stub("4.2.8")},
                 "4.2.9": {"title": "Institutional & Organizational Support", "data": section_429_data or _stub("4.2.9")},

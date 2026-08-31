@@ -91,6 +91,7 @@ class TestComputeOverall:
             "containers":          {"found": ["Docker"], "percentage": 100.0},
             "dependency_pinning":  {"found": ["poetry.lock"], "percentage": 100.0},
             "fair4rs_metadata":    {"found": ["CITATION.cff"], "percentage": 100.0},
+            "reproducibility_docs": {"found": ["INSTALL.md"], "percentage": 100.0},
             "semantic_versioning": {"uses_semver": True},
         }
         result = collector._compute_overall(categories)
@@ -101,6 +102,7 @@ class TestComputeOverall:
             "containers":          {"found": [], "percentage": 0.0},
             "dependency_pinning":  {"found": [], "percentage": 0.0},
             "fair4rs_metadata":    {"found": [], "percentage": 0.0},
+            "reproducibility_docs": {"found": [], "percentage": 0.0},
             "semantic_versioning": {"uses_semver": False},
         }
         result = collector._compute_overall(categories)
@@ -111,11 +113,17 @@ class TestComputeOverall:
             "containers":          {"found": [], "percentage": 0.0},
             "dependency_pinning":  {"found": [], "percentage": 0.0},
             "fair4rs_metadata":    {"found": ["CITATION.cff"], "percentage": 100.0},
+            "reproducibility_docs": {"found": [], "percentage": 0.0},
             "semantic_versioning": {"uses_semver": True},
         }
         result = collector._compute_overall(categories)
-        # fair4rs 0.25 * 100 + semver 0.15 * 100 = 40.0
-        assert result["percentage"] == 40.0
+        # fair4rs 0.20 * 100 + semver 0.15 * 100 = 35.0
+        assert result["percentage"] == 35.0
+
+    def test_missing_category_scores_zero_instead_of_raising(self, collector):
+        # A failed sub-scan must not take down the whole dimension.
+        result = collector._compute_overall({"semantic_versioning": {"uses_semver": True}})
+        assert result["percentage"] == 15.0
 
 
 class TestScanFiles:

@@ -29,7 +29,7 @@ No significant post-processing required.
 | [#10](https://github.com/corsa-center/metrics/issues/10) | 4.2.3 Active Maintenance | `collectors/sustainability/active_maintenance.py` | ✅ Done |
 | [#16](https://github.com/corsa-center/metrics/issues/16) | 4.2.10 Project Longevity & Community Health | `orchestrator.py` (derived from `active_maintenance.py`) | ✅ Done |
 | [#18](https://github.com/corsa-center/metrics/issues/18) | 4.3.2 Development Practices | `ci_cd.py` + `dev_tooling.py` | ✅ Done (5/5) |
-| [#21](https://github.com/corsa-center/metrics/issues/21) | 4.3.5 Accessibility (portable build systems) | `collectors/quality/accessibility.py` | ✅ Done |
+| [#21](https://github.com/corsa-center/metrics/issues/21) | 4.3.5 Accessibility | `accessibility.py` + `deployment_environments.py` | ✅ Done (partial — 3/5; architecture & platform docs TBD) |
 | — | **OpenSSF Best Practices Badge** (Quality) | `collectors/sustainability/openssf_badge.py` | ✅ Done |
 | — | **OpenSSF Scorecard** (Sustainability) | `collectors/sustainability/openssf_scorecard.py` | ✅ Done |
 | — | **CI / GitHub Actions Status** (Quality) | covered by `ci_cd.py` | ✅ Done |
@@ -75,7 +75,7 @@ static analysis tool runs, or non-trivial content parsing.
 | [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/sustainability/engagement.py` | ✅ Done |
 | [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | `collectors/sustainability/outreach.py` | ✅ Done (partial — 5/8; event & training data not in the repo) |
 | [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | `collectors/quality/test_coverage.py` | ✅ Done (partial — Test Coverage Excellence via Codecov; static analysis/CERT/trend TBD) |
-| [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done |
+| [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done (5/5) |
 | [#20](https://github.com/corsa-center/metrics/issues/20) | 4.3.4 Usability | — | 🔲 Todo |
 | [#22](https://github.com/corsa-center/metrics/issues/22) | 4.3.6 Maintainability & Understandability | `orchestrator.py` (bus factor from `active_maintenance.py`) | ✅ Done (partial — Knowledge Distribution only; complexity/quality/docs TBD) |
 

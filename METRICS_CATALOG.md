@@ -26,16 +26,16 @@ is a stub
 | 4.2.3 | Active Maintenance | 4/6 |
 | 4.2.4 | Engagement | 4/7 |
 | 4.2.5 | Outreach | 5/8 |
-| 4.2.6 | Welcomeness | ⬜ 0/7 |
+| 4.2.6 | Welcomeness | 1/7 |
 | 4.2.7 | Collaboration | ⬜ 0/5 |
 | 4.2.8 | Financial Sustainability | 4/5 |
 | 4.2.9 | Institutional & Organizational Support | 1/5 |
 | 4.2.10 | Project Longevity and Community Health | 5/5 |
 | 4.3.1 | Reliability and Robustness | 2/5 |
 | 4.3.2 | Development Practices | 5/5 |
-| 4.3.3 | Reproducibility | 4/5 |
+| 4.3.3 | Reproducibility | 5/5 |
 | 4.3.4 | Usability | ⬜ 0/5 |
-| 4.3.5 | Accessibility | 2/5 |
+| 4.3.5 | Accessibility | 3/5 |
 | 4.3.6 | Maintainability and Understandability | 1/5 |
 | 4.3.7 | Performance and Efficiency | ⬜ 0/10 |
 
@@ -148,12 +148,17 @@ literature plus facility web scraping; see the "Hard" tier in
 > recent commits exceed the 10-page pagination cap.
 
 ### 4.2.6 Welcomeness
-**Collector:** none — ⬜ stub
+**Collector:** [`welcomeness.py`](collectors/sustainability/welcomeness.py)
 
-CHAOSS Community Experience Metrics · Response Quality and Tone Analysis ·
-Communication Sentiment Analysis · Contributor Journey Mapping · Language and
-Communication Review · Leadership Role Representation · Decision-Making
-Visibility.
+| Sub-metric | Status | Source |
+|---|---|---|
+| CHAOSS Community Experience Metrics | 🔲 | — |
+| Response Quality and Tone Analysis | 🔲 | needs NL analysis of conversations |
+| Communication Sentiment Analysis | 🔲 | needs NL analysis of conversations |
+| Contributor Journey Mapping | 🔲 | — |
+| Language and Communication Review | 🔲 | needs NL analysis of documentation |
+| Leadership Role Representation | 🔲 | needs maintainer demographics |
+| Decision-Making Visibility | ✅ | `has_discussions` / `has_wiki` / `has_pages` plus roadmap, meeting notes, decision records, governance doc; passes at ≥2 signals |
 
 ### 4.2.7 Collaboration
 **Collector:** none — ⬜ stub
@@ -260,7 +265,7 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | Containerization Excellence | ✅ | Dockerfile, Singularity/Apptainer definitions |
 | Version Control Best Practices | ✅ | semantic versioning in `/tags` |
 | Environment Management | ✅ | dependency pinning: `requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock` |
-| Reproducibility Documentation | 🔲 | — |
+| Reproducibility Documentation | ✅ | install/build guide, release notes, environment spec (`environment.yml`, `spack.yaml`, devcontainer) |
 
 ### 4.3.4 Usability
 **Collector:** none — ⬜ stub
@@ -270,7 +275,8 @@ Accessibility Feature Detection · Installation Success Tracking · Usage
 Analytics Integration.
 
 ### 4.3.5 Accessibility
-**Collector:** [`accessibility.py`](collectors/quality/accessibility.py)
+**Collectors:** [`accessibility.py`](collectors/quality/accessibility.py),
+[`deployment_environments.py`](collectors/quality/deployment_environments.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -278,7 +284,7 @@ Analytics Integration.
 | Container Availability Assessment | ✅ | Dockerfile, Singularity/Apptainer |
 | Architecture Compatibility Analysis | 🔲 | — |
 | Platform Documentation Evaluation | 🔲 | — |
-| Deployment Environment Testing | 🔲 | — |
+| Deployment Environment Testing | ✅ | [`deployment_environments.py`](collectors/quality/deployment_environments.py) — CI runner labels folded to OS families; passes at ≥2 |
 
 ### 4.3.6 Maintainability and Understandability
 **Collector:** none of its own — bus factor reused from
@@ -349,6 +355,7 @@ sustainability_collectors:
   active_maintenance: true  # 4.2.3, and 4.2.10 + 4.3.6 derive from it
   engagement: true          # 4.2.4
   outreach: true            # 4.2.5
+  welcomeness: true         # 4.2.6
   funding: true             # 4.2.8 + 4.2.9
 
 quality_collectors:
@@ -358,6 +365,7 @@ quality_collectors:
   dev_tooling: true         # 4.3.2
   reproducibility: true     # 4.3.3
   accessibility: true       # 4.3.5
+  deployment_environments: true  # 4.3.5
 ```
 
 Omitted keys default to `true`, so deleting a block runs everything. Disabling

@@ -28,6 +28,7 @@ sustainability_collectors:
   active_maintenance: true  # 4.2.3 Active Maintenance, and 4.2.10 + 4.3.6 are derived from it
   engagement: true          # 4.2.4 Engagement
   outreach: true            # 4.2.5 Outreach
+  welcomeness: true         # 4.2.6 Decision-making visibility
   funding: true             # 4.2.8 Financial + 4.2.9 Institutional Support
 
 quality_collectors:
@@ -37,6 +38,7 @@ quality_collectors:
   dev_tooling: true         # 4.3.2 testing, code review, tool integration
   reproducibility: true     # 4.3.3 Reproducibility
   accessibility: true       # 4.3.5 Accessibility
+  deployment_environments: true  # 4.3.5 CI runner OS families
 
 # API credentials
 api_credentials:

@@ -55,13 +55,34 @@ _FILE_CHECKS: Dict[str, Dict[str, List[str]]] = {
         "codemeta.json": ["codemeta.json"],
         "Zenodo metadata": [".zenodo.json", "zenodo.json"],
     },
+    # Documentation telling someone how to rebuild the software as released.
+    # Reproducibility that isn't written down can't be followed by anyone else.
+    "reproducibility_docs": {
+        "Install / build guide": [
+            "INSTALL.md", "INSTALL", "INSTALL.txt", "BUILD.md", "BUILDING.md",
+            "docs/install.md", "docs/installation.md", "doc/install.md",
+            "docs/INSTALL.md", "release_docs/INSTALL", "release_docs/INSTALL.md",
+        ],
+        "Release / build notes": [
+            "CHANGELOG.md", "CHANGELOG", "NEWS.md", "RELEASE.txt",
+            "release_docs/CHANGELOG.md", "release_docs/RELEASE.txt",
+            "docs/changelog.md", "HISTORY.md",
+        ],
+        # Dockerfile is deliberately absent: the "containers" category already
+        # scores it, and counting it twice would inflate the section.
+        "Environment specification": [
+            "environment.yml", "environment.yaml", "spack.yaml", "spack.lock",
+            ".devcontainer/devcontainer.json", ".devcontainer.json",
+        ],
+    },
 }
 
 # Weights used to compute the overall percentage score.
 _WEIGHTS = {
-    "containers": 0.25,
-    "dependency_pinning": 0.35,
-    "fair4rs_metadata": 0.25,
+    "containers": 0.20,
+    "dependency_pinning": 0.30,
+    "fair4rs_metadata": 0.20,
+    "reproducibility_docs": 0.15,
     "semantic_versioning": 0.15,
 }
 
@@ -97,6 +118,7 @@ class ReproducibilityCollector(GitHubCollectorBase):
             "has_container": bool(categories["containers"]["found"]),
             "has_dependency_pinning": bool(categories["dependency_pinning"]["found"]),
             "has_fair4rs_metadata": bool(categories["fair4rs_metadata"]["found"]),
+            "has_reproducibility_docs": bool(categories["reproducibility_docs"]["found"]),
             "uses_semantic_versioning": semver["uses_semver"],
             "categories": categories,
             "overall_score": overall,
@@ -220,10 +242,13 @@ class ReproducibilityCollector(GitHubCollectorBase):
     def _compute_overall(self, categories: Dict[str, Any]) -> Dict[str, Any]:
         weighted = 0.0
         for cat, weight in _WEIGHTS.items():
+            # A category can be absent if its scan failed; treat that as zero
+            # rather than letting a KeyError take down the whole dimension.
+            data = categories.get(cat, {})
             if cat == "semantic_versioning":
-                pct = 100.0 if categories[cat].get("uses_semver") else 0.0
+                pct = 100.0 if data.get("uses_semver") else 0.0
             else:
-                pct = categories[cat].get("percentage", 0.0)
+                pct = data.get("percentage", 0.0)
             weighted += pct * weight
 
         return {
@@ -240,6 +265,7 @@ class ReproducibilityCollector(GitHubCollectorBase):
             "has_container": False,
             "has_dependency_pinning": False,
             "has_fair4rs_metadata": False,
+            "has_reproducibility_docs": False,
             "uses_semantic_versioning": False,
             "categories": {},
             "overall_score": {"score": 0.0, "max_score": 100.0, "percentage": 0.0},
