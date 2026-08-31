@@ -39,6 +39,7 @@ quality_collectors:
   dev_tooling: true         # 4.3.2 testing, code review, tool integration
   reproducibility: true     # 4.3.3 Reproducibility
   usability: true           # 4.3.4 Documentation completeness
+  maintainability: true     # 4.3.6 Complexity, tests, docs, refactoring
   accessibility: true       # 4.3.5 Accessibility
   deployment_environments: true  # 4.3.5 CI runner OS families
 

@@ -35,8 +35,8 @@ is a stub
 | 4.3.2 | Development Practices | 5/5 |
 | 4.3.3 | Reproducibility | 5/5 |
 | 4.3.4 | Usability | 2/5 |
-| 4.3.5 | Accessibility | 3/5 |
-| 4.3.6 | Maintainability and Understandability | 1/5 |
+| 4.3.5 | Accessibility | 5/5 |
+| 4.3.6 | Maintainability and Understandability | 5/5 |
 | 4.3.7 | Performance and Efficiency | ⬜ 0/10 |
 
 A stub section renders nothing unless the package's `package_config/` file
@@ -318,21 +318,40 @@ ecosyste.ms a second time for the same answer.
 |---|---|---|
 | Portable Build System Detection | ✅ | CMake, Autotools, Meson, Spack recipe, Conda |
 | Container Availability Assessment | ✅ | Dockerfile, Singularity/Apptainer |
-| Architecture Compatibility Analysis | 🔲 | — |
-| Platform Documentation Evaluation | 🔲 | — |
+| Architecture Compatibility Analysis | ✅ | non-x86 CPU architectures in the CI workflows (ARM64, POWER, RISC-V, s390x); x86-64 alone doesn't count |
+| Platform Documentation Evaluation | ✅ | platform families named in the README; passes at ≥2 |
 | Deployment Environment Testing | ✅ | [`deployment_environments.py`](collectors/quality/deployment_environments.py) — CI runner labels folded to OS families; passes at ≥2 |
 
 ### 4.3.6 Maintainability and Understandability
-**Collector:** none of its own — bus factor reused from
-`active_maintenance.py` via `_transform_for_dashboard`.
+**Collector:** [`maintainability.py`](collectors/quality/maintainability.py),
+plus the bus factor reused from `active_maintenance.py`.
 
 | Sub-metric | Status | Source |
 |---|---|---|
-| Advanced Complexity Analysis | 🔲 | — |
-| Code Quality Assessment | 🔲 | — |
-| Documentation Quality Evaluation | 🔲 | — |
+| Advanced Complexity Analysis | ✅ | source-file size distribution and tree depth; passes under 5% of files over 100 KB and depth ≤10 |
+| Code Quality Assessment | ✅ | test-to-source file ratio; passes at ≥0.20 |
+| Documentation Quality Evaluation | ✅ | documentation coverage plus a doc generator (Doxygen / Sphinx / MkDocs) |
 | Knowledge Distribution Analysis | ✅ | bus factor ≥ 3, plus top-contributor share |
-| Refactoring and Evolution Tracking | 🔲 | — |
+| Refactoring and Evolution Tracking | ✅ | refactor-intent commits over a 300-commit sample; passes at ≥2% |
+
+The whole section comes from three calls: the recursive git tree, the language
+breakdown, and recent commit messages.
+
+**Complexity is a structural proxy, not static analysis.** The report asks for
+tools that measure computational complexity; that needs the source checked out.
+What this reports is file size and nesting, and says so in the rendered row.
+
+**Two counting rules that materially change the numbers.** Files under a `docs/`
+tree only count as documentation if they are prose — HDF5's docs tree holds 165
+`.gif`, 82 `.png` and 33 `.c` files, which had doubled its documentation figure.
+And `.txt` counts only at the repo root or under a doc directory, since deeper in
+the tree it is almost always test fixtures.
+
+**Churn is measured from commit subjects, not `/stats/code_frequency`.** That
+endpoint returns HTTP 422 for any repository over 10,000 commits, which rules out
+most of this portfolio — HDF5 alone has ~24,500. Sampling 300 commits rather than
+100 matters too: at 100, each commit is worth a full percentage point and a 2%
+threshold is indistinguishable from noise.
 
 ### 4.3.7 Performance and Efficiency
 **Collector:** none — ⬜ stub
@@ -402,6 +421,7 @@ quality_collectors:
   dev_tooling: true         # 4.3.2
   reproducibility: true     # 4.3.3
   usability: true           # 4.3.4
+  maintainability: true     # 4.3.6
   accessibility: true       # 4.3.5
   deployment_environments: true  # 4.3.5
 ```

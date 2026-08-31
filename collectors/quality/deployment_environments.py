@@ -1,9 +1,15 @@
 """
 Deployment Environment Collector (CASS Report Section 4.3.5 — Accessibility)
 
-Fills "Deployment Environment Testing" by reading the CI workflow definitions
-and working out which operating-system families the project actually builds and
-tests on.
+Fills the three CI- and documentation-derived sub-metrics of section 4.3.5 by
+reading the workflow definitions once:
+
+  - Deployment Environment Testing    : which OS families CI builds on
+  - Architecture Compatibility Analysis : which CPU architectures CI covers
+  - Platform Documentation Evaluation : whether the docs say what is supported
+
+Portable Build System Detection and Container Availability are collected by
+accessibility.py.
 
 Runner labels are matched anywhere in the workflow text rather than only after
 `runs-on:`, because most real workflows write `runs-on: ${{ matrix.os }}` and
@@ -39,12 +45,37 @@ _RUNNER_FAMILIES = {
     "macOS": re.compile(rf"\bmacos-{_RUNNER_SUFFIX}\b", re.I),
 }
 
+# Explicit CPU architecture tokens. x86-64 is not listed: it is the implicit
+# default for every standard runner, so naming it proves nothing. What this
+# detects is a project that went out of its way to test something else.
+_ARCH_PATTERNS = {
+    # The `-arm` runner suffix follows a version, not letters
+    # (`ubuntu-24.04-arm`), so the prefix must not be constrained to [a-z].
+    "ARM64": re.compile(r"\barm64\b|\baarch64\b|-arm\b|\barm-", re.I),
+    "POWER": re.compile(r"\b(?:ppc64le|ppc64|power[89])\b", re.I),
+    "RISC-V": re.compile(r"\briscv(?:64)?\b", re.I),
+    "s390x": re.compile(r"\bs390x\b", re.I),
+}
+
+# Platform names a project might document support for.
+_PLATFORM_DOC_TERMS = {
+    "Linux": re.compile(r"\b(?:linux|ubuntu|debian|centos|rhel|red hat|fedora|suse)\b", re.I),
+    "Windows": re.compile(r"\b(?:windows|win32|win64|msvc|mingw)\b", re.I),
+    "macOS": re.compile(r"\b(?:macos|mac os|osx|darwin|apple)\b", re.I),
+    "HPC systems": re.compile(r"\b(?:cray|frontier|summit|perlmutter|aurora|slurm|hpc cluster)\b", re.I),
+}
+
 # Cap on workflow files read, to bound the request count on repositories that
 # carry dozens of them (HDF5 has ~40).
 _MAX_WORKFLOW_FILES = 25
 
 # Building on more than one OS family is what this sub-metric is asking about.
 _MIN_OS_FAMILIES = 2
+# Any explicitly-tested non-x86 architecture means the project is portable
+# beyond the default; x86-64 plus one other is the bar.
+_MIN_EXTRA_ARCHITECTURES = 1
+# Naming at least two supported platforms counts as documenting portability.
+_MIN_DOCUMENTED_PLATFORMS = 2
 
 
 class DeploymentEnvironmentCollector(GitHubCollectorBase):
@@ -61,24 +92,40 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         logger.info(f"Collecting deployment environment metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            files = await self._list_workflows(client, owner, repo)
-            if not files:
-                return self._empty_result(repo_name, f"{owner}/{repo}")
+            files, doc_text = await asyncio.gather(
+                self._list_workflows(client, owner, repo),
+                self._read_platform_docs(client, owner, repo),
+                return_exceptions=True,
+            )
+            if isinstance(files, Exception):
+                logger.warning(f"Workflow listing failed: {files}")
+                files = []
+            if isinstance(doc_text, Exception):
+                logger.warning(f"Platform doc read failed: {doc_text}")
+                doc_text = ""
 
             contents = await asyncio.gather(
                 *[self._read_workflow(client, f["url"]) for f in files[:_MAX_WORKFLOW_FILES]],
                 return_exceptions=True,
-            )
+            ) if files else []
 
         families: Dict[str, set] = {name: set() for name in _RUNNER_FAMILIES}
+        architectures: set = set()
         for text in contents:
             if isinstance(text, Exception) or not text:
                 continue
             for family, pattern in _RUNNER_FAMILIES.items():
                 for label in pattern.findall(text):
                     families[family].add(label.lower())
+            for arch, pattern in _ARCH_PATTERNS.items():
+                if pattern.search(text):
+                    architectures.add(arch)
 
         detected = {f: sorted(labels) for f, labels in families.items() if labels}
+        documented = sorted(
+            name for name, pattern in _PLATFORM_DOC_TERMS.items()
+            if doc_text and pattern.search(doc_text)
+        )
         return {
             "package_name": repo_name,
             "repository": f"{owner}/{repo}",
@@ -86,8 +133,27 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             "workflow_count": len(files),
             "workflows_scanned": min(len(files), _MAX_WORKFLOW_FILES),
             "os_families": detected,
-            "overall_score": self._calculate_score(detected),
+            "architectures": sorted(architectures),
+            "documented_platforms": documented,
+            "overall_score": self._calculate_score(detected, sorted(architectures), documented),
         }
+
+    async def _read_platform_docs(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> str:
+        """README text, used to see which platforms the project claims to support."""
+        try:
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/readme",
+                headers=self.github_headers,
+            )
+            if resp.status_code != 200:
+                return ""
+            import base64
+            return base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
+        except Exception as e:
+            logger.debug(f"Could not read README: {e}")
+            return ""
 
     async def _list_workflows(
         self, client: httpx.AsyncClient, owner: str, repo: str
@@ -119,7 +185,12 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             logger.debug(f"Could not read workflow {url}: {e}")
             return None
 
-    def _calculate_score(self, detected: Dict[str, List[str]]) -> Dict[str, Any]:
+    def _calculate_score(
+        self,
+        detected: Dict[str, List[str]],
+        architectures: Optional[List[str]] = None,
+        documented: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Summarise coverage by OS family.
 
         Individual runner labels stay in `os_families` for anyone consuming the
@@ -133,18 +204,47 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             value = f"{len(names)} environment{'s' if len(names) != 1 else ''}: " + ", ".join(names)
         else:
             value = "No CI runner environments detected"
-        return {
-            "score": 1 if passing else 0,
-            "max_score": 1,
-            "percentage": 100.0 if passing else 0.0,
-            "sub_scores": {
-                "deployment_environment_testing": {
-                    "label": "Deployment Environment Testing",
-                    "value": value,
-                    "detail": None,
-                    "passing": passing,
-                }
+        architectures = architectures or []
+        documented = documented or []
+
+        arch_ok = len(architectures) >= _MIN_EXTRA_ARCHITECTURES
+        arch_value = (
+            "x86-64 plus " + ", ".join(architectures) if architectures
+            else "x86-64 only"
+        ) if detected else "No CI architectures detected"
+
+        docs_ok = len(documented) >= _MIN_DOCUMENTED_PLATFORMS
+        docs_value = (
+            f"{len(documented)} platform{'s' if len(documented) != 1 else ''} named: "
+            + ", ".join(documented)
+        ) if documented else "No supported platforms named in the README"
+
+        sub = {
+            "deployment_environment_testing": {
+                "label": "Deployment Environment Testing",
+                "value": value,
+                "detail": None,
+                "passing": passing,
             },
+            "architecture_compatibility": {
+                "label": "Architecture Compatibility Analysis",
+                "value": arch_value,
+                "detail": None,
+                "passing": arch_ok,
+            },
+            "platform_documentation": {
+                "label": "Platform Documentation Evaluation",
+                "value": docs_value,
+                "detail": None,
+                "passing": docs_ok,
+            },
+        }
+        score = sum(1 for v in sub.values() if v["passing"])
+        return {
+            "score": score,
+            "max_score": len(sub),
+            "percentage": round(score / len(sub) * 100, 2),
+            "sub_scores": sub,
         }
 
     def _empty_result(self, repo_name: str, repository: str = "unknown") -> Dict[str, Any]:
@@ -155,5 +255,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             "workflow_count": 0,
             "workflows_scanned": 0,
             "os_families": {},
-            "overall_score": self._calculate_score({}),
+            "architectures": [],
+            "documented_platforms": [],
+            "overall_score": self._calculate_score({}, [], []),
         }

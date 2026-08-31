@@ -492,6 +492,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Usability collection failed for {package['name']}: {e}")
 
+        # 4.3.6 Maintainability — tree composition, docs, refactoring activity
+        if self._sub_enabled("quality", "maintainability"):
+            try:
+                from collectors.quality.maintainability import MaintainabilityCollector
+                collector = MaintainabilityCollector(github_token=github_token)
+                sub_results["maintainability"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Maintainability collection failed for {package['name']}: {e}")
+
         # 4.3.5 Deployment Environment Testing — CI runner OS families
         if self._sub_enabled("quality", "deployment_environments"):
             try:
@@ -538,6 +547,8 @@ class MetricsOrchestrator:
             )
         if "usability" in sub_results:
             scores.append(sub_results["usability"].get("overall_score", {}).get("percentage", 0))
+        if "maintainability" in sub_results:
+            scores.append(sub_results["maintainability"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -1497,7 +1508,6 @@ class MetricsOrchestrator:
             #    it is rendered with _sub_row and scored alongside the _acc_row
             #    rows before the Score line is appended.
             dep_sub = deployment_envs.get("overall_score", {}).get("sub_scores", {})
-            dep_info = dep_sub.get("deployment_environment_testing", {})
 
             acc_lines = [
                 _acc_row("Portable Build System Detection",
@@ -1506,13 +1516,17 @@ class MetricsOrchestrator:
                 _acc_row("Container Availability Assessment",
                          accessibility.get("has_container"),
                          ", ".join(container_found) if container_found else None),
-                "<p><strong>Architecture Compatibility Analysis:</strong> Not yet collected</p>",
-                "<p><strong>Platform Documentation Evaluation:</strong> Not yet collected</p>",
+                (_sub_row(dep_sub, "architecture_compatibility") if deployment_envs
+                 else "<p><strong>Architecture Compatibility Analysis:</strong> Not yet collected</p>"),
+                (_sub_row(dep_sub, "platform_documentation") if deployment_envs
+                 else "<p><strong>Platform Documentation Evaluation:</strong> Not yet collected</p>"),
                 (_sub_row(dep_sub, "deployment_environment_testing") if deployment_envs
                  else "<p><strong>Deployment Environment Testing:</strong> Not yet collected</p>"),
             ]
-            if dep_info.get("passing"):
-                acc_pts += 1
+            for key in ["deployment_environment_testing", "architecture_compatibility",
+                        "platform_documentation"]:
+                if dep_sub.get(key, {}).get("passing"):
+                    acc_pts += 1
             acc_lines.append(f'<p><strong>Score:</strong> {acc_pts}/5</p>')
             section_435_data = "\n".join(acc_lines)
         else:
@@ -1526,12 +1540,20 @@ class MetricsOrchestrator:
         section_436_lines = []
         maint436_pts = 0
         if contributor_activity:
-            for label in [
-                "Advanced Complexity Analysis",
-                "Code Quality Assessment",
-                "Documentation Quality Evaluation",
-            ]:
-                section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
+            maintainability = qual.get("maintainability", {})
+            msub = maintainability.get("overall_score", {}).get("sub_scores", {})
+            if maintainability:
+                for key in ["complexity_analysis", "code_quality", "documentation_quality"]:
+                    section_436_lines.append(_sub_row(msub, key))
+                    if msub.get(key, {}).get("passing"):
+                        maint436_pts += 1
+            else:
+                for label in [
+                    "Advanced Complexity Analysis",
+                    "Code Quality Assessment",
+                    "Documentation Quality Evaluation",
+                ]:
+                    section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
 
             # 4. Knowledge Distribution Analysis — bus factor (reuses 4.2.3 data)
             # Threshold matches active_maintenance.py's own "healthy bus factor"
@@ -1550,7 +1572,13 @@ class MetricsOrchestrator:
                 f'({contributor_activity.get("total_contributors", 0)} total contributors)</p>'
             )
 
-            section_436_lines.append('<p><strong>Refactoring and Evolution Tracking:</strong> Not yet collected</p>')
+            if maintainability:
+                section_436_lines.append(_sub_row(msub, "refactoring_tracking"))
+                if msub.get("refactoring_tracking", {}).get("passing"):
+                    maint436_pts += 1
+            else:
+                section_436_lines.append(
+                    '<p><strong>Refactoring and Evolution Tracking:</strong> Not yet collected</p>')
             section_436_lines.append(f'<p><strong>Score:</strong> {maint436_pts}/5</p>')
         section_436_data = "\n".join(section_436_lines) if section_436_lines else None
 

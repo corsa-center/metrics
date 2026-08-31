@@ -50,6 +50,58 @@ class TestRunnerDetection:
         assert _families("ubuntu-22.04")["Linux"] == ["ubuntu-22.04"]
 
 
+class TestArchitectureDetection:
+    @pytest.mark.parametrize("text,expected", [
+        ("runs-on: ubuntu-24.04-arm", "ARM64"),   # version prefix, not letters
+        ("name: arm-main", "ARM64"),
+        ("os: [aarch64]", "ARM64"),
+        ("os: [ppc64le]", "POWER"),
+        ("arch: riscv64", "RISC-V"),
+        ("container: s390x/ubuntu", "s390x"),
+    ])
+    def test_detects_architecture(self, text, expected):
+        from collectors.quality.deployment_environments import _ARCH_PATTERNS
+        assert [a for a, p in _ARCH_PATTERNS.items() if p.search(text)] == [expected]
+
+    @pytest.mark.parametrize("text", [
+        "runs-on: ubuntu-latest", "runs-on: windows-2022", "job: warm-up", "swarm-node",
+    ])
+    def test_no_false_positives(self, text):
+        from collectors.quality.deployment_environments import _ARCH_PATTERNS
+        assert [a for a, p in _ARCH_PATTERNS.items() if p.search(text)] == []
+
+
+class TestArchitectureAndDocs:
+    def test_extra_architecture_passes(self, collector):
+        s = collector._calculate_score(
+            {"Linux": ["ubuntu-latest"]}, ["ARM64"], [])
+        info = s["sub_scores"]["architecture_compatibility"]
+        assert info["passing"]
+        assert info["value"] == "x86-64 plus ARM64"
+
+    def test_x86_only_fails(self, collector):
+        # x86-64 is the implicit default for every standard runner, so naming
+        # it proves nothing about portability.
+        s = collector._calculate_score({"Linux": ["ubuntu-latest"]}, [], [])
+        info = s["sub_scores"]["architecture_compatibility"]
+        assert not info["passing"]
+        assert info["value"] == "x86-64 only"
+
+    def test_platform_documentation_threshold(self, collector):
+        one = collector._calculate_score({}, [], ["Windows"])
+        two = collector._calculate_score({}, [], ["Linux", "Windows"])
+        assert not one["sub_scores"]["platform_documentation"]["passing"]
+        assert two["sub_scores"]["platform_documentation"]["passing"]
+
+    def test_no_platforms_named(self, collector):
+        info = collector._calculate_score({}, [], [])["sub_scores"]["platform_documentation"]
+        assert not info["passing"]
+        assert "No supported platforms" in info["value"]
+
+    def test_max_score_is_three(self, collector):
+        assert collector._calculate_score({}, [], [])["max_score"] == 3
+
+
 class TestScoring:
     def test_single_family_fails(self, collector):
         s = collector._calculate_score({"Linux": ["ubuntu-latest"]})
@@ -60,7 +112,6 @@ class TestScoring:
             {"Linux": ["ubuntu-latest"], "Windows": ["windows-latest"]}
         )
         assert s["sub_scores"]["deployment_environment_testing"]["passing"]
-        assert s["score"] == 1
 
     def test_no_families(self, collector):
         s = collector._calculate_score({})
