@@ -21,8 +21,8 @@ is a stub
 |---|---|---|
 | 4.1.1 | Software Citation and Adoption | 7/7 |
 | 4.1.2 | Field Research Impact | ⬜ 0/3 |
-| 4.2.1 | CoC, Governance, and Contributor Guidelines | 3/5 |
-| 4.2.2 | Open-Source Licensing and FAIR Compliance | 2/5 |
+| 4.2.1 | CoC, Governance, and Contributor Guidelines | 5/5 |
+| 4.2.2 | Open-Source Licensing and FAIR Compliance | 5/5 |
 | 4.2.3 | Active Maintenance | 4/6 |
 | 4.2.4 | Engagement | 7/7 |
 | 4.2.5 | Outreach | 5/8 |
@@ -83,25 +83,40 @@ literature plus facility web scraping; see the "Hard" tier in
 | Sub-metric | Status | Source |
 |---|---|---|
 | Enhanced Document Detection | ✅ | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING file detection |
-| Governance Keyword Analysis | 🔲 | — |
+| Governance Keyword Analysis | ✅ | decision process / defined roles / membership lifecycle / conflict resolution, read from the full documents; passes at ≥2 |
 | OpenSSF Badge Integration | ✅ | `bestpractices.dev`, level + percentage. **Substituted** by an *OpenSSF Scorecard* row (`api.securityscorecards.dev`, with a per-check breakdown of failing checks) whenever scorecard data exists, so the section is always 5 rows |
 | CHAOSS Governance Metrics | ✅ | [`chaoss_governance.py`](collectors/sustainability/chaoss_governance.py) — weighted 0–100 health score, passing at ≥60, with a per-category breakdown (popularity, docs, time-to-close, issue age, PR closure ratio, release frequency, issue inclusivity) |
-| Governance Effectiveness Assessment | 🔲 | — |
+| Governance Effectiveness Assessment | ✅ | CODEOWNERS present **and** governance docs touched within three years |
 
 > `community_health.py` is named for the report's older phrasing but is the
 > **4.2.1** collector: it detects governance documents. It has nothing to do
 > with 4.2.10.
+
+**Document detection is case-insensitive.** GitHub's Contents API is
+case-sensitive, so the old enumerated pattern list could only match spellings
+somebody thought to write down. ADIOS2 names its guide `Contributing.md`, which
+no list of upper/lower variants catches, and the file was invisible. The root,
+`.github/` and `docs/` directories are now listed once and matched
+case-insensitively — fewer requests as well as more hits.
 
 ### 4.2.2 Open-Source Licensing and FAIR Compliance
 **Collector:** [`licensing.py`](collectors/sustainability/licensing.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
-| Enhanced License Detection | ✅ | GitHub License API, SPDX identifier |
-| Automated FAIR4RS Assessment | 🔲 | — |
-| OSI License Validation | ✅ | SPDX / OSI approval list |
-| License Exception Handling | 🔲 | — |
-| FAIR Metadata Assessment | 🔲 | — |
+| Enhanced License Detection | ✅ | GitHub License API and SPDX identifier, falling back to the family named in the licence text |
+| Automated FAIR4RS Assessment | ✅ | the four principles scored individually; passes at ≥3 |
+| OSI License Validation | ✅ | SPDX / OSI approval list; a text-resolved family counts as approved |
+
+**GitHub returns `NOASSERTION` for any licence it cannot match verbatim.** HDF5's
+LICENSE states plainly that the software "is covered by the 3-clause BSD
+License", but the extra copyright notices stop the classifier recognising it — so
+the framework reported HDF5 as licence "Other", category "Unknown", OSI
+"unknown". It now resolves to BSD-3-Clause, Permissive, OSI-approved. (HDF5 is
+also being fixed at source so GitHub classifies it directly; the fallback stays
+for every other project with a modified licence.)
+| License Exception Handling | ✅ | license family recovered from the text when GitHub returns `NOASSERTION`, plus exception / extra-terms markers |
+| FAIR Metadata Assessment | ✅ | CITATION.cff field completeness (title, authors, version, license, repository-code, DOI); passes at ≥4 |
 
 ### 4.2.3 Active Maintenance
 **Collector:** [`active_maintenance.py`](collectors/sustainability/active_maintenance.py)

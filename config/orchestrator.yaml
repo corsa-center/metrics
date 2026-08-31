@@ -25,6 +25,7 @@ sustainability_collectors:
   openssf_scorecard: true   # 4.2.1 OpenSSF Scorecard
   openssf_badge: true       # 4.2.1 + 4.3.2 OpenSSF Best Practices badge
   licensing: true           # 4.2.2 Licensing and FAIR Compliance
+  fair_licensing: true      # 4.2.2 FAIR4RS, licence exceptions, metadata
   active_maintenance: true  # 4.2.3 Active Maintenance, and 4.2.10 + 4.3.6 are derived from it
   engagement: true          # 4.2.4 Engagement
   outreach: true            # 4.2.5 Outreach

@@ -24,8 +24,8 @@ No significant post-processing required.
 
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
-| [#8](https://github.com/corsa-center/metrics/issues/8) | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/sustainability/community_health.py` + `chaoss_governance.py` | ✅ Done (partial — docs, CHAOSS, OpenSSF badge/scorecard; keyword & effectiveness analysis TBD) |
-| [#9](https://github.com/corsa-center/metrics/issues/9) | 4.2.2 Open-Source Licensing & FAIR Compliance | `collectors/sustainability/licensing.py` | ✅ Done |
+| [#8](https://github.com/corsa-center/metrics/issues/8) | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/sustainability/community_health.py` + `chaoss_governance.py` | ✅ Done (5/5) |
+| [#9](https://github.com/corsa-center/metrics/issues/9) | 4.2.2 Open-Source Licensing & FAIR Compliance | `licensing.py` + `fair_licensing.py` | ✅ Done (5/5) |
 | [#10](https://github.com/corsa-center/metrics/issues/10) | 4.2.3 Active Maintenance | `collectors/sustainability/active_maintenance.py` | ✅ Done |
 | [#16](https://github.com/corsa-center/metrics/issues/16) | 4.2.10 Project Longevity & Community Health | `orchestrator.py` (derived from `active_maintenance.py`) | ✅ Done |
 | [#18](https://github.com/corsa-center/metrics/issues/18) | 4.3.2 Development Practices | `ci_cd.py` + `dev_tooling.py` | ✅ Done (5/5) |

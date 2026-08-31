@@ -350,6 +350,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Engagement collection failed for {package['name']}: {e}")
 
+        # 4.2.2 FAIR compliance and license exceptions
+        if self._sub_enabled("sustainability", "fair_licensing"):
+            try:
+                from collectors.sustainability.fair_licensing import FairLicensingCollector
+                collector = FairLicensingCollector(github_token=github_token)
+                sub_results["fair_licensing"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"FAIR licensing collection failed for {package['name']}: {e}")
+
         # 4.2.5 Outreach — newcomer growth, retention, onboarding infrastructure
         if self._sub_enabled("sustainability", "outreach"):
             try:
@@ -423,6 +432,8 @@ class MetricsOrchestrator:
             scores.append(sub_results["welcomeness"].get("overall_score", {}).get("percentage", 0))
         if "collaboration" in sub_results:
             scores.append(sub_results["collaboration"].get("overall_score", {}).get("percentage", 0))
+        if "fair_licensing" in sub_results:
+            scores.append(sub_results["fair_licensing"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -743,6 +754,18 @@ class MetricsOrchestrator:
                 return self._build_stub_section(section_num, pkg_overrides[section_num])
             return None
 
+        def _sub_row(sub: Dict, key: str) -> str:
+            """Render one collector sub-score as a section row (plus any detail)."""
+            info = sub.get(key, {})
+            label = info.get("label", key)
+            if info.get("not_collected"):
+                return f'<p><strong>{label}:</strong> Not yet collected</p>'
+            mark = "✓" if info.get("passing") else "✗"
+            row = f'<p><strong>{label}:</strong> {info.get("value", "N/A")} {mark}</p>'
+            if info.get("detail"):
+                row += f'\n<p class="sub-detail">{info["detail"]}</p>'
+            return row
+
         # --- 4.1.1 Software Citation and Adoption ---
         impact_sub = dims.get("impact", {}).get("sub_results") or {}
         sub_metrics = impact_sub.get("sub_metrics", {})
@@ -823,7 +846,18 @@ class MetricsOrchestrator:
                 gov_lines.append('<p><strong>Enhanced Document Detection:</strong> Not yet collected</p>')
 
             # 2. Governance Keyword Analysis — not yet collected
-            gov_lines.append('<p><strong>Governance Keyword Analysis:</strong> Not yet collected</p>')
+            # 2. Governance Keyword Analysis — do the documents describe a
+            #    decision process, or merely exist?
+            kw = governance.get("keyword_analysis", {})
+            groups = kw.get("groups_found", [])
+            kw_ok = len(groups) >= 2
+            gov_pts += 1 if kw_ok else 0
+            gov_lines.append(
+                f'<p><strong>Governance Keyword Analysis:</strong> '
+                f'{len(groups)}/4 concepts documented {"✓" if kw_ok else "✗"}</p>'
+            )
+            if groups:
+                gov_lines.append(f'<p class="sub-detail">{", ".join(groups)}</p>')
 
             # 3. OpenSSF Badge Integration — use Scorecard as proxy (passes if score ≥ 7.0)
             if scorecard and scorecard.get("scorecard_exists"):
@@ -876,8 +910,22 @@ class MetricsOrchestrator:
             else:
                 gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
 
-            # 5. Not yet collected
-            gov_lines.append('<p><strong>Governance Effectiveness Assessment:</strong> Not yet collected</p>')
+            # 5. Governance Effectiveness Assessment — is governance live?
+            #    Owners assigned, and the documents still being maintained.
+            eff = governance.get("effectiveness", {})
+            eff_signals = []
+            if eff.get("has_codeowners"):
+                eff_signals.append("CODEOWNERS defined")
+            days = eff.get("days_since_governance_update")
+            if days is not None:
+                eff_signals.append(f"docs updated {days} days ago")
+            eff_ok = bool(eff.get("has_codeowners")) and bool(eff.get("maintained"))
+            gov_pts += 1 if eff_ok else 0
+            gov_lines.append(
+                f'<p><strong>Governance Effectiveness Assessment:</strong> '
+                f'{"; ".join(eff_signals) if eff_signals else "No governance ownership or upkeep found"} '
+                f'{"✓" if eff_ok else "✗"}</p>'
+            )
 
             gov_lines.append(f'<p><strong>Score:</strong> {gov_pts}/5</p>')
         section_421_data = "\n".join(gov_lines) if gov_lines else None
@@ -893,7 +941,21 @@ class MetricsOrchestrator:
             spdx_id = analysis.get("spdx_id") or ""
             if spdx_id in ("NOASSERTION", ""):
                 spdx_id = None
-            license_name = spdx_id or analysis.get("license_type") or "Unknown"
+            # GitHub returns NOASSERTION for any licence it cannot match verbatim.
+            # Fall back to the family recovered from the licence text so a project
+            # with extra copyright notices is not recorded as unlicensed.
+            fair_lic = sust.get("fair_licensing", {})
+            flsub = fair_lic.get("overall_score", {}).get("sub_scores", {})
+            resolved = fair_lic.get("license_exceptions", {}).get("resolved_from_text")
+            license_name = spdx_id or resolved or analysis.get("license_type") or "Unknown"
+            # Keep the category consistent with whichever name is being shown;
+            # every family the text matcher recognises is permissive or copyleft.
+            lic_category = analysis.get("category", "Unknown")
+            if lic_category in ("Unknown", None, "") and resolved:
+                lic_category = (
+                    "Copyleft" if resolved.startswith(("GPL", "LGPL", "MPL"))
+                    else "Permissive"
+                )
             lic_pts  = 0
             lic_lines = []
 
@@ -906,24 +968,40 @@ class MetricsOrchestrator:
             lic_lines += [
                 f'<p><strong>Enhanced License Detection:</strong> {"✓" if ld_passing else "✗"}</p>',
                 f'<p class="sub-detail">License: {license_name}</p>',
-                f'<p class="sub-detail">Category: {analysis.get("category", "Unknown")}</p>',
+                f'<p class="sub-detail">Category: {lic_category}</p>',
             ]
 
-            # 2. Automated FAIR4RS Assessment — not yet collected
-            lic_lines.append('<p><strong>Automated FAIR4RS Assessment:</strong> Not yet collected</p>')
+            # 2. Automated FAIR4RS Assessment
+            if fair_lic:
+                lic_lines.append(_sub_row(flsub, "fair4rs_assessment"))
+                if flsub.get("fair4rs_assessment", {}).get("passing"):
+                    lic_pts += 1
+            else:
+                lic_lines.append('<p><strong>Automated FAIR4RS Assessment:</strong> Not yet collected</p>')
 
             # 3. OSI License Validation — passes if osi_approved is True
             osi = analysis.get("osi_approved")
+            if osi is None and resolved:
+                # Every family the text matcher can name is OSI-approved.
+                osi = True
             osi_label = "Yes" if osi is True else ("No" if osi is False else "Unknown")
+            if osi is True and resolved and not spdx_id:
+                osi_label = f"Yes (via {resolved} in licence text)"
             osi_passing = osi is True
             lic_pts += 1 if osi_passing else 0
             lic_lines.append(
                 f'<p><strong>OSI License Validation:</strong> {osi_label} {"✓" if osi_passing else "✗"}</p>'
             )
 
-            # 4–5. Not yet collected
-            lic_lines.append('<p><strong>License Exception Handling:</strong> Not yet collected</p>')
-            lic_lines.append('<p><strong>FAIR Metadata Assessment:</strong> Not yet collected</p>')
+            # 4–5. License exceptions and citation metadata
+            if fair_lic:
+                for key in ["license_exception_handling", "fair_metadata"]:
+                    lic_lines.append(_sub_row(flsub, key))
+                    if flsub.get(key, {}).get("passing"):
+                        lic_pts += 1
+            else:
+                lic_lines.append('<p><strong>License Exception Handling:</strong> Not yet collected</p>')
+                lic_lines.append('<p><strong>FAIR Metadata Assessment:</strong> Not yet collected</p>')
 
             lic_lines.append(f'<p><strong>Score:</strong> {lic_pts}/5</p>')
             section_422_data = "\n".join(lic_lines)
@@ -1161,18 +1239,6 @@ class MetricsOrchestrator:
             section_4210_lines.append(f'<p><strong>Score:</strong> {long_pts}/5</p>')
 
         section_4210_data = "\n".join(section_4210_lines) if section_4210_lines else None
-
-        def _sub_row(sub: Dict, key: str) -> str:
-            """Render one collector sub-score as a section row (plus any detail)."""
-            info = sub.get(key, {})
-            label = info.get("label", key)
-            if info.get("not_collected"):
-                return f'<p><strong>{label}:</strong> Not yet collected</p>'
-            mark = "✓" if info.get("passing") else "✗"
-            row = f'<p><strong>{label}:</strong> {info.get("value", "N/A")} {mark}</p>'
-            if info.get("detail"):
-                row += f'\n<p class="sub-detail">{info["detail"]}</p>'
-            return row
 
         # --- 4.2.5 Outreach (PDF §4.2.5 — 8 sub-metrics) ---
         outreach = sust.get("outreach", {})
