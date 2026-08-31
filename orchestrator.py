@@ -695,7 +695,7 @@ class MetricsOrchestrator:
         # in-flight packages is the useful range. The old inter-package delay
         # is applied per worker as a stagger.
         concurrency = int(
-            self.config.get("rate_limiting", {}).get("concurrent_packages", 4)
+            self.config.get("rate_limiting", {}).get("concurrent_packages", 2)
         )
         delay = self.config.get("rate_limiting", {}).get("delay_between_packages", 2)
         semaphore = asyncio.Semaphore(max(1, concurrency))

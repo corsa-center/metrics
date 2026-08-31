@@ -65,7 +65,9 @@ metric_weights:
 
 # Rate limiting
 rate_limiting:
-  concurrent_packages: 4     # packages collected in parallel (see process_all_software)
+  # 4 produced ~97 secondary-rate-limit 403s across a 67-package run; 2 keeps
+  # the speedup (55min -> ~11min sequential-to-concurrent) without the burst.
+  concurrent_packages: 2     # packages collected in parallel (see process_all_software)
   delay_between_packages: 2  # seconds, applied per worker as a stagger
   api_retry_attempts: 3
   api_retry_delay: 5  # seconds

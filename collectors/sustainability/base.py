@@ -54,7 +54,8 @@ class GitHubCollectorBase:
         """
         import asyncio
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        for attempt in range(2):
+        attempts = 3
+        for attempt in range(attempts):
             try:
                 response = await client.get(url, headers=self.github_headers)
                 if response.status_code == 200:
@@ -64,15 +65,22 @@ class GitHubCollectorBase:
                     return data.get("html_url", url)
                 if response.status_code == 404:
                     return None
-                if attempt == 0 and response.status_code in (429, 500, 502, 503):
-                    logger.warning(f"HTTP {response.status_code} checking {path}, retrying…")
-                    await asyncio.sleep(2)
+                # 403 is how GitHub signals a *secondary* rate limit — too many
+                # concurrent requests — not a permanent denial. Treating it as
+                # "file absent" turns throttling into a silent wrong answer.
+                if attempt < attempts - 1 and response.status_code in (403, 429, 500, 502, 503):
+                    retry_after = response.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
+                    logger.debug(
+                        f"HTTP {response.status_code} checking {path}, retrying in {delay:.0f}s"
+                    )
+                    await asyncio.sleep(delay)
                     continue
                 return None
             except Exception as e:
-                if attempt == 0:
+                if attempt < attempts - 1:
                     logger.debug(f"Error checking {path}: {e}, retrying…")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1 + attempt)
                     continue
                 return None
         return None

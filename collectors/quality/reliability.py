@@ -29,6 +29,7 @@ from urllib.parse import quote
 
 import httpx
 
+from collectors.rate_limit import search_get
 from collectors.sustainability.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
@@ -293,11 +294,12 @@ class ReliabilityCollector(GitHubCollectorBase):
 
         async def count(qualifier: str, date_range: str) -> int:
             q = f'repo:{owner}/{repo} is:issue {qualifier} created:{date_range}'
-            r = await client.get(
+            r = await search_get(
+                client,
                 f"https://api.github.com/search/issues?q={quote(q)}&per_page=1",
-                headers=self.github_headers,
+                self.github_headers,
             )
-            return r.json().get("total_count", 0) if r.status_code == 200 else 0
+            return r.json().get("total_count", 0) if r else 0
 
         recent_range = f"{recent_start}..{today}"
         prev_range = f"{prev_start}..{recent_start}"

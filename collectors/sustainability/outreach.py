@@ -24,6 +24,7 @@ from urllib.parse import quote
 
 import httpx
 
+from collectors.rate_limit import search_get
 from collectors.sustainability.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
@@ -176,12 +177,8 @@ class OutreachCollector(GitHubCollectorBase):
             for state in ("open", "closed"):
                 q = f'repo:{owner}/{repo} is:issue state:{state} label:"{label}"'
                 url = f"https://api.github.com/search/issues?q={quote(q)}&per_page=1"
-                try:
-                    resp = await client.get(url, headers=self.github_headers)
-                    counts[state] = resp.json().get("total_count", 0) if resp.status_code == 200 else 0
-                except Exception as e:
-                    logger.debug(f"Newcomer issue search failed for {label}/{state}: {e}")
-                    counts[state] = 0
+                resp = await search_get(client, url, self.github_headers)
+                counts[state] = resp.json().get("total_count", 0) if resp else 0
             if counts.get("open") or counts.get("closed"):
                 by_label[label] = counts
 
