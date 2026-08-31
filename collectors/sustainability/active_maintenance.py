@@ -20,6 +20,19 @@ from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
+# Community channels a project might link from its README, beyond the tracker.
+_CHANNEL_PATTERNS = {
+    "Mailing list": re.compile(r"mailing[- ]list|listserv|groups\.google\.com|majordomo|\bmailman\b", re.I),
+    "Chat (Slack/Discord/Matrix)": re.compile(r"slack\.com|discord\.(?:gg|com)|matrix\.to|gitter\.im|zulipchat", re.I),
+    "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
+    "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
+}
+
+# Over half the recently-active contributors going quiet is a real warning.
+_MAX_DEPARTURE_RATE = 0.5
+# At least two channels beyond the issue tracker.
+_MIN_CHANNELS = 2
+
 
 class ActiveMaintenanceCollector:
     """Collects active maintenance metrics from GitHub repositories"""
@@ -51,12 +64,16 @@ class ActiveMaintenanceCollector:
             releases,
             contributors,
             first_commit_date,
+            contributor_stats,
+            readme_text,
         ) = await asyncio.gather(
             self._get_repo_info(owner, repo),
             self._get_commit_activity(owner, repo),
             self._get_releases(owner, repo),
             self._get_contributors(owner, repo),
             self._get_first_commit_date(owner, repo),
+            self._get_contributor_stats(owner, repo),
+            self._get_readme(owner, repo),
             return_exceptions=True,
         )
 
@@ -76,12 +93,20 @@ class ActiveMaintenanceCollector:
         if isinstance(first_commit_date, Exception):
             logger.error(f"First commit fetch failed: {first_commit_date}")
             first_commit_date = None
+        if isinstance(contributor_stats, Exception):
+            logger.error(f"Contributor stats fetch failed: {contributor_stats}")
+            contributor_stats = []
+        if isinstance(readme_text, Exception):
+            logger.error(f"README fetch failed: {readme_text}")
+            readme_text = ""
 
         # Analyze
         maintenance_indicators = self._analyze_maintenance_indicators(repo_info, first_commit_date)
         commit_analysis = self._analyze_commits(commit_activity)
         release_analysis = self._analyze_releases(releases)
         contributor_analysis = self._analyze_contributors(contributors)
+        abandonment = self._analyze_abandonment(contributor_stats)
+        channels = self._analyze_channels(repo_info, readme_text)
 
         # Calculate score
         score = self._calculate_score(
@@ -96,8 +121,93 @@ class ActiveMaintenanceCollector:
             "commit_activity": commit_analysis,
             "release_activity": release_analysis,
             "contributor_activity": contributor_analysis,
+            "abandonment": abandonment,
+            "channels": channels,
             "score": score,
         }
+
+    async def _get_contributor_stats(self, owner: str, repo: str) -> List[Dict]:
+        """Per-contributor weekly commit history, in a single request.
+
+        GitHub computes this asynchronously and answers 202 while it works, so
+        one retry is allowed before giving up.
+        """
+        url = f"https://api.github.com/repos/{owner}/{repo}/stats/contributors"
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(url, headers=self.headers)
+                if resp.status_code == 202:
+                    await asyncio.sleep(3)
+                    resp = await client.get(url, headers=self.headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.debug(f"Error fetching contributor stats: {e}")
+        return []
+
+    async def _get_readme(self, owner: str, repo: str) -> str:
+        """README text, used to find community channels linked from it."""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"https://api.github.com/repos/{owner}/{repo}/readme",
+                    headers=self.headers,
+                )
+                if resp.status_code != 200:
+                    return ""
+                import base64
+                return base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
+        except Exception as e:
+            logger.debug(f"Error fetching README: {e}")
+            return ""
+
+    def _analyze_abandonment(self, stats: List[Dict]) -> Dict:
+        """Contributors who were active last year but have since gone quiet.
+
+        Compares the two most recent 52-week windows per contributor. Someone
+        who committed in the earlier window and not the later one has stopped;
+        a high share of those is the abandonment signal the report asks for.
+        """
+        if not stats:
+            return {"measurable": False, "previously_active": 0,
+                    "departed": 0, "departure_rate": None}
+
+        previously_active, departed = 0, 0
+        for contributor in stats:
+            weeks = contributor.get("weeks") or []
+            if len(weeks) < 104:
+                continue
+            prior = sum(w.get("c", 0) for w in weeks[-104:-52])
+            recent = sum(w.get("c", 0) for w in weeks[-52:])
+            if prior > 0:
+                previously_active += 1
+                if recent == 0:
+                    departed += 1
+
+        if previously_active == 0:
+            return {"measurable": False, "previously_active": 0,
+                    "departed": 0, "departure_rate": None}
+
+        return {
+            "measurable": True,
+            "previously_active": previously_active,
+            "departed": departed,
+            "departure_rate": round(departed / previously_active, 3),
+        }
+
+    def _analyze_channels(self, repo_info: Dict, readme: str) -> Dict:
+        """Community channels the project runs, beyond the issue tracker."""
+        found = []
+        if repo_info.get("has_discussions"):
+            found.append("GitHub Discussions")
+        if repo_info.get("has_wiki"):
+            found.append("Wiki")
+
+        for label, pattern in _CHANNEL_PATTERNS.items():
+            if readme and pattern.search(readme):
+                found.append(label)
+        return {"found": found, "count": len(found)}
 
     async def _get_repo_info(self, owner: str, repo: str) -> Dict:
         """Get basic repository info (archived status, description, pushed_at)."""

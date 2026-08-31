@@ -36,6 +36,7 @@ sustainability_collectors:
 quality_collectors:
   test_coverage: true       # 4.3.1 Test Coverage Excellence (Codecov)
   static_analysis: true     # 4.3.1 Enhanced Security Analysis (CodeQL)
+  reliability: true         # 4.3.1 Static analysis tools, hardening, defect trend
   ci_cd: true               # 4.3.2 CI/CD Effectiveness
   dev_tooling: true         # 4.3.2 testing, code review, tool integration
   reproducibility: true     # 4.3.3 Reproducibility
@@ -64,7 +65,8 @@ metric_weights:
 
 # Rate limiting
 rate_limiting:
-  delay_between_packages: 2  # seconds
+  concurrent_packages: 4     # packages collected in parallel (see process_all_software)
+  delay_between_packages: 2  # seconds, applied per worker as a stagger
   api_retry_attempts: 3
   api_retry_delay: 5  # seconds
 

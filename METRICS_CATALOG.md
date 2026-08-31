@@ -23,7 +23,7 @@ is a stub
 | 4.1.2 | Field Research Impact | ⬜ 0/3 |
 | 4.2.1 | CoC, Governance, and Contributor Guidelines | 5/5 |
 | 4.2.2 | Open-Source Licensing and FAIR Compliance | 5/5 |
-| 4.2.3 | Active Maintenance | 4/6 |
+| 4.2.3 | Active Maintenance | 6/6 |
 | 4.2.4 | Engagement | 7/7 |
 | 4.2.5 | Outreach | 5/8 |
 | 4.2.6 | Welcomeness | 1/7 |
@@ -31,7 +31,7 @@ is a stub
 | 4.2.8 | Financial Sustainability | 4/5 |
 | 4.2.9 | Institutional & Organizational Support | 1/5 |
 | 4.2.10 | Project Longevity and Community Health | 5/5 |
-| 4.3.1 | Reliability and Robustness | 2/5 |
+| 4.3.1 | Reliability and Robustness | 5/5 |
 | 4.3.2 | Development Practices | 5/5 |
 | 4.3.3 | Reproducibility | 5/5 |
 | 4.3.4 | Usability | 2/5 |
@@ -127,8 +127,8 @@ for every other project with a modified licence.)
 | Maintenance Mode Indicator Detection | ✅ | `archived` flag + description keywords |
 | Activity Trend Monitoring | ✅ | last 13 weeks vs previous 13 |
 | Release Pattern Assessment | ✅ | `/releases`, releases in last year |
-| Multi-Channel Communication Activity | 🔲 | — |
-| Contributor Abandonment Forecasting | 🔲 | — |
+| Multi-Channel Communication Activity | ✅ | Discussions / wiki flags plus mailing list, chat, forum and help-desk links in the README; passes at ≥2 |
+| Contributor Abandonment Forecasting | ✅ | contributors active in the prior 52 weeks who committed nothing in the last 52, from `/stats/contributors`; passes under 50% departure |
 
 ### 4.2.4 Engagement
 **Collector:** [`engagement.py`](collectors/sustainability/engagement.py)
@@ -278,15 +278,30 @@ creation (zfp, by one day), so the repo date is sometimes the longer span.
 
 ### 4.3.1 Reliability and Robustness
 **Collectors:** [`test_coverage.py`](collectors/quality/test_coverage.py),
-[`static_analysis.py`](collectors/quality/static_analysis.py)
+[`static_analysis.py`](collectors/quality/static_analysis.py),
+[`reliability.py`](collectors/quality/reliability.py)
+
+**Defects are counted by GitHub issue *type* first, then by label.** Issue types
+are a native field, separate from labels, and are what several of these projects
+use — HDF5 carries no `bug` label at all but has 479 Bug-typed issues, so a
+label-only query reported it as unmeasurable. A project that records defects
+neither way is reported as unmeasurable rather than scored 0-vs-0 "stable",
+which would be a fabricated pass. ADIOS2 is genuinely in that position: its last
+`bug`-labelled issue was October 2024.
+
+**Hardening flags are looked for beyond the root build file.** Large projects
+keep them elsewhere — HDF5's sanitizer setup lives in
+`config/sanitizer/sanitizers.cmake` — so the conventional CMake config
+directories are listed and any file whose name suggests flags is read, alongside
+the CI workflow definitions.
 
 | Sub-metric | Status | Source |
 |---|---|---|
-| Advanced Static Analysis | 🔲 | — |
+| Advanced Static Analysis | ✅ | defect-finding tools (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers) from configs and analysis workflows |
 | Enhanced Security Analysis | ✅ | CodeQL workflow presence |
-| CERT Guidelines Compliance | 🔲 | — |
+| CERT Guidelines Compliance | ✅ | hardening flags, sanitizers and explicit CERT/MISRA references — **practice indicators, not audited conformance** |
 | Test Coverage Excellence | ✅ | Codecov v2 public API; passes at ≥80% |
-| Reliability Trend Analysis | 🔲 | — |
+| Reliability Trend Analysis | ✅ | defect reports over two 52-week windows; stable or falling passes |
 
 Codecov's `api.codecov.io/api/v2/github/{owner}/repos/{repo}/` is public and
 unauthenticated for public repos. Repos with no active Codecov integration

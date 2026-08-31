@@ -503,6 +503,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Usability collection failed for {package['name']}: {e}")
 
+        # 4.3.1 Reliability — static analysis tools, hardening, defect trend
+        if self._sub_enabled("quality", "reliability"):
+            try:
+                from collectors.quality.reliability import ReliabilityCollector
+                collector = ReliabilityCollector(github_token=github_token)
+                sub_results["reliability"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Reliability collection failed for {package['name']}: {e}")
+
         # 4.3.6 Maintainability — tree composition, docs, refactoring activity
         if self._sub_enabled("quality", "maintainability"):
             try:
@@ -560,6 +569,8 @@ class MetricsOrchestrator:
             scores.append(sub_results["usability"].get("overall_score", {}).get("percentage", 0))
         if "maintainability" in sub_results:
             scores.append(sub_results["maintainability"].get("overall_score", {}).get("percentage", 0))
+        if "reliability" in sub_results:
+            scores.append(sub_results["reliability"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -673,20 +684,40 @@ class MetricsOrchestrator:
         software_list = self.prepare_software_list(filter_software)
         all_metrics = {}
 
-        for i, package in enumerate(software_list, 1):
-            logger.info(f"Processing {i}/{len(software_list)}: {package['name']}")
+        # Packages are independent, and each one spends nearly all its time
+        # waiting on the GitHub API, so they are processed in a small pool
+        # rather than strictly one after another. Sequentially this run took
+        # 55 minutes for 67 packages against a 120-minute job timeout, and the
+        # per-package request count has since roughly doubled.
+        #
+        # The pool is kept small on purpose: GitHub's secondary rate limits
+        # respond to concurrency, not just total volume, so a handful of
+        # in-flight packages is the useful range. The old inter-package delay
+        # is applied per worker as a stagger.
+        concurrency = int(
+            self.config.get("rate_limiting", {}).get("concurrent_packages", 4)
+        )
+        delay = self.config.get("rate_limiting", {}).get("delay_between_packages", 2)
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+        completed = 0
+        total = len(software_list)
 
-            try:
-                metrics = await self.collect_all_metrics(package)
-                all_metrics[package["repository"]] = metrics
+        async def process(package: Dict) -> None:
+            nonlocal completed
+            async with semaphore:
+                try:
+                    metrics = await self.collect_all_metrics(package)
+                    all_metrics[package["repository"]] = metrics
+                except Exception as e:
+                    logger.error(f"Failed to process {package['name']}: {e}")
+                finally:
+                    completed += 1
+                    logger.info(f"Processed {completed}/{total}: {package['name']}")
+                # Stagger the next acquisition rather than the whole run.
+                if delay:
+                    await asyncio.sleep(delay)
 
-                # Rate limiting
-                if i < len(software_list):
-                    await asyncio.sleep(2)  # 2 second delay between packages
-
-            except Exception as e:
-                logger.error(f"Failed to process {package['name']}: {e}")
-                continue
+        await asyncio.gather(*[process(p) for p in software_list])
 
         # Write output
         if not dry_run:
@@ -1063,9 +1094,37 @@ class MetricsOrchestrator:
                     f' (bus factor: {contribs.get("bus_factor", 0)})</p>'
                 )
 
-            # 5–6. Not yet collected
-            maint_lines.append('<p><strong>Multi-Channel Communication Activity:</strong> Not yet collected</p>')
-            maint_lines.append('<p><strong>Contributor Abandonment Forecasting:</strong> Not yet collected</p>')
+            # 5. Multi-Channel Communication Activity
+            channels = maintenance.get("channels", {})
+            ch_found = channels.get("found", [])
+            ch_ok = len(ch_found) >= 2
+            maint_pts += 1 if ch_ok else 0
+            maint_lines.append(
+                f'<p><strong>Multi-Channel Communication Activity:</strong> '
+                f'{len(ch_found)} channel{"s" if len(ch_found) != 1 else ""} '
+                f'{"✓" if ch_ok else "✗"}</p>'
+            )
+            if ch_found:
+                maint_lines.append(f'<p class="sub-detail">{", ".join(ch_found)}</p>')
+
+            # 6. Contributor Abandonment Forecasting — contributors active in the
+            #    previous year who have since stopped committing.
+            ab = maintenance.get("abandonment", {})
+            if ab.get("measurable"):
+                rate = ab.get("departure_rate", 0)
+                ab_ok = rate <= 0.5
+                maint_pts += 1 if ab_ok else 0
+                maint_lines.append(
+                    f'<p><strong>Contributor Abandonment Forecasting:</strong> '
+                    f'{ab.get("departed", 0)} of {ab.get("previously_active", 0)} '
+                    f'previously active contributors stopped ({rate * 100:.0f}%) '
+                    f'{"✓" if ab_ok else "✗"}</p>'
+                )
+            else:
+                maint_lines.append(
+                    '<p><strong>Contributor Abandonment Forecasting:</strong> '
+                    'Not enough contributor history to assess ✗</p>'
+                )
 
             maint_lines.append(f'<p><strong>Score:</strong> {maint_pts}/6</p>')
             section_423_data = "\n".join(maint_lines) if maint_lines else None
@@ -1355,8 +1414,16 @@ class MetricsOrchestrator:
         section_431_lines = []
         rel_pts = 0
         if test_coverage or static_analysis:
-            # 1. Advanced Static Analysis — not yet collected
-            section_431_lines.append('<p><strong>Advanced Static Analysis:</strong> Not yet collected</p>')
+            # 1. Advanced Static Analysis — defect-finding tools beyond CodeQL
+            reliability = qual.get("reliability", {})
+            rsub = reliability.get("overall_score", {}).get("sub_scores", {})
+            if reliability:
+                section_431_lines.append(_sub_row(rsub, "advanced_static_analysis"))
+                if rsub.get("advanced_static_analysis", {}).get("passing"):
+                    rel_pts += 1
+            else:
+                section_431_lines.append(
+                    '<p><strong>Advanced Static Analysis:</strong> Not yet collected</p>')
 
             # 2. Enhanced Security Analysis — CodeQL workflow presence
             if static_analysis:
@@ -1372,8 +1439,14 @@ class MetricsOrchestrator:
             else:
                 section_431_lines.append('<p><strong>Enhanced Security Analysis:</strong> Not yet collected</p>')
 
-            # 3. CERT Guidelines Compliance — not yet collected
-            section_431_lines.append('<p><strong>CERT Guidelines Compliance:</strong> Not yet collected</p>')
+            # 3. CERT Guidelines Compliance — secure-coding practice indicators
+            if reliability:
+                section_431_lines.append(_sub_row(rsub, "cert_compliance"))
+                if rsub.get("cert_compliance", {}).get("passing"):
+                    rel_pts += 1
+            else:
+                section_431_lines.append(
+                    '<p><strong>CERT Guidelines Compliance:</strong> Not yet collected</p>')
 
             # 4. Test Coverage Excellence — via Codecov public API
             if test_coverage.get("coverage_exists"):
@@ -1396,7 +1469,13 @@ class MetricsOrchestrator:
                     '<p><strong>Test Coverage Excellence:</strong> No Codecov data found ✗</p>'
                 )
 
-            section_431_lines.append('<p><strong>Reliability Trend Analysis:</strong> Not yet collected</p>')
+            if reliability:
+                section_431_lines.append(_sub_row(rsub, "reliability_trend"))
+                if rsub.get("reliability_trend", {}).get("passing"):
+                    rel_pts += 1
+            else:
+                section_431_lines.append(
+                    '<p><strong>Reliability Trend Analysis:</strong> Not yet collected</p>')
             section_431_lines.append(f'<p><strong>Score:</strong> {rel_pts}/5</p>')
         section_431_data = "\n".join(section_431_lines) if section_431_lines else None
 
