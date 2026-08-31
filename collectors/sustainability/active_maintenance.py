@@ -50,11 +50,13 @@ class ActiveMaintenanceCollector:
             commit_activity,
             releases,
             contributors,
+            first_commit_date,
         ) = await asyncio.gather(
             self._get_repo_info(owner, repo),
             self._get_commit_activity(owner, repo),
             self._get_releases(owner, repo),
             self._get_contributors(owner, repo),
+            self._get_first_commit_date(owner, repo),
             return_exceptions=True,
         )
 
@@ -71,9 +73,12 @@ class ActiveMaintenanceCollector:
         if isinstance(contributors, Exception):
             logger.error(f"Contributors fetch failed: {contributors}")
             contributors = []
+        if isinstance(first_commit_date, Exception):
+            logger.error(f"First commit fetch failed: {first_commit_date}")
+            first_commit_date = None
 
         # Analyze
-        maintenance_indicators = self._analyze_maintenance_indicators(repo_info)
+        maintenance_indicators = self._analyze_maintenance_indicators(repo_info, first_commit_date)
         commit_analysis = self._analyze_commits(commit_activity)
         release_analysis = self._analyze_releases(releases)
         contributor_analysis = self._analyze_contributors(contributors)
@@ -181,21 +186,66 @@ class ActiveMaintenanceCollector:
         return contributors
 
     @staticmethod
-    def _get_next_link(link_header: Optional[str]) -> Optional[str]:
-        """Parse the `next` URL out of a GitHub Link pagination header."""
+    def _get_rel_link(link_header: Optional[str], rel: str) -> Optional[str]:
+        """Parse the URL for a given `rel` out of a GitHub Link pagination header."""
         if not link_header:
             return None
         for part in link_header.split(","):
             segment = part.strip()
-            if 'rel="next"' in segment:
+            if f'rel="{rel}"' in segment:
                 return segment.split(";")[0].strip().strip("<>")
         return None
 
-    def _analyze_maintenance_indicators(self, repo_info: Dict) -> Dict:
+    @classmethod
+    def _get_next_link(cls, link_header: Optional[str]) -> Optional[str]:
+        """Parse the `next` URL out of a GitHub Link pagination header."""
+        return cls._get_rel_link(link_header, "next")
+
+    async def _get_first_commit_date(self, owner: str, repo: str) -> Optional[str]:
+        """Date of the repository's oldest commit.
+
+        GitHub has no direct endpoint for this, but asking for one commit per page
+        makes the `rel="last"` Link header point at the final (oldest) commit, so
+        this costs two requests regardless of history size.
+
+        This is the age of the *code history*, which for projects that imported an
+        earlier VCS is much older than the GitHub repository itself — HDF5's first
+        commit is from 1997, 23 years before its repo was created.
+        """
+        url = f"https://api.github.com/repos/{owner}/{repo}/commits?per_page=1"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(url, headers=self.headers)
+                if resp.status_code != 200:
+                    return None
+
+                last_url = self._get_rel_link(resp.headers.get("Link"), "last")
+                if not last_url:
+                    # Single page of history: the commit already in hand is the oldest.
+                    data = resp.json()
+                    if not data:
+                        return None
+                    return data[0].get("commit", {}).get("committer", {}).get("date")
+
+                resp = await client.get(last_url, headers=self.headers)
+                if resp.status_code != 200:
+                    return None
+                data = resp.json()
+                if not data:
+                    return None
+                return data[0].get("commit", {}).get("committer", {}).get("date")
+        except Exception as e:
+            logger.debug(f"Error fetching first commit: {e}")
+            return None
+
+    def _analyze_maintenance_indicators(
+        self, repo_info: Dict, first_commit_date: Optional[str] = None
+    ) -> Dict:
         """Check for maintenance mode indicators."""
         archived = repo_info.get("archived", False)
         description = (repo_info.get("description") or "").lower()
         pushed_at = repo_info.get("pushed_at")
+        created_at = repo_info.get("created_at")
 
         # Check description for maintenance signals
         maintenance_keywords = [
@@ -211,10 +261,40 @@ class ActiveMaintenanceCollector:
             pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
             days_since_push = (datetime.now(timezone.utc) - pushed_dt).days
 
+        # Two different ages, deliberately reported separately.
+        #
+        #   repo_age_years    — since the GitHub repository was created. Understates
+        #                       projects that migrated from another VCS: HDF5's repo
+        #                       dates to 2020, the software to the 1990s.
+        #   history_age_years — since the oldest commit. Captures imported history,
+        #                       but a repo created empty can have its first commit
+        #                       land *after* creation (zfp, by a day), and a
+        #                       history rewrite resets it.
+        #
+        # project_age_years takes the longer of the two as the best available
+        # estimate, and both source dates are kept so the figure can be checked.
+        now = datetime.now(timezone.utc)
+
+        def _years_since(date_str: Optional[str]) -> Optional[float]:
+            if not date_str:
+                return None
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            return round((now - dt).days / 365.25, 1)
+
+        repo_age_years = _years_since(created_at)
+        history_age_years = _years_since(first_commit_date)
+        known_ages = [a for a in (repo_age_years, history_age_years) if a is not None]
+        project_age_years = max(known_ages) if known_ages else None
+
         return {
             "archived": archived,
             "maintenance_signals": maintenance_signals,
             "days_since_last_push": days_since_push,
+            "created_at": created_at,
+            "first_commit_date": first_commit_date,
+            "repo_age_years": repo_age_years,
+            "history_age_years": history_age_years,
+            "project_age_years": project_age_years,
         }
 
     def _analyze_commits(self, commit_data: Dict) -> Dict:

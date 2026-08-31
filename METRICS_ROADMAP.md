@@ -24,11 +24,11 @@ No significant post-processing required.
 
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
-| [#8](https://github.com/corsa-center/metrics/issues/8) | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/sustainability/chaoss_governance.py` | ✅ Done |
+| [#8](https://github.com/corsa-center/metrics/issues/8) | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/sustainability/community_health.py` + `chaoss_governance.py` | ✅ Done (partial — docs, CHAOSS, OpenSSF badge/scorecard; keyword & effectiveness analysis TBD) |
 | [#9](https://github.com/corsa-center/metrics/issues/9) | 4.2.2 Open-Source Licensing & FAIR Compliance | `collectors/sustainability/licensing.py` | ✅ Done |
 | [#10](https://github.com/corsa-center/metrics/issues/10) | 4.2.3 Active Maintenance | `collectors/sustainability/active_maintenance.py` | ✅ Done |
-| [#16](https://github.com/corsa-center/metrics/issues/16) | 4.2.10 Project Longevity & Community Health | `collectors/sustainability/community_health.py` | ✅ Done |
-| [#18](https://github.com/corsa-center/metrics/issues/18) | 4.3.2 Development Practices (CI/CD) | `collectors/quality/development_practices/ci_cd.py` | ✅ Done |
+| [#16](https://github.com/corsa-center/metrics/issues/16) | 4.2.10 Project Longevity & Community Health | `orchestrator.py` (derived from `active_maintenance.py`) | ✅ Done |
+| [#18](https://github.com/corsa-center/metrics/issues/18) | 4.3.2 Development Practices | `ci_cd.py` + `dev_tooling.py` | ✅ Done (5/5) |
 | [#21](https://github.com/corsa-center/metrics/issues/21) | 4.3.5 Accessibility (portable build systems) | `collectors/quality/accessibility.py` | ✅ Done |
 | — | **OpenSSF Best Practices Badge** (Quality) | `collectors/sustainability/openssf_badge.py` | ✅ Done |
 | — | **OpenSSF Scorecard** (Sustainability) | `collectors/sustainability/openssf_scorecard.py` | ✅ Done |
@@ -39,6 +39,12 @@ No significant post-processing required.
 
 - All data is a single API call or file-existence check — no ML, no scraping, no
   domain expertise required.
+- **4.2.10** has no collector of its own. All five of its sub-metrics are
+  re-derived in `_transform_for_dashboard` from data `ActiveMaintenanceCollector`
+  already fetches for 4.2.3, so the section costs zero additional API calls.
+  Note that `community_health.py`, despite its name, is the **4.2.1** collector
+  (Code of Conduct / GOVERNANCE / CONTRIBUTING file detection) and is not
+  involved in 4.2.10.
 - The three recommended new metrics are the lightest of all: each returns a
   pre-computed score from a free public API.
   - **OpenSSF Scorecard**: 3 projects (ADIOS, Viskores, PnetCDF) already report
@@ -67,11 +73,11 @@ static analysis tool runs, or non-trivial content parsing.
 |-------|--------|-----------|--------|
 | [#6](https://github.com/corsa-center/metrics/issues/6) | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` | ✅ Done (partial — CITATION.cff/DOI; advanced deps TBD) |
 | [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/sustainability/engagement.py` | ✅ Done |
-| [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | — | 🔲 Todo |
+| [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | `collectors/sustainability/outreach.py` | ✅ Done (partial — 5/8; event & training data not in the repo) |
 | [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | `collectors/quality/test_coverage.py` | ✅ Done (partial — Test Coverage Excellence via Codecov; static analysis/CERT/trend TBD) |
 | [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done |
 | [#20](https://github.com/corsa-center/metrics/issues/20) | 4.3.4 Usability | — | 🔲 Todo |
-| [#22](https://github.com/corsa-center/metrics/issues/22) | 4.3.6 Maintainability & Understandability | — | 🔲 Todo |
+| [#22](https://github.com/corsa-center/metrics/issues/22) | 4.3.6 Maintainability & Understandability | `orchestrator.py` (bus factor from `active_maintenance.py`) | ✅ Done (partial — Knowledge Distribution only; complexity/quality/docs TBD) |
 
 ---
 
@@ -84,8 +90,8 @@ ML models, specialized runtime instrumentation, or qualitative judgment.
 |-------|--------|-----------|--------|
 | [#7](https://github.com/corsa-center/metrics/issues/7) | 4.1.2 Field Research Impact | — | 🔲 Todo |
 | [#13](https://github.com/corsa-center/metrics/issues/13) | 4.2.7 Collaboration | — | 🔲 Todo |
-| [#14](https://github.com/corsa-center/metrics/issues/14) | 4.2.8 Financial Sustainability | — | 🔲 Todo |
-| [#15](https://github.com/corsa-center/metrics/issues/15) | 4.2.9 Institutional & Organizational Support | — | 🔲 Todo |
+| [#14](https://github.com/corsa-center/metrics/issues/14) | 4.2.8 Financial Sustainability | `collectors/sustainability/funding.py` | ✅ Done (partial — 4/5; NIH R50 via RePORTER still TBD) |
+| [#15](https://github.com/corsa-center/metrics/issues/15) | 4.2.9 Institutional & Organizational Support | `collectors/sustainability/funding.py` | ✅ Done (partial — 1/5; RSE/policy detection needs directory data) |
 | [#23](https://github.com/corsa-center/metrics/issues/23) | 4.3.7 Performance & Efficiency | — | 🔲 Todo |
 
 ### Why hard
@@ -94,9 +100,9 @@ ML models, specialized runtime instrumentation, or qualitative judgment.
   + HPC facility web scraping + DOI cross-referencing.
 - **4.2.7 Collaboration**: Multi-platform dependency mapping and cross-project
   PR/issue network analysis.
-- **4.2.8 Financial Sustainability**: Funding amounts are often confidential;
-  requires `FUNDING.yml` parsing, NIH award DB lookups, and manual research.
-- **4.2.9 Institutional Support**: RSE position detection requires LinkedIn API
-  and institutional directory scraping; cannot be reliably automated.
+- **4.2.8 / 4.2.9**: the automatable parts (funding manifests, README award
+  numbers, contributor affiliations) shipped in `funding.py`. What stays hard is
+  funding *amounts*, which are often confidential, and RSE position detection,
+  which needs LinkedIn or institutional directory data.
 - **4.3.7 Performance & Efficiency**: Requires running benchmarks on target
   hardware, GPU/CPU profiling (RAPL, NVML), and domain expertise to interpret.

@@ -14,13 +14,29 @@ collectors:
   sustainability: true      # 4.2 Sustainability (governance, licensing, maintenance, engagement, ...)
   quality: true             # 4.3 Quality (reliability, dev practices, reproducibility, usability, ...)
 
-# Fine-grained toggles for individual sustainability sub-collectors (4.2.x)
+# Fine-grained toggles for individual sub-collectors.
+# Omitted keys default to true, so removing a block runs everything.
+# Turning one off skips its API calls and drops it from the dimension average
+# (it does not score zero); the sections it feeds then render "Not yet collected".
+
 sustainability_collectors:
-  community_health: true    # 4.2.1 CoC, Governance, Contributor Guidelines
+  community_health: true    # 4.2.1 governance docs (CoC, GOVERNANCE, CONTRIBUTING)
+  chaoss_activity: true     # 4.2.1 CHAOSS Governance Metrics
+  openssf_scorecard: true   # 4.2.1 OpenSSF Scorecard
+  openssf_badge: true       # 4.2.1 + 4.3.2 OpenSSF Best Practices badge
   licensing: true           # 4.2.2 Licensing and FAIR Compliance
-  active_maintenance: true  # 4.2.3 Active Maintenance
-  chaoss_activity: true     # 4.2.4 CHAOSS Activity Metrics (issues, PRs, releases, docs)
-  openssf_badge: true       # 4.2.5 OpenSSF Best Practices Badge
+  active_maintenance: true  # 4.2.3 Active Maintenance, and 4.2.10 + 4.3.6 are derived from it
+  engagement: true          # 4.2.4 Engagement
+  outreach: true            # 4.2.5 Outreach
+  funding: true             # 4.2.8 Financial + 4.2.9 Institutional Support
+
+quality_collectors:
+  test_coverage: true       # 4.3.1 Test Coverage Excellence (Codecov)
+  static_analysis: true     # 4.3.1 Enhanced Security Analysis (CodeQL)
+  ci_cd: true               # 4.3.2 CI/CD Effectiveness
+  dev_tooling: true         # 4.3.2 testing, code review, tool integration
+  reproducibility: true     # 4.3.3 Reproducibility
+  accessibility: true       # 4.3.5 Accessibility
 
 # API credentials
 api_credentials:

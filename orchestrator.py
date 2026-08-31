@@ -75,6 +75,9 @@ class MetricsOrchestrator:
         ).rstrip("/")
         self.output_path = Path(self.config.get("output_path", "./output"))
         self.collectors_enabled = self.config.get("collectors", {})
+        # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
+        self.sustainability_collectors = self.config.get("sustainability_collectors", {})
+        self.quality_collectors = self.config.get("quality_collectors", {})
 
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file, resolving ${ENV_VAR} references"""
@@ -266,6 +269,15 @@ class MetricsOrchestrator:
             logger.error(f"Impact dimension collection failed for {package['name']}: {e}")
             return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
+    def _sub_enabled(self, group: str, key: str) -> bool:
+        """Whether an individual sub-collector is enabled.
+
+        Defaults to True when the toggle group or key is absent, so a config
+        predating these blocks keeps running every sub-collector.
+        """
+        toggles = self.sustainability_collectors if group == "sustainability" else self.quality_collectors
+        return toggles.get(key, True)
+
     def _get_github_token(self) -> Optional[str]:
         """Extract GitHub token from resolved config"""
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
@@ -285,60 +297,85 @@ class MetricsOrchestrator:
         sub_results = {}
 
         # 4.2.1 CoC, Governance, and Contributor Guidelines
-        try:
-            from collectors.sustainability.community_health import CommunityHealthCollector
-            collector = CommunityHealthCollector(github_token=github_token)
-            sub_results["governance"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Governance collection failed for {package['name']}: {e}")
+        if self._sub_enabled("sustainability", "community_health"):
+            try:
+                from collectors.sustainability.community_health import CommunityHealthCollector
+                collector = CommunityHealthCollector(github_token=github_token)
+                sub_results["governance"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Governance collection failed for {package['name']}: {e}")
 
         # 4.2.2 Licensing and FAIR Compliance
-        try:
-            from collectors.sustainability.licensing import LicensingCollector
-            collector = LicensingCollector(github_token=github_token)
-            sub_results["licensing"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Licensing collection failed for {package['name']}: {e}")
+        if self._sub_enabled("sustainability", "licensing"):
+            try:
+                from collectors.sustainability.licensing import LicensingCollector
+                collector = LicensingCollector(github_token=github_token)
+                sub_results["licensing"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Licensing collection failed for {package['name']}: {e}")
 
         # 4.2.3 Active Maintenance
-        try:
-            from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
-            collector = ActiveMaintenanceCollector(github_token=github_token)
-            sub_results["maintenance"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
+        if self._sub_enabled("sustainability", "active_maintenance"):
+            try:
+                from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+                collector = ActiveMaintenanceCollector(github_token=github_token)
+                sub_results["maintenance"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
 
         # 4.2.4 CHAOSS Activity Metrics
-        try:
-            from collectors.sustainability.chaoss_governance import CHAOSSGovernanceCollector
-            collector = CHAOSSGovernanceCollector(github_token=github_token)
-            sub_results["chaoss_activity"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")
+        if self._sub_enabled("sustainability", "chaoss_activity"):
+            try:
+                from collectors.sustainability.chaoss_governance import CHAOSSGovernanceCollector
+                collector = CHAOSSGovernanceCollector(github_token=github_token)
+                sub_results["chaoss_activity"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")
 
         # 4.2.5 OpenSSF Best Practices Badge
-        try:
-            from collectors.sustainability.openssf_badge import OpenSSFBadgeCollector
-            collector = OpenSSFBadgeCollector(github_token=github_token)
-            sub_results["openssf_badge"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
+        if self._sub_enabled("sustainability", "openssf_badge"):
+            try:
+                from collectors.sustainability.openssf_badge import OpenSSFBadgeCollector
+                collector = OpenSSFBadgeCollector(github_token=github_token)
+                sub_results["openssf_badge"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
 
         # 4.2.4 Engagement — issue/PR response times, open/close ratios
-        try:
-            from collectors.sustainability.engagement import EngagementCollector
-            collector = EngagementCollector(github_token=github_token)
-            sub_results["engagement"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Engagement collection failed for {package['name']}: {e}")
+        if self._sub_enabled("sustainability", "engagement"):
+            try:
+                from collectors.sustainability.engagement import EngagementCollector
+                collector = EngagementCollector(github_token=github_token)
+                sub_results["engagement"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Engagement collection failed for {package['name']}: {e}")
+
+        # 4.2.5 Outreach — newcomer growth, retention, onboarding infrastructure
+        if self._sub_enabled("sustainability", "outreach"):
+            try:
+                from collectors.sustainability.outreach import OutreachCollector
+                collector = OutreachCollector(github_token=github_token)
+                sub_results["outreach"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Outreach collection failed for {package['name']}: {e}")
+
+        # 4.2.8 + 4.2.9 Funding and institutional affiliation
+        if self._sub_enabled("sustainability", "funding"):
+            try:
+                from collectors.sustainability.funding import FundingCollector
+                collector = FundingCollector(github_token=github_token)
+                sub_results["funding"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Funding collection failed for {package['name']}: {e}")
 
         # OpenSSF Scorecard
-        try:
-            from collectors.sustainability.openssf_scorecard import OpenSSFScorecardCollector
-            collector = OpenSSFScorecardCollector(github_token=github_token)
-            sub_results["openssf_scorecard"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")
+        if self._sub_enabled("sustainability", "openssf_scorecard"):
+            try:
+                from collectors.sustainability.openssf_scorecard import OpenSSFScorecardCollector
+                collector = OpenSSFScorecardCollector(github_token=github_token)
+                sub_results["openssf_scorecard"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")
 
         # Calculate combined sustainability score from available sub-collectors
         scores = []
@@ -360,6 +397,10 @@ class MetricsOrchestrator:
             pct = sub_results["openssf_scorecard"].get("percentage")
             if pct is not None:
                 scores.append(pct)
+        if "outreach" in sub_results:
+            scores.append(sub_results["outreach"].get("overall_score", {}).get("percentage", 0))
+        if "funding" in sub_results:
+            scores.append(sub_results["funding"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -385,44 +426,58 @@ class MetricsOrchestrator:
         sub_results = {}
 
         # 4.3.2 Development Practices — CI/CD metrics
-        try:
-            from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
-            collector = CICDMetricsCollector(self.config)
-            sub_results["ci_cd"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
+        if self._sub_enabled("quality", "ci_cd"):
+            try:
+                from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
+                collector = CICDMetricsCollector(self.config)
+                sub_results["ci_cd"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
 
         # 4.3.3 Reproducibility — containers, lock files, FAIR4RS metadata, semver
-        try:
-            from collectors.quality.reproducibility import ReproducibilityCollector
-            collector = ReproducibilityCollector(github_token=github_token)
-            sub_results["reproducibility"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Reproducibility collection failed for {package['name']}: {e}")
+        if self._sub_enabled("quality", "reproducibility"):
+            try:
+                from collectors.quality.reproducibility import ReproducibilityCollector
+                collector = ReproducibilityCollector(github_token=github_token)
+                sub_results["reproducibility"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Reproducibility collection failed for {package['name']}: {e}")
 
         # 4.3.5 Accessibility — portable build systems and containers
-        try:
-            from collectors.quality.accessibility import AccessibilityCollector
-            collector = AccessibilityCollector(github_token=github_token)
-            sub_results["accessibility"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
+        if self._sub_enabled("quality", "accessibility"):
+            try:
+                from collectors.quality.accessibility import AccessibilityCollector
+                collector = AccessibilityCollector(github_token=github_token)
+                sub_results["accessibility"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
 
         # 4.3.1 Test Coverage Excellence — via Codecov public API
-        try:
-            from collectors.quality.test_coverage import TestCoverageCollector
-            collector = TestCoverageCollector(github_token=github_token)
-            sub_results["test_coverage"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
+        if self._sub_enabled("quality", "test_coverage"):
+            try:
+                from collectors.quality.test_coverage import TestCoverageCollector
+                collector = TestCoverageCollector(github_token=github_token)
+                sub_results["test_coverage"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
+
+        # 4.3.2 Testing frameworks, code review coverage, tooling integration
+        if self._sub_enabled("quality", "dev_tooling"):
+            try:
+                from collectors.quality.development_practices.dev_tooling import DevToolingCollector
+                collector = DevToolingCollector(github_token=github_token)
+                sub_results["dev_tooling"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Dev tooling collection failed for {package['name']}: {e}")
 
         # 4.3.1 Enhanced Security Analysis — CodeQL workflow presence
-        try:
-            from collectors.quality.static_analysis import StaticAnalysisCollector
-            collector = StaticAnalysisCollector(github_token=github_token)
-            sub_results["static_analysis"] = await collector.collect(package)
-        except Exception as e:
-            logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
+        if self._sub_enabled("quality", "static_analysis"):
+            try:
+                from collectors.quality.static_analysis import StaticAnalysisCollector
+                collector = StaticAnalysisCollector(github_token=github_token)
+                sub_results["static_analysis"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
 
         scores = []
         if "ci_cd" in sub_results:
@@ -435,6 +490,8 @@ class MetricsOrchestrator:
             scores.append(sub_results["test_coverage"].get("coverage_percentage", 0))
         if "static_analysis" in sub_results:
             scores.append(100 if sub_results["static_analysis"].get("has_codeql") else 0)
+        if "dev_tooling" in sub_results:
+            scores.append(sub_results["dev_tooling"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -676,6 +733,7 @@ class MetricsOrchestrator:
         # 5. Governance Effectiveness Assessment
         governance = sust.get("governance", {})
         scorecard  = sust.get("openssf_scorecard", {})
+        chaoss     = sust.get("chaoss_activity", {})
         gov_lines  = []
         gov_pts    = 0
         if governance or scorecard:
@@ -737,8 +795,31 @@ class MetricsOrchestrator:
             else:
                 gov_lines.append('<p><strong>OpenSSF Badge Integration:</strong> Not yet collected</p>')
 
-            # 4–5. Not yet collected
-            gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+            # 4. CHAOSS Governance Metrics — weighted CHAOSS health score.
+            # CHAOSSGovernanceCollector was already being run for the dimension
+            # score; this surfaces it in the section it belongs to. "Good" (>= 60)
+            # is the collector's own threshold for a passing project.
+            if chaoss:
+                chaoss_score = chaoss.get("overall_score", {})
+                score_val = chaoss_score.get("score", 0)
+                status = chaoss_score.get("status", "unknown")
+                chaoss_ok = score_val >= 60
+                gov_pts += 1 if chaoss_ok else 0
+                gov_lines.append(
+                    f'<p><strong>CHAOSS Governance Metrics:</strong> '
+                    f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
+                )
+                # Per-category breakdown, weakest first, so the failing areas
+                # are what a maintainer sees rather than just the headline score.
+                cats = chaoss_score.get("category_scores", {})
+                for name, val in sorted(cats.items(), key=lambda kv: kv[1]):
+                    gov_lines.append(
+                        f'<p class="sub-detail">{name.replace("_", " ").title()}: {round(val)}/100</p>'
+                    )
+            else:
+                gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+
+            # 5. Not yet collected
             gov_lines.append('<p><strong>Governance Effectiveness Assessment:</strong> Not yet collected</p>')
 
             gov_lines.append(f'<p><strong>Score:</strong> {gov_pts}/5</p>')
@@ -896,6 +977,206 @@ class MetricsOrchestrator:
         else:
             section_424_data = None
 
+        # --- 4.2.10 Project Longevity and Community Health (PDF §4.2.10 — 5 sub-metrics) ---
+        # 1. Comprehensive Activity Analysis   2. Contributor Viability Assessment
+        # 3. Maintenance Mode Detection        4. Community Health Trends
+        # 5. Project Lifecycle Assessment
+        #
+        # Every value here is re-derived from data ActiveMaintenanceCollector already
+        # fetched for 4.2.3 — this section costs no additional API calls. The overlap
+        # with 4.2.3 is intentional: the CASS report scores maintenance activity and
+        # long-term viability as separate concerns over the same underlying signals.
+        section_4210_lines = []
+        long_pts = 0
+        if maintenance:
+            indicators = maintenance.get("maintenance_indicators", {})
+            commits    = maintenance.get("commit_activity", {})
+            releases   = maintenance.get("release_activity", {})
+            contribs   = maintenance.get("contributor_activity", {})
+
+            # 1. Comprehensive Activity Analysis — commits, releases and sustained
+            #    activity treated as three dimensions; 2 of 3 counts as viable.
+            commits_52w   = commits.get("total_commits_52w", 0)
+            active_weeks  = commits.get("active_weeks_52w", 0)
+            rel_last_year = releases.get("releases_last_year", 0)
+            dims_active = sum([
+                commits_52w > 0,
+                rel_last_year >= 1,
+                active_weeks >= 26,   # committed in at least half the weeks of the year
+            ])
+            activity_ok = dims_active >= 2
+            long_pts += 1 if activity_ok else 0
+            section_4210_lines.append(
+                f'<p><strong>Comprehensive Activity Analysis:</strong> '
+                f'{dims_active}/3 dimensions active {"✓" if activity_ok else "✗"}</p>'
+            )
+            section_4210_lines.append(
+                f'<p class="sub-detail">{commits_52w:,} commits and {rel_last_year} '
+                f'release(s) in the last year; active in {active_weeks}/52 weeks</p>'
+            )
+
+            # 2. Contributor Viability Assessment — bus factor. Threshold (>= 3) matches
+            #    active_maintenance.py and 4.3.6 so the same number can't read healthy
+            #    in one section and at-risk in another.
+            bus_factor = contribs.get("bus_factor", 0)
+            total_contribs = contribs.get("total_contributors", 0)
+            viable = bus_factor >= 3
+            long_pts += 1 if viable else 0
+            section_4210_lines.append(
+                f'<p><strong>Contributor Viability Assessment:</strong> '
+                f'Bus factor {bus_factor} {"✓" if viable else "✗"}</p>'
+            )
+            section_4210_lines.append(
+                f'<p class="sub-detail">{total_contribs} contributors; top contributor '
+                f'{contribs.get("top_contributor_pct", 0)}% of commits</p>'
+            )
+
+            # 3. Maintenance Mode Detection — archive status, maintenance keywords in
+            #    the description, and a year without a push all count as warnings.
+            days_since_push = indicators.get("days_since_last_push")
+            warnings = []
+            if indicators.get("archived"):
+                warnings.append("repository archived")
+            if indicators.get("maintenance_signals"):
+                warnings.extend(indicators["maintenance_signals"])
+            if days_since_push is not None and days_since_push > 365:
+                warnings.append(f"no push in {days_since_push} days")
+            no_warnings = not warnings
+            long_pts += 1 if no_warnings else 0
+            section_4210_lines.append(
+                f'<p><strong>Maintenance Mode Detection:</strong> '
+                f'{"No warning indicators" if no_warnings else ", ".join(warnings).capitalize()} '
+                f'{"✓" if no_warnings else "✗"}</p>'
+            )
+
+            # 4. Community Health Trends — 52-week commit trend from /stats/participation.
+            trend = commits.get("recent_trend", "unknown")
+            trend_ok = trend in ("stable", "increasing")
+            long_pts += 1 if trend_ok else 0
+            section_4210_lines.append(
+                f'<p><strong>Community Health Trends:</strong> '
+                f'{trend.capitalize()} {"✓" if trend_ok else "✗"}</p>'
+            )
+
+            # 5. Project Lifecycle Assessment — stage from project age crossed with
+            #    current release activity. Emerging projects haven't yet demonstrated
+            #    the longevity this section measures, so they don't score the point.
+            #    Age is the longer of the repository's and the code history's, since
+            #    migrated projects are far older than their GitHub repo.
+            age = indicators.get("project_age_years")
+            if age is None:
+                age = indicators.get("repo_age_years")
+            if age is None:
+                stage = "Unknown"
+            elif indicators.get("archived"):
+                stage = "Retired"
+            elif age < 2:
+                stage = "Emerging"
+            elif age < 5:
+                stage = "Growing"
+            elif rel_last_year >= 1 or commits_52w > 0:
+                stage = "Mature"
+            else:
+                stage = "Legacy"
+            lifecycle_ok = stage in ("Growing", "Mature")
+            long_pts += 1 if lifecycle_ok else 0
+            section_4210_lines.append(
+                f'<p><strong>Project Lifecycle Assessment:</strong> '
+                f'{stage} {"✓" if lifecycle_ok else "✗"}</p>'
+            )
+            # Report both source dates rather than a single age: they can differ by
+            # decades for a project that migrated to GitHub, and which one is the
+            # honest figure depends on whether history was imported.
+            age_parts = []
+            if indicators.get("first_commit_date"):
+                age_parts.append(
+                    f'first commit {indicators["first_commit_date"][:10]} '
+                    f'({indicators.get("history_age_years")} yrs)'
+                )
+            if indicators.get("created_at"):
+                age_parts.append(
+                    f'GitHub repo created {indicators["created_at"][:10]} '
+                    f'({indicators.get("repo_age_years")} yrs)'
+                )
+            age_text = "; ".join(age_parts) if age_parts else "age unknown"
+            section_4210_lines.append(f'<p class="sub-detail">Project age: {age_text}</p>')
+
+            section_4210_lines.append(f'<p><strong>Score:</strong> {long_pts}/5</p>')
+
+        section_4210_data = "\n".join(section_4210_lines) if section_4210_lines else None
+
+        def _sub_row(sub: Dict, key: str) -> str:
+            """Render one collector sub-score as a section row (plus any detail)."""
+            info = sub.get(key, {})
+            label = info.get("label", key)
+            if info.get("not_collected"):
+                return f'<p><strong>{label}:</strong> Not yet collected</p>'
+            mark = "✓" if info.get("passing") else "✗"
+            row = f'<p><strong>{label}:</strong> {info.get("value", "N/A")} {mark}</p>'
+            if info.get("detail"):
+                row += f'\n<p class="sub-detail">{info["detail"]}</p>'
+            return row
+
+        # --- 4.2.5 Outreach (PDF §4.2.5 — 8 sub-metrics) ---
+        outreach = sust.get("outreach", {})
+        if outreach:
+            osub = outreach.get("overall_score", {}).get("sub_scores", {})
+            out_lines = [
+                _sub_row(osub, key) for key in [
+                    "new_contributor_tracking",
+                    "contributor_retention",
+                    "contributor_lifecycle",
+                    "contribution_type_diversity",
+                    "good_first_issue",
+                    "external_event_participation",
+                    "training_material_integration",
+                    "onboarding_infrastructure",
+                ]
+            ]
+            out_lines.append(
+                f'<p><strong>Score:</strong> {outreach.get("overall_score", {}).get("score", 0)}/8</p>'
+            )
+            section_425_data = "\n".join(out_lines)
+        else:
+            section_425_data = None
+
+        # --- 4.2.8 Financial Sustainability / 4.2.9 Institutional Support ---
+        # One collector serves both: they rest on the same funding documentation
+        # and contributor-affiliation pass.
+        funding = sust.get("funding", {})
+        if funding:
+            fsub = funding.get("overall_score", {}).get("sub_scores", {})
+            fin_lines = [
+                _sub_row(fsub, key) for key in [
+                    "funding_documentation",
+                    "institutional_affiliation",
+                    "nih_r50",
+                    "corporate_sponsorship",
+                    "funding_portfolio",
+                ]
+            ]
+            fin_lines.append(
+                f'<p><strong>Score:</strong> {funding.get("overall_score", {}).get("score", 0)}/5</p>'
+            )
+            section_428_data = "\n".join(fin_lines)
+
+            # 4.2.9 — only Institutional Support Tracking is derivable from the
+            # repository. RSE titles, career development and institutional policy
+            # need directory data the report itself flags as unautomatable.
+            inst_row = _sub_row(fsub, "institutional_support")
+            inst_pts = 1 if fsub.get("institutional_support", {}).get("passing") else 0
+            section_429_data = "\n".join([
+                '<p><strong>RSE Position Detection:</strong> Not yet collected</p>',
+                inst_row,
+                '<p><strong>Career Development Indicators:</strong> Not yet collected</p>',
+                '<p><strong>NIH R50 Award Integration:</strong> Not yet collected</p>',
+                '<p><strong>Institutional Policy Analysis:</strong> Not yet collected</p>',
+                f'<p><strong>Score:</strong> {inst_pts}/5</p>',
+            ])
+        else:
+            section_428_data = None
+            section_429_data = None
+
         qual = dims.get("quality", {}).get("sub_results", {})
 
         # --- 4.3.1 Reliability and Robustness (PDF §4.3.1 — 5 sub-metrics) ---
@@ -1017,13 +1298,21 @@ class MetricsOrchestrator:
                 section_432_lines.append(
                     '<p><strong>CI/CD Effectiveness Assessment:</strong> Not yet collected</p>'
                 )
-            # 2–4. Not yet collected
-            for label in [
-                "Testing Framework Excellence",
-                "Code Review Quality Analysis",
-                "Development Tool Integration",
-            ]:
-                section_432_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
+            # 2–4. Testing, review coverage and tooling integration
+            dev_tooling = qual.get("dev_tooling", {})
+            if dev_tooling:
+                dsub = dev_tooling.get("overall_score", {}).get("sub_scores", {})
+                for key in ["testing_framework", "code_review_quality", "dev_tool_integration"]:
+                    section_432_lines.append(_sub_row(dsub, key))
+                    if dsub.get(key, {}).get("passing"):
+                        dp_pts += 1
+            else:
+                for label in [
+                    "Testing Framework Excellence",
+                    "Code Review Quality Analysis",
+                    "Development Tool Integration",
+                ]:
+                    section_432_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
             # 5. Community Contribution Facilitation — OpenSSF badge as proxy
             if openssf_badge:
                 badge_status = openssf_badge.get("badge_status", {})
@@ -1139,6 +1428,10 @@ class MetricsOrchestrator:
         section_422_data = self._apply_section_overrides(section_422_data, ov.get("4.2.2", {}))
         section_423_data = self._apply_section_overrides(section_423_data, ov.get("4.2.3", {}))
         section_424_data = self._apply_section_overrides(section_424_data, ov.get("4.2.4", {}))
+        section_425_data = self._apply_section_overrides(section_425_data, ov.get("4.2.5", {}))
+        section_428_data = self._apply_section_overrides(section_428_data, ov.get("4.2.8", {}))
+        section_429_data = self._apply_section_overrides(section_429_data, ov.get("4.2.9", {}))
+        section_4210_data = self._apply_section_overrides(section_4210_data, ov.get("4.2.10", {}))
         section_431_data = self._apply_section_overrides(section_431_data, ov.get("4.3.1", {}))
         section_432_data = self._apply_section_overrides(section_432_data, ov.get("4.3.2", {}))
         section_433_data = self._apply_section_overrides(section_433_data, ov.get("4.3.3", {}))
@@ -1162,12 +1455,15 @@ class MetricsOrchestrator:
                 },
                 "4.2.3": {"title": "Active Maintenance", "data": section_423_data},
                 "4.2.4": {"title": "Engagement", "data": section_424_data},
-                "4.2.5": {"title": "Outreach",              "data": _stub("4.2.5")},
+                "4.2.5": {"title": "Outreach",              "data": section_425_data or _stub("4.2.5")},
                 "4.2.6": {"title": "Welcomeness",            "data": _stub("4.2.6")},
                 "4.2.7": {"title": "Collaboration",          "data": _stub("4.2.7")},
-                "4.2.8": {"title": "Financial Sustainability","data": _stub("4.2.8")},
-                "4.2.9": {"title": "Institutional & Organizational Support", "data": _stub("4.2.9")},
-                "4.2.10": {"title": "Project Longevity and Community Health","data": _stub("4.2.10")},
+                "4.2.8": {"title": "Financial Sustainability","data": section_428_data or _stub("4.2.8")},
+                "4.2.9": {"title": "Institutional & Organizational Support", "data": section_429_data or _stub("4.2.9")},
+                "4.2.10": {
+                    "title": "Project Longevity and Community Health",
+                    "data": section_4210_data or _stub("4.2.10"),
+                },
             },
             "quality": {
                 "4.3.1": {"title": "Reliability and Robustness",             "data": section_431_data},
