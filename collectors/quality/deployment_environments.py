@@ -120,8 +120,19 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             return None
 
     def _calculate_score(self, detected: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Summarise coverage by OS family.
+
+        Individual runner labels stay in `os_families` for anyone consuming the
+        JSON, but they are not rendered: "ubuntu-24.04, ubuntu-latest,
+        windows-11, windows-2022, windows-latest, macos-15, macos-latest" is a
+        wall of text that says nothing the family list doesn't already say.
+        """
         names = sorted(detected)
         passing = len(names) >= _MIN_OS_FAMILIES
+        if names:
+            value = f"{len(names)} environment{'s' if len(names) != 1 else ''}: " + ", ".join(names)
+        else:
+            value = "No CI runner environments detected"
         return {
             "score": 1 if passing else 0,
             "max_score": 1,
@@ -129,11 +140,8 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             "sub_scores": {
                 "deployment_environment_testing": {
                     "label": "Deployment Environment Testing",
-                    "value": ", ".join(names) if names
-                             else "No CI runner environments detected",
-                    "detail": "; ".join(
-                        f"{f}: {', '.join(labels[:4])}" for f, labels in sorted(detected.items())
-                    ) or None,
+                    "value": value,
+                    "detail": None,
                     "passing": passing,
                 }
             },

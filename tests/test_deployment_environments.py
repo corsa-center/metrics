@@ -69,11 +69,22 @@ class TestScoring:
         assert "No CI runner" in info["value"]
         assert info["detail"] is None
 
-    def test_value_lists_families_alphabetically(self, collector):
-        s = collector._calculate_score(
-            {"Windows": ["windows-latest"], "Linux": ["ubuntu-latest"]}
+    def test_value_is_a_summary_not_a_label_dump(self, collector):
+        s = collector._calculate_score({
+            "Windows": ["windows-11", "windows-2022", "windows-latest"],
+            "Linux": ["ubuntu-24.04", "ubuntu-latest"],
+        })
+        info = s["sub_scores"]["deployment_environment_testing"]
+        assert info["value"] == "2 environments: Linux, Windows"
+        # Individual runner labels are kept in os_families, not rendered.
+        assert info["detail"] is None
+        assert "ubuntu-24.04" not in info["value"]
+
+    def test_single_environment_is_singular(self, collector):
+        s = collector._calculate_score({"Linux": ["ubuntu-latest"]})
+        assert s["sub_scores"]["deployment_environment_testing"]["value"] == (
+            "1 environment: Linux"
         )
-        assert s["sub_scores"]["deployment_environment_testing"]["value"] == "Linux, Windows"
 
 
 class TestEmptyResult:
