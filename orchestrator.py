@@ -1747,8 +1747,12 @@ class MetricsOrchestrator:
         section_435_data = self._apply_section_overrides(section_435_data, ov.get("4.3.5", {}))
         section_436_data = self._apply_section_overrides(section_436_data, ov.get("4.3.6", {}))
 
+        github_stats = impact_sub.get("github_stats", {})
+
         return {
             "package": repo_name,
+            "stars": github_stats.get("stars", 0),
+            "forks": github_stats.get("forks", 0),
             "impact": {
                 "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},
                 "4.1.2": {"title": "Field Research Impact", "data": _stub("4.1.2")},
