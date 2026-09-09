@@ -44,6 +44,7 @@ quality_collectors:
   maintainability: true     # 4.3.6 Complexity, tests, docs, refactoring
   accessibility: true       # 4.3.5 Accessibility
   deployment_environments: true  # 4.3.5 CI runner OS families
+  supply_chain: true        # 4.3.8 SBOM detection and build provenance/SLSA
 
 # API credentials
 api_credentials:

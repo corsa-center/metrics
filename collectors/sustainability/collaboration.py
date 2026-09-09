@@ -90,6 +90,13 @@ class CollaborationCollector(GitHubCollectorBase):
             "registries": registries,
             "ecosystems": sorted({r["ecosystem"] for r in registries}),
             "overall_score": self._calculate_score(registries),
+            # Distribution evidence, not part of the weighted score above —
+            # see CASS §4.1.1 Considerations: download counts measure
+            # distribution rather than use and are most informative as
+            # trends, not absolute figures. `period` differs by registry
+            # ("total" for conda, "last-month" for PyPI) so counts are not
+            # directly comparable across ecosystems.
+            "package_downloads": self._downloads_summary(registries),
         }
 
     # ------------------------------------------------------------------ fetch
@@ -153,6 +160,8 @@ class CollaborationCollector(GitHubCollectorBase):
             "dependent_repos": p.get("dependent_repos_count") or 0,
             "install_command": p.get("install_command"),
             "registry_url": p.get("registry_url"),
+            "downloads": p.get("downloads") or 0,
+            "downloads_period": p.get("downloads_period"),
         }
 
     @staticmethod
@@ -178,6 +187,8 @@ class CollaborationCollector(GitHubCollectorBase):
             )
             existing["install_command"] = existing["install_command"] or p["install_command"]
             existing["registry_url"] = existing["registry_url"] or p["registry_url"]
+            existing["downloads"] = max(existing.get("downloads", 0), p.get("downloads", 0))
+            existing["downloads_period"] = existing.get("downloads_period") or p.get("downloads_period")
         return sorted(
             merged.values(), key=lambda r: (-r["dependent_packages"], r["ecosystem"])
         )
@@ -244,6 +255,22 @@ class CollaborationCollector(GitHubCollectorBase):
             "sub_scores": sub,
         }
 
+    @staticmethod
+    def _downloads_summary(registries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        by_registry = [
+            {
+                "ecosystem": r["ecosystem"],
+                "name": r["name"],
+                "downloads": r.get("downloads", 0),
+                "period": r.get("downloads_period"),
+            }
+            for r in registries if r.get("downloads")
+        ]
+        return {
+            "total": sum(r["downloads"] for r in by_registry),
+            "by_registry": by_registry,
+        }
+
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {
             "package_name": repo_name,
@@ -252,4 +279,5 @@ class CollaborationCollector(GitHubCollectorBase):
             "registries": [],
             "ecosystems": [],
             "overall_score": self._calculate_score([]),
+            "package_downloads": {"total": 0, "by_registry": []},
         }

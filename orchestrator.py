@@ -54,6 +54,7 @@ SECTION_SUBMETRICS: Dict[str, List[str]] = {
     "4.3.5": ["Portable Build System Detection", "Container Availability Assessment", "Architecture Compatibility Analysis", "Platform Documentation Evaluation", "Deployment Environment Testing"],
     "4.3.6": ["Advanced Complexity Analysis", "Code Quality Assessment", "Documentation Quality Evaluation", "Knowledge Distribution Analysis", "Refactoring and Evolution Tracking"],
     "4.3.7": ["Performance Benchmarking Integration", "Environmental Impact Assessment", "Resource Utilization Analysis", "Scalability Assessment", "Optimization Practice Evaluation", "Memory Efficiency Analysis", "I/O Performance Profiling", "Algorithmic Complexity Assessment", "Power Measurement Integration", "Performance Portability Assessment"],
+    "4.3.8": ["SBOM Detection", "Build Provenance", "Dependency Vulnerability Posture", "Dependency Freshness"],
 }
 
 # Directory containing per-package config files (relative to this script)
@@ -548,6 +549,15 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
 
+        # 4.3.8 Software Supply Chain Integrity — SBOM and build provenance
+        if self._sub_enabled("quality", "supply_chain"):
+            try:
+                from collectors.quality.supply_chain import SupplyChainCollector
+                collector = SupplyChainCollector(github_token=github_token)
+                sub_results["supply_chain"] = await collector.collect(package)
+            except Exception as e:
+                logger.warning(f"Supply chain collection failed for {package['name']}: {e}")
+
         scores = []
         if "ci_cd" in sub_results:
             scores.append(sub_results["ci_cd"].get("percentage", 0))
@@ -571,6 +581,8 @@ class MetricsOrchestrator:
             scores.append(sub_results["maintainability"].get("overall_score", {}).get("percentage", 0))
         if "reliability" in sub_results:
             scores.append(sub_results["reliability"].get("overall_score", {}).get("percentage", 0))
+        if "supply_chain" in sub_results:
+            scores.append(sub_results["supply_chain"].get("overall_score", {}).get("percentage", 0))
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -797,6 +809,8 @@ class MetricsOrchestrator:
                 row += f'\n<p class="sub-detail">{info["detail"]}</p>'
             return row
 
+        sust = dims.get("sustainability", {}).get("sub_results", {})
+
         # --- 4.1.1 Software Citation and Adoption ---
         impact_sub = dims.get("impact", {}).get("sub_results") or {}
         sub_metrics = impact_sub.get("sub_metrics", {})
@@ -830,13 +844,35 @@ class MetricsOrchestrator:
                 citation_lines.append(
                     f'<p><strong>GitHub Forks:</strong> {github_stats.get("forks", 0):,}</p>'
                 )
+            # Reverse-Dependency Analysis and Package-Manager Download Telemetry
+            # (new measurement methods, PDF §4.1.1) — sourced from the same
+            # ecosyste.ms data collaboration.py already collects for §4.2.7,
+            # not re-fetched here. Evidence only, not part of Citation Score.
+            collab = sust.get("collaboration", {})
+            registries = collab.get("registries", [])
+            if registries:
+                max_packages = max((r["dependent_packages"] for r in registries), default=0)
+                max_repos = max((r["dependent_repos"] for r in registries), default=0)
+                citation_lines.append(
+                    f'<p><strong>Reverse-Dependency Analysis:</strong> '
+                    f'{max_packages:,} dependent packages, {max_repos:,} dependent repositories</p>'
+                )
+            downloads = collab.get("package_downloads", {})
+            if downloads.get("total", 0) > 0:
+                by_registry = ", ".join(
+                    f'{d["ecosystem"]} {d["downloads"]:,} ({d.get("period") or "n/a"})'
+                    for d in downloads.get("by_registry", [])
+                )
+                citation_lines.append(
+                    f'<p><strong>Package-Manager Downloads:</strong> {downloads["total"]:,}</p>'
+                )
+                if by_registry:
+                    citation_lines.append(f'<p class="sub-detail">{by_registry}</p>')
             score = impact_sub.get("score", 0)
             citation_lines.append(f'<p><strong>Citation Score:</strong> {score:.1f}/100</p>')
             section_411_data = "\n".join(citation_lines) if citation_lines else None
         else:
             section_411_data = None
-
-        sust = dims.get("sustainability", {}).get("sub_results", {})
 
         # --- 4.2.1 CoC, Governance, and Contributor Guidelines (PDF §4.2.1 — 5 sub-metrics) ---
         # 1. Enhanced Document Detection  2. Governance Keyword Analysis
@@ -1727,6 +1763,41 @@ class MetricsOrchestrator:
             section_436_lines.append(f'<p><strong>Score:</strong> {maint436_pts}/5</p>')
         section_436_data = "\n".join(section_436_lines) if section_436_lines else None
 
+        # --- 4.3.8 Software Supply Chain Integrity (PDF §4.3.8 — new section) ---
+        supply_chain = qual.get("supply_chain", {})
+        section_438_lines = []
+        if supply_chain:
+            ssub = supply_chain.get("sub_metrics", {})
+            for key in [
+                "sbom_detection", "build_provenance",
+                "dependency_vulnerability_posture", "dependency_freshness",
+            ]:
+                section_438_lines.append(_sub_row(ssub, key))
+
+            # Badge/Scorecard aren't re-measured here — this section leans on
+            # the levels already collected under 4.2 for the practices it
+            # deliberately doesn't restate (release signing, static analysis,
+            # vulnerability response, etc — see collector docstring).
+            badge = sust.get("openssf_badge", {})
+            scorecard = sust.get("openssf_scorecard", {})
+            if badge.get("badge_exists") or scorecard.get("scorecard_exists"):
+                parts = []
+                if badge.get("badge_exists"):
+                    level = badge.get("badge_status", {}).get("level") or "in progress"
+                    parts.append(f"OpenSSF Badge: {level}")
+                if scorecard.get("scorecard_exists"):
+                    parts.append(f'OpenSSF Scorecard: {scorecard.get("score")}/10')
+                section_438_lines.append(
+                    f'<p class="sub-detail">{" · ".join(parts)} '
+                    f'— practices this section does not measure directly</p>'
+                )
+
+            sc_score = supply_chain.get("overall_score", {})
+            section_438_lines.append(
+                f'<p><strong>Score:</strong> {sc_score.get("score", 0)}/{sc_score.get("max_score", 0)}</p>'
+            )
+        section_438_data = "\n".join(section_438_lines) if section_438_lines else None
+
         # Apply per-package overrides to all collected sections
         ov = pkg_overrides
         section_411_data = self._apply_section_overrides(section_411_data, ov.get("4.1.1", {}))
@@ -1746,6 +1817,7 @@ class MetricsOrchestrator:
         section_434_data = self._apply_section_overrides(section_434_data, ov.get("4.3.4", {}))
         section_435_data = self._apply_section_overrides(section_435_data, ov.get("4.3.5", {}))
         section_436_data = self._apply_section_overrides(section_436_data, ov.get("4.3.6", {}))
+        section_438_data = self._apply_section_overrides(section_438_data, ov.get("4.3.8", {}))
 
         github_stats = impact_sub.get("github_stats", {})
 
@@ -1786,6 +1858,7 @@ class MetricsOrchestrator:
                 "4.3.5": {"title": "Accessibility",                          "data": section_435_data},
                 "4.3.6": {"title": "Maintainability and Understandability",  "data": section_436_data},
                 "4.3.7": {"title": "Performance and Efficiency",             "data": _stub("4.3.7")},
+                "4.3.8": {"title": "Software Supply Chain Integrity",        "data": section_438_data or _stub("4.3.8")},
             },
         }
 

@@ -10,11 +10,12 @@ def collector():
     return CollaborationCollector()
 
 
-def _pkg(ecosystem, name, deps=0, repos=0, install=None):
+def _pkg(ecosystem, name, deps=0, repos=0, install=None, downloads=0, downloads_period=None):
     return {
         "ecosystem": ecosystem, "name": name,
         "dependent_packages": deps, "dependent_repos": repos,
         "install_command": install, "registry_url": None,
+        "downloads": downloads, "downloads_period": downloads_period,
     }
 
 
@@ -107,3 +108,38 @@ class TestInstallationSuccess:
     def test_registry_without_install_command_does_not_count(self, collector):
         s = collector._calculate_score([_pkg("go", "github.com/x/y")])
         assert not s["sub_scores"]["installation_success"]["passing"]
+
+
+class TestDownloadsMerge:
+    def test_duplicate_package_keeps_the_higher_download_count(self, collector):
+        merged = collector._merge([
+            _pkg("conda", "hdf5", downloads=3_000_000, downloads_period="total"),
+            _pkg("conda", "hdf5", downloads=100, downloads_period="total"),
+        ])
+        assert merged[0]["downloads"] == 3_000_000
+
+    def test_missing_downloads_key_defaults_to_zero(self, collector):
+        # Raw package dicts elsewhere in this test module omit downloads
+        # entirely; _merge must not KeyError on them.
+        merged = collector._merge([
+            {"ecosystem": "conda", "name": "x", "dependent_packages": 0,
+             "dependent_repos": 0, "install_command": None, "registry_url": None},
+        ])
+        assert merged[0].get("downloads", 0) == 0
+
+
+class TestDownloadsSummary:
+    def test_totals_and_per_registry_breakdown(self, collector):
+        summary = collector._downloads_summary([
+            _pkg("conda", "hdf5", downloads=3_100_672, downloads_period="total"),
+            _pkg("pypi", "h5py", downloads=41_742_012, downloads_period="last-month"),
+        ])
+        assert summary["total"] == 3_100_672 + 41_742_012
+        assert len(summary["by_registry"]) == 2
+
+    def test_zero_download_registries_are_omitted(self, collector):
+        summary = collector._downloads_summary([_pkg("spack", "hdf5", downloads=0)])
+        assert summary == {"total": 0, "by_registry": []}
+
+    def test_empty_registries(self, collector):
+        assert collector._downloads_summary([]) == {"total": 0, "by_registry": []}

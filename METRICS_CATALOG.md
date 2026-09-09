@@ -38,6 +38,7 @@ is a stub
 | 4.3.5 | Accessibility | 5/5 |
 | 4.3.6 | Maintainability and Understandability | 5/5 |
 | 4.3.7 | Performance and Efficiency | ⬜ 0/10 |
+| 4.3.8 | Software Supply Chain Integrity | 3/5 |
 
 A stub section renders nothing unless the package's `package_config/` file
 supplies overrides, in which case it renders those values against a 0/N score.
@@ -408,6 +409,40 @@ Performance Portability Assessment.
 
 All ten require running benchmarks on target hardware, profiling
 (Valgrind/Darshan/RAPL/NVML), or domain expertise to interpret.
+
+### 4.3.8 Software Supply Chain Integrity
+**Collector:** [`supply_chain.py`](collectors/quality/supply_chain.py)
+
+| Sub-metric | Status | Source |
+|---|---|---|
+| SBOM Detection and Validation | ✅ | SPDX/CycloneDX file at the repo root, or a matching filename among recent release assets |
+| Build Provenance Assessment | ✅ | SLSA/in-toto attestation filename among recent release assets |
+| Dependency Vulnerability Posture | 🔲 | needs Dependabot alert access this survey doesn't have on third-party repos |
+| Dependency Freshness (libyears) | 🔲 | needs a machine-readable dependency manifest most HPC C/C++ projects don't publish |
+| Badge and Scorecard Level | ✅ | passthrough — read from the 4.2 OpenSSF Badge / Scorecard collectors, not re-fetched |
+
+Score is out of 2 (SBOM + Build Provenance): the two not-collected rows are
+excluded from the denominator per §3.5 rather than scored as failures, and
+Badge/Scorecard is display-only context rather than an independently scored
+row, since this section explicitly "does not restate practices already
+assessed by the OpenSSF Best Practices Badge."
+
+Only file-presence and filename matching against a small hint list (`sbom`,
+`spdx`, `cyclonedx`, `intoto`, `slsa`, `.sigstore`, …) — no SBOM/attestation
+content is parsed or validated against the SPDX/CycloneDX/SLSA specs.
+
+### 4.1.1 / 4.2.7 additions: downloads and reverse dependencies
+
+Two more automated signals ride on data `collaboration.py` (4.2.7) already
+fetches from ecosyste.ms and are surfaced in the 4.1.1 Citation and Adoption
+section as unweighted evidence, the same way GitHub stars/forks already are:
+
+- **Reverse-Dependency Analysis** — the same `dependent_packages` /
+  `dependent_repos` counts 4.2.7 scores against, rendered under 4.1.1 too.
+- **Package-Manager Download Telemetry** — `downloads` / `downloads_period`
+  per registry. Not scored: `downloads_period` differs by registry ("total"
+  for conda, "last-month" for PyPI), so raw totals aren't comparable across
+  ecosystems and the report's own 4.1.1 Considerations says as much.
 
 ---
 

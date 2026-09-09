@@ -34,6 +34,8 @@ No significant post-processing required.
 | — | **OpenSSF Scorecard** (Sustainability) | `collectors/sustainability/openssf_scorecard.py` | ✅ Done |
 | — | **CI / GitHub Actions Status** (Quality) | covered by `ci_cd.py` | ✅ Done |
 | — | **Test Coverage %** (Quality) | `collectors/quality/test_coverage.py` | ✅ Done (Codecov only — see note) |
+| — | **SBOM Detection & Build Provenance** (Quality, new §4.3.8) | `collectors/quality/supply_chain.py` | ✅ Done (2/4 — vuln posture & freshness need Dependabot access / dependency manifests, see note) |
+| — | **Package-Manager Download Telemetry & Reverse-Dependency Analysis** (Impact, 4.1.1 additions) | `collectors/sustainability/collaboration.py` (surfaced under 4.1.1) | ✅ Done — rides on data 4.2.7 already fetches, no new API integration |
 
 ### Why prioritised
 
@@ -61,6 +63,20 @@ No significant post-processing required.
     JSON endpoint returns HTTP 403 for non-browser requests, so only Codecov
     is used; repos without an active Codecov integration report "No Codecov
     data found" rather than a number.
+  - **SBOM Detection & Build Provenance**: file-existence check against a
+    fixed candidate list (`sbom.spdx.json`, `bom.xml`, …) at the repo root,
+    plus a filename-hint scan of the last 5 releases' assets for SBOM or
+    SLSA/in-toto attestation files. No SBOM/attestation content is parsed —
+    presence only, same shallow check as every other file-detection collector
+    in this bucket. Live-verified against HDF5, which has neither.
+  - **Download Telemetry & Reverse-Dependency Analysis**: not a new
+    integration at all — `collaboration.py` already calls
+    `packages.ecosyste.ms` for 4.2.7 and the response carries `downloads` /
+    `downloads_period` / `dependent_packages_count` fields that weren't being
+    read. Confirmed live: HDF5's conda-forge package alone reports 48.3M
+    total downloads. `downloads_period` isn't uniform across registries
+    ("total" for conda, "last-month" for PyPI), so it's exposed but not
+    scored — same treatment the report's own 4.1.1 Considerations gives it.
 
 ---
 
