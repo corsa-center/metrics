@@ -23,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout metrics repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -62,14 +62,14 @@ jobs:
 
       - name: Upload metrics artifact
         if: github.event.inputs.dry_run != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sustainability-metrics
           path: output/*-metrics/
           retention-days: 90
 
       - name: Upload reports artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: metrics-reports
           path: |
