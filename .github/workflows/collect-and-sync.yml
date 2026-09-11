@@ -19,7 +19,14 @@ on:
 jobs:
   collect-metrics:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # A full 68-package run took 55min on 2026-08-31; the two full runs since
+    # (2026-09-06 schedule, 2026-09-09 dispatch) each ran to exactly the old
+    # 120min limit and were auto-cancelled, so no full run has succeeded in
+    # over a week -- the downstream dashboard silently fell back to whatever
+    # older/narrower run last had a "success" conclusion. 240 gives headroom
+    # for that growth (more collectors keep being added) without masking a
+    # true hang indefinitely.
+    timeout-minutes: 240
 
     steps:
       - name: Checkout metrics repository
