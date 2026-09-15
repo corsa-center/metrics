@@ -66,13 +66,12 @@ python scripts/generate_corsa_citations.py \
 
 ## CASS Dimensions
 
-The framework follows the CASS (Consortium for Advancement of Scientific Software) sustainability model with four main dimensions:
+The framework follows the CASS (Consortium for Advancement of Scientific Software) sustainability model with three main dimensions:
 
 | Dimension | Status | Description |
 |----------|--------|-------------|
 | **Impact** | ✅ Implemented | Software citation, adoption, and field research impact |
-| **Community** | ✅ Partially Implemented | CoC/governance, licensing, maintenance, engagement, community health |
-| **Viability** | ✅ Implemented | Long-term sustainability, security, and licensing |
+| **Ecosystem** | ✅ Partially Implemented | CoC/governance, licensing, maintenance, engagement, community health, long-term sustainability, security, and licensing |
 | **Quality** | ✅ Partially Implemented | CI/CD practices, accessibility, reproducibility, OpenSSF badge/scorecard |
 
 Each dimension contains multiple sub-categories and metrics that contribute to an overall sustainability score.
