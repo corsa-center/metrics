@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.sustainability.welcomeness import WelcomenessCollector
+from collectors.ecosystem.welcomeness import WelcomenessCollector
 
 
 @pytest.fixture

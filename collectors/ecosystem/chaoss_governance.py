@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

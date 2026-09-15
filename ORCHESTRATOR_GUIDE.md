@@ -27,7 +27,7 @@ This eliminates manual coordination between the metrics and dashboard repositori
    └────────┬────────┘          └─────────┬───────┘
             │                              ↑
             └──────────writes──────────────┘
-                 sustainabilityMetrics.json
+                 ecosystemMetrics.json
 ```
 
 ## Installation
@@ -106,7 +106,7 @@ python orchestrator.py --config config/orchestrator.yaml --dry-run
 The orchestrator creates several files:
 
 ### 1. Dashboard Output
-**Location:** `../dashboard/explore/github-data/sustainabilityMetrics.json`
+**Location:** `../dashboard/explore/github-data/ecosystemMetrics.json`
 
 Format:
 ```json
@@ -281,7 +281,7 @@ tail -f orchestrator.log
 cat output/orchestrator_summary.json | jq '.'
 
 # Verify dashboard output
-ls -lh ../dashboard/explore/github-data/sustainabilityMetrics.json
+ls -lh ../dashboard/explore/github-data/ecosystemMetrics.json
 ```
 
 ### GitHub Actions Monitoring

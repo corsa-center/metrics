@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.sustainability.fair_licensing import (
+from collectors.ecosystem.fair_licensing import (
     FairLicensingCollector, _CITATION_FIELDS,
 )
 

@@ -24,18 +24,18 @@ No significant post-processing required.
 
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
-| [#8](https://github.com/corsa-center/metrics/issues/8) | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/sustainability/community_health.py` + `chaoss_governance.py` | ✅ Done (5/5) |
+| [#8](https://github.com/corsa-center/metrics/issues/8) | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/ecosystem/community_health.py` + `chaoss_governance.py` | ✅ Done (5/5) |
 | [#9](https://github.com/corsa-center/metrics/issues/9) | 4.2.2 Open-Source Licensing & FAIR Compliance | `licensing.py` + `fair_licensing.py` | ✅ Done (5/5) |
-| [#10](https://github.com/corsa-center/metrics/issues/10) | 4.2.3 Active Maintenance | `collectors/sustainability/active_maintenance.py` | ✅ Done (6/6) |
+| [#10](https://github.com/corsa-center/metrics/issues/10) | 4.2.3 Active Maintenance | `collectors/ecosystem/active_maintenance.py` | ✅ Done (6/6) |
 | [#16](https://github.com/corsa-center/metrics/issues/16) | 4.2.10 Project Longevity & Community Health | `orchestrator.py` (derived from `active_maintenance.py`) | ✅ Done |
 | [#18](https://github.com/corsa-center/metrics/issues/18) | 4.3.2 Development Practices | `ci_cd.py` + `dev_tooling.py` | ✅ Done (5/5) |
 | [#21](https://github.com/corsa-center/metrics/issues/21) | 4.3.5 Accessibility | `accessibility.py` + `deployment_environments.py` | ✅ Done (5/5) |
-| — | **OpenSSF Best Practices Badge** (Quality) | `collectors/sustainability/openssf_badge.py` | ✅ Done |
-| — | **OpenSSF Scorecard** (Sustainability) | `collectors/sustainability/openssf_scorecard.py` | ✅ Done |
+| — | **OpenSSF Best Practices Badge** (Quality) | `collectors/ecosystem/openssf_badge.py` | ✅ Done |
+| — | **OpenSSF Scorecard** (Ecosystem) | `collectors/ecosystem/openssf_scorecard.py` | ✅ Done |
 | — | **CI / GitHub Actions Status** (Quality) | covered by `ci_cd.py` | ✅ Done |
 | — | **Test Coverage %** (Quality) | `collectors/quality/test_coverage.py` | ✅ Done (Codecov only — see note) |
 | — | **SBOM Detection & Build Provenance** (Quality, new §4.3.8) | `collectors/quality/supply_chain.py` | ✅ Done (2/4 — vuln posture & freshness need Dependabot access / dependency manifests, see note) |
-| — | **Package-Manager Download Telemetry & Reverse-Dependency Analysis** (Impact, 4.1.1 additions) | `collectors/sustainability/collaboration.py` (surfaced under 4.1.1) | ✅ Done — rides on data 4.2.7 already fetches, no new API integration |
+| — | **Package-Manager Download Telemetry & Reverse-Dependency Analysis** (Impact, 4.1.1 additions) | `collectors/ecosystem/collaboration.py` (surfaced under 4.1.1) | ✅ Done — rides on data 4.2.7 already fetches, no new API integration |
 
 ### Why prioritised
 
@@ -88,8 +88,8 @@ static analysis tool runs, or non-trivial content parsing.
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
 | [#6](https://github.com/corsa-center/metrics/issues/6) | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` | ✅ Done (partial — CITATION.cff/DOI; advanced deps TBD) |
-| [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/sustainability/engagement.py` | ✅ Done (7/7) |
-| [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | `collectors/sustainability/outreach.py` | ✅ Done (partial — 5/8; event & training data not in the repo) |
+| [#11](https://github.com/corsa-center/metrics/issues/11) | 4.2.4 Engagement | `collectors/ecosystem/engagement.py` | ✅ Done (7/7) |
+| [#12](https://github.com/corsa-center/metrics/issues/12) | 4.2.5 Outreach | `collectors/ecosystem/outreach.py` | ✅ Done (partial — 5/8; event & training data not in the repo) |
 | [#17](https://github.com/corsa-center/metrics/issues/17) | 4.3.1 Reliability & Robustness | `test_coverage.py` + `static_analysis.py` + `reliability.py` | ✅ Done (5/5) |
 | [#19](https://github.com/corsa-center/metrics/issues/19) | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` | ✅ Done (5/5) |
 | [#20](https://github.com/corsa-center/metrics/issues/20) | 4.3.4 Usability | `collectors/quality/usability.py` | ✅ Done (partial — 2/5; UEQ needs a survey) |
@@ -105,9 +105,9 @@ ML models, specialized runtime instrumentation, or qualitative judgment.
 | Issue | Metric | Collector | Status |
 |-------|--------|-----------|--------|
 | [#7](https://github.com/corsa-center/metrics/issues/7) | 4.1.2 Field Research Impact | — | 🔲 Todo |
-| [#13](https://github.com/corsa-center/metrics/issues/13) | 4.2.7 Collaboration | `collectors/sustainability/collaboration.py` | ✅ Done (partial — 2/5 via ecosyste.ms) |
-| [#14](https://github.com/corsa-center/metrics/issues/14) | 4.2.8 Financial Sustainability | `collectors/sustainability/funding.py` | ✅ Done (partial — 4/5; NIH R50 via RePORTER still TBD) |
-| [#15](https://github.com/corsa-center/metrics/issues/15) | 4.2.9 Institutional & Organizational Support | `collectors/sustainability/funding.py` | ✅ Done (partial — 1/5; RSE/policy detection needs directory data) |
+| [#13](https://github.com/corsa-center/metrics/issues/13) | 4.2.7 Collaboration | `collectors/ecosystem/collaboration.py` | ✅ Done (partial — 2/5 via ecosyste.ms) |
+| [#14](https://github.com/corsa-center/metrics/issues/14) | 4.2.8 Financial Sustainability | `collectors/ecosystem/funding.py` | ✅ Done (partial — 4/5; NIH R50 via RePORTER still TBD) |
+| [#15](https://github.com/corsa-center/metrics/issues/15) | 4.2.9 Institutional & Organizational Support | `collectors/ecosystem/funding.py` | ✅ Done (partial — 1/5; RSE/policy detection needs directory data) |
 | [#23](https://github.com/corsa-center/metrics/issues/23) | 4.3.7 Performance & Efficiency | — | 🔲 Todo |
 
 ### Why hard

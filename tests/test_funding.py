@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.sustainability.funding import FundingCollector
+from collectors.ecosystem.funding import FundingCollector
 
 
 @pytest.fixture
@@ -107,6 +107,6 @@ class TestGrantPatterns:
     ])
     def test_patterns(self, text, expected):
         import re
-        from collectors.sustainability.funding import _GRANT_PATTERNS
+        from collectors.ecosystem.funding import _GRANT_PATTERNS
         hit = any(re.search(p, text, re.IGNORECASE) for p, _ in _GRANT_PATTERNS)
         assert hit is expected

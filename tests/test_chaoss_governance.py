@@ -1,7 +1,7 @@
 """Unit tests for CHAOSSGovernanceCollector pure computation methods."""
 
 import pytest
-from collectors.sustainability.chaoss_governance import CHAOSSGovernanceCollector
+from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
 
 
 @pytest.fixture

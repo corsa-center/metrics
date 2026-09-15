@@ -5,7 +5,7 @@ Every metric the framework collects, organized by the section numbering of the
 named by the report, whether the framework fills them today, and where the data
 comes from.
 
-The report defines three dimensions — **4.1 Impact**, **4.2 Sustainability**,
+The report defines three dimensions — **4.1 Impact**, **4.2 Ecosystem**,
 **4.3 Quality** — and 19 sections beneath them. Sub-metric names below are the
 report's own; they are also the keys used by the `package_config/` override
 files and by `SECTION_SUBMETRICS` in [`orchestrator.py`](orchestrator.py).
@@ -73,20 +73,20 @@ literature plus facility web scraping; see the "Hard" tier in
 
 ---
 
-## 4.2 Sustainability
+## 4.2 Ecosystem
 
 ### 4.2.1 Codes of Conduct, Governance, and Contributor Guidelines
-**Collectors:** [`community_health.py`](collectors/sustainability/community_health.py),
-[`chaoss_governance.py`](collectors/sustainability/chaoss_governance.py),
-[`openssf_badge.py`](collectors/sustainability/openssf_badge.py),
-[`openssf_scorecard.py`](collectors/sustainability/openssf_scorecard.py)
+**Collectors:** [`community_health.py`](collectors/ecosystem/community_health.py),
+[`chaoss_governance.py`](collectors/ecosystem/chaoss_governance.py),
+[`openssf_badge.py`](collectors/ecosystem/openssf_badge.py),
+[`openssf_scorecard.py`](collectors/ecosystem/openssf_scorecard.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
 | Enhanced Document Detection | ✅ | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING file detection |
 | Governance Keyword Analysis | ✅ | decision process / defined roles / membership lifecycle / conflict resolution, read from the full documents; passes at ≥2 |
 | OpenSSF Badge Integration | ✅ | `bestpractices.dev`, level + percentage. **Substituted** by an *OpenSSF Scorecard* row (`api.securityscorecards.dev`, with a per-check breakdown of failing checks) whenever scorecard data exists, so the section is always 5 rows |
-| CHAOSS Governance Metrics | ✅ | [`chaoss_governance.py`](collectors/sustainability/chaoss_governance.py) — weighted 0–100 health score, passing at ≥60, with a per-category breakdown (popularity, docs, time-to-close, issue age, PR closure ratio, release frequency, issue inclusivity) |
+| CHAOSS Governance Metrics | ✅ | [`chaoss_governance.py`](collectors/ecosystem/chaoss_governance.py) — weighted 0–100 health score, passing at ≥60, with a per-category breakdown (popularity, docs, time-to-close, issue age, PR closure ratio, release frequency, issue inclusivity) |
 | Governance Effectiveness Assessment | ✅ | CODEOWNERS present **and** governance docs touched within three years |
 
 > `community_health.py` is named for the report's older phrasing but is the
@@ -101,7 +101,7 @@ no list of upper/lower variants catches, and the file was invisible. The root,
 case-insensitively — fewer requests as well as more hits.
 
 ### 4.2.2 Open-Source Licensing and FAIR Compliance
-**Collector:** [`licensing.py`](collectors/sustainability/licensing.py)
+**Collector:** [`licensing.py`](collectors/ecosystem/licensing.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -120,7 +120,7 @@ for every other project with a modified licence.)
 | FAIR Metadata Assessment | ✅ | CITATION.cff field completeness (title, authors, version, license, repository-code, DOI); passes at ≥4 |
 
 ### 4.2.3 Active Maintenance
-**Collector:** [`active_maintenance.py`](collectors/sustainability/active_maintenance.py)
+**Collector:** [`active_maintenance.py`](collectors/ecosystem/active_maintenance.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -132,7 +132,7 @@ for every other project with a modified licence.)
 | Contributor Abandonment Forecasting | ✅ | contributors active in the prior 52 weeks who committed nothing in the last 52, from `/stats/contributors`; passes under 50% departure |
 
 ### 4.2.4 Engagement
-**Collector:** [`engagement.py`](collectors/sustainability/engagement.py)
+**Collector:** [`engagement.py`](collectors/ecosystem/engagement.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -159,7 +159,7 @@ within a week separates the portfolio meaningfully instead — HDF5 43%,
 ADIOS2 53%, zfp 93%.
 
 ### 4.2.5 Outreach
-**Collector:** [`outreach.py`](collectors/sustainability/outreach.py)
+**Collector:** [`outreach.py`](collectors/ecosystem/outreach.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -178,7 +178,7 @@ ADIOS2 53%, zfp 93%.
 > recent commits exceed the 10-page pagination cap.
 
 ### 4.2.6 Welcomeness
-**Collector:** [`welcomeness.py`](collectors/sustainability/welcomeness.py)
+**Collector:** [`welcomeness.py`](collectors/ecosystem/welcomeness.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -191,7 +191,7 @@ ADIOS2 53%, zfp 93%.
 | Decision-Making Visibility | ✅ | `has_discussions` / `has_wiki` / `has_pages` plus roadmap, meeting notes, decision records, governance doc; passes at ≥2 signals |
 
 ### 4.2.7 Collaboration
-**Collector:** [`collaboration.py`](collectors/sustainability/collaboration.py)
+**Collector:** [`collaboration.py`](collectors/ecosystem/collaboration.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -219,7 +219,7 @@ packages (HDF5: 176 conda packages) or by many repositories (zfp: 111 repos from
 only 9 packages); both are real evidence of ecosystem integration.
 
 ### 4.2.8 Financial Sustainability
-**Collector:** [`funding.py`](collectors/sustainability/funding.py)
+**Collector:** [`funding.py`](collectors/ecosystem/funding.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -235,7 +235,7 @@ only 9 packages); both are real evidence of ecosystem integration.
 > organizations instead of its actual 3.
 
 ### 4.2.9 Institutional & Organizational Support
-**Collector:** [`funding.py`](collectors/sustainability/funding.py) — shares
+**Collector:** [`funding.py`](collectors/ecosystem/funding.py) — shares
 4.2.8's contributor-affiliation pass rather than fetching it twice.
 
 | Sub-metric | Status | Source |
@@ -312,7 +312,7 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 ### 4.3.2 Development Practices
 **Collectors:** [`ci_cd.py`](collectors/quality/development_practices/ci_cd.py),
 [`dev_tooling.py`](collectors/quality/development_practices/dev_tooling.py),
-[`openssf_badge.py`](collectors/sustainability/openssf_badge.py)
+[`openssf_badge.py`](collectors/ecosystem/openssf_badge.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -335,7 +335,7 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 
 ### 4.3.4 Usability
 **Collectors:** [`usability.py`](collectors/quality/usability.py),
-[`collaboration.py`](collectors/sustainability/collaboration.py)
+[`collaboration.py`](collectors/ecosystem/collaboration.py)
 
 | Sub-metric | Status | Source |
 |---|---|---|
@@ -456,7 +456,7 @@ weights in [`config/orchestrator.yaml`](config/orchestrator.yaml):
 ```yaml
 metric_weights:
   impact: 0.33
-  sustainability: 0.34
+  ecosystem: 0.34
   quality: 0.33
 ```
 
@@ -473,14 +473,14 @@ Collectors are toggled per **dimension** in
 ```yaml
 collectors:
   impact: true          # 4.1
-  sustainability: true  # 4.2
+  ecosystem: true        # 4.2
   quality: true         # 4.3
 ```
 
 Individual sub-collectors are toggled within a dimension:
 
 ```yaml
-sustainability_collectors:
+ecosystem_collectors:
   community_health: true    # 4.2.1 governance docs
   chaoss_activity: true     # 4.2.1 CHAOSS Governance Metrics
   openssf_scorecard: true   # 4.2.1 OpenSSF Scorecard

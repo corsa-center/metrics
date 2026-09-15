@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.sustainability.community_health import CommunityHealthCollector
+from collectors.ecosystem.community_health import CommunityHealthCollector
 
 
 @pytest.fixture

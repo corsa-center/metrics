@@ -5,7 +5,7 @@ Orchestrator: Coordinates metrics collection and dashboard integration
 Collects metrics across the three CASS dimensions defined in the
 CASS Sustainability Metrics Report v3:
   - Impact (4.1): Citation, adoption, field research impact
-  - Sustainability (4.2): Governance, licensing, maintenance, engagement, etc.
+  - Ecosystem (4.2): Governance, licensing, maintenance, engagement, etc.
   - Quality (4.3): Reliability, dev practices, reproducibility, usability, etc.
 
 Usage:
@@ -77,7 +77,7 @@ class MetricsOrchestrator:
         self.output_path = Path(self.config.get("output_path", "./output"))
         self.collectors_enabled = self.config.get("collectors", {})
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
-        self.sustainability_collectors = self.config.get("sustainability_collectors", {})
+        self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
         self.quality_collectors = self.config.get("quality_collectors", {})
 
     def _load_config(self, config_path: str) -> Dict:
@@ -276,7 +276,7 @@ class MetricsOrchestrator:
         Defaults to True when the toggle group or key is absent, so a config
         predating these blocks keeps running every sub-collector.
         """
-        toggles = self.sustainability_collectors if group == "sustainability" else self.quality_collectors
+        toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
         return toggles.get(key, True)
 
     def _get_github_token(self) -> Optional[str]:
@@ -284,128 +284,128 @@ class MetricsOrchestrator:
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
         return token if token else None
 
-    async def collect_sustainability_dimension(self, package: Dict) -> Dict:
-        """Collect Sustainability dimension metrics (CASS Report Section 4.2)
+    async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
+        """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
 
-        Runs all implemented sustainability sub-collectors and combines scores.
+        Runs all implemented ecosystem sub-collectors and combines scores.
         """
-        if not self.collectors_enabled.get("sustainability", False):
-            return {"dimension": "sustainability", "score": 0.0, "max_score": 100.0}
+        if not self.collectors_enabled.get("ecosystem", False):
+            return {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
 
-        logger.info(f"Collecting Sustainability dimension for {package['name']}")
+        logger.info(f"Collecting Ecosystem dimension for {package['name']}")
 
         github_token = self._get_github_token()
         sub_results = {}
 
         # 4.2.1 CoC, Governance, and Contributor Guidelines
-        if self._sub_enabled("sustainability", "community_health"):
+        if self._sub_enabled("ecosystem", "community_health"):
             try:
-                from collectors.sustainability.community_health import CommunityHealthCollector
+                from collectors.ecosystem.community_health import CommunityHealthCollector
                 collector = CommunityHealthCollector(github_token=github_token)
                 sub_results["governance"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Governance collection failed for {package['name']}: {e}")
 
         # 4.2.2 Licensing and FAIR Compliance
-        if self._sub_enabled("sustainability", "licensing"):
+        if self._sub_enabled("ecosystem", "licensing"):
             try:
-                from collectors.sustainability.licensing import LicensingCollector
+                from collectors.ecosystem.licensing import LicensingCollector
                 collector = LicensingCollector(github_token=github_token)
                 sub_results["licensing"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Licensing collection failed for {package['name']}: {e}")
 
         # 4.2.3 Active Maintenance
-        if self._sub_enabled("sustainability", "active_maintenance"):
+        if self._sub_enabled("ecosystem", "active_maintenance"):
             try:
-                from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+                from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
                 collector = ActiveMaintenanceCollector(github_token=github_token)
                 sub_results["maintenance"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
 
         # 4.2.4 CHAOSS Activity Metrics
-        if self._sub_enabled("sustainability", "chaoss_activity"):
+        if self._sub_enabled("ecosystem", "chaoss_activity"):
             try:
-                from collectors.sustainability.chaoss_governance import CHAOSSGovernanceCollector
+                from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
                 collector = CHAOSSGovernanceCollector(github_token=github_token)
                 sub_results["chaoss_activity"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")
 
         # 4.2.5 OpenSSF Best Practices Badge
-        if self._sub_enabled("sustainability", "openssf_badge"):
+        if self._sub_enabled("ecosystem", "openssf_badge"):
             try:
-                from collectors.sustainability.openssf_badge import OpenSSFBadgeCollector
+                from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
                 collector = OpenSSFBadgeCollector(github_token=github_token)
                 sub_results["openssf_badge"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
 
         # 4.2.4 Engagement — issue/PR response times, open/close ratios
-        if self._sub_enabled("sustainability", "engagement"):
+        if self._sub_enabled("ecosystem", "engagement"):
             try:
-                from collectors.sustainability.engagement import EngagementCollector
+                from collectors.ecosystem.engagement import EngagementCollector
                 collector = EngagementCollector(github_token=github_token)
                 sub_results["engagement"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Engagement collection failed for {package['name']}: {e}")
 
         # 4.2.2 FAIR compliance and license exceptions
-        if self._sub_enabled("sustainability", "fair_licensing"):
+        if self._sub_enabled("ecosystem", "fair_licensing"):
             try:
-                from collectors.sustainability.fair_licensing import FairLicensingCollector
+                from collectors.ecosystem.fair_licensing import FairLicensingCollector
                 collector = FairLicensingCollector(github_token=github_token)
                 sub_results["fair_licensing"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"FAIR licensing collection failed for {package['name']}: {e}")
 
         # 4.2.5 Outreach — newcomer growth, retention, onboarding infrastructure
-        if self._sub_enabled("sustainability", "outreach"):
+        if self._sub_enabled("ecosystem", "outreach"):
             try:
-                from collectors.sustainability.outreach import OutreachCollector
+                from collectors.ecosystem.outreach import OutreachCollector
                 collector = OutreachCollector(github_token=github_token)
                 sub_results["outreach"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Outreach collection failed for {package['name']}: {e}")
 
         # 4.2.6 Welcomeness — decision-making visibility
-        if self._sub_enabled("sustainability", "welcomeness"):
+        if self._sub_enabled("ecosystem", "welcomeness"):
             try:
-                from collectors.sustainability.welcomeness import WelcomenessCollector
+                from collectors.ecosystem.welcomeness import WelcomenessCollector
                 collector = WelcomenessCollector(github_token=github_token)
                 sub_results["welcomeness"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Welcomeness collection failed for {package['name']}: {e}")
 
         # 4.2.7 Collaboration — ecosystem reach via ecosyste.ms
-        if self._sub_enabled("sustainability", "collaboration"):
+        if self._sub_enabled("ecosystem", "collaboration"):
             try:
-                from collectors.sustainability.collaboration import CollaborationCollector
+                from collectors.ecosystem.collaboration import CollaborationCollector
                 collector = CollaborationCollector(github_token=github_token)
                 sub_results["collaboration"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Collaboration collection failed for {package['name']}: {e}")
 
         # 4.2.8 + 4.2.9 Funding and institutional affiliation
-        if self._sub_enabled("sustainability", "funding"):
+        if self._sub_enabled("ecosystem", "funding"):
             try:
-                from collectors.sustainability.funding import FundingCollector
+                from collectors.ecosystem.funding import FundingCollector
                 collector = FundingCollector(github_token=github_token)
                 sub_results["funding"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Funding collection failed for {package['name']}: {e}")
 
         # OpenSSF Scorecard
-        if self._sub_enabled("sustainability", "openssf_scorecard"):
+        if self._sub_enabled("ecosystem", "openssf_scorecard"):
             try:
-                from collectors.sustainability.openssf_scorecard import OpenSSFScorecardCollector
+                from collectors.ecosystem.openssf_scorecard import OpenSSFScorecardCollector
                 collector = OpenSSFScorecardCollector(github_token=github_token)
                 sub_results["openssf_scorecard"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")
 
-        # Calculate combined sustainability score from available sub-collectors
+        # Calculate combined ecosystem score from available sub-collectors
         scores = []
         if "governance" in sub_results:
             scores.append(sub_results["governance"].get("overall_score", {}).get("percentage", 0))
@@ -439,7 +439,7 @@ class MetricsOrchestrator:
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
         return {
-            "dimension": "sustainability",
+            "dimension": "ecosystem",
             "score": round(avg_score, 2),
             "max_score": 100.0,
             "sub_results": sub_results,
@@ -609,11 +609,11 @@ class MetricsOrchestrator:
         # Collect all 3 CASS dimensions in parallel
         (
             impact_metrics,
-            sustainability_metrics,
+            ecosystem_metrics,
             quality_metrics,
         ) = await asyncio.gather(
             self.collect_impact_dimension(package),
-            self.collect_sustainability_dimension(package),
+            self.collect_ecosystem_dimension(package),
             self.collect_quality_dimension(package),
             return_exceptions=True,
         )
@@ -623,9 +623,9 @@ class MetricsOrchestrator:
             logger.error(f"Impact dimension error: {impact_metrics}")
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
-        if isinstance(sustainability_metrics, Exception):
-            logger.error(f"Sustainability dimension error: {sustainability_metrics}")
-            sustainability_metrics = {"dimension": "sustainability", "score": 0.0, "max_score": 100.0}
+        if isinstance(ecosystem_metrics, Exception):
+            logger.error(f"Ecosystem dimension error: {ecosystem_metrics}")
+            ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
 
         if isinstance(quality_metrics, Exception):
             logger.error(f"Quality dimension error: {quality_metrics}")
@@ -634,7 +634,7 @@ class MetricsOrchestrator:
         # Calculate overall score (weighted average of 3 dimensions)
         overall_score = self._calculate_overall_score(
             impact_metrics,
-            sustainability_metrics,
+            ecosystem_metrics,
             quality_metrics,
         )
 
@@ -642,7 +642,7 @@ class MetricsOrchestrator:
             "overall_score": overall_score,
             "dimensions": {
                 "impact": impact_metrics,
-                "sustainability": sustainability_metrics,
+                "ecosystem": ecosystem_metrics,
                 "quality": quality_metrics,
             },
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -651,31 +651,31 @@ class MetricsOrchestrator:
     def _calculate_overall_score(
         self,
         impact: Dict,
-        sustainability: Dict,
+        ecosystem: Dict,
         quality: Dict,
     ) -> int:
         """Calculate weighted overall sustainability score based on 3 CASS dimensions
 
         Default weights (can be configured):
         - Impact: 33%
-        - Sustainability: 34%
+        - Ecosystem: 34%
         - Quality: 33%
         """
         # Get weights from config or use defaults
         weights = self.config.get("metric_weights", {})
         impact_weight = weights.get("impact", 0.33)
-        sustainability_weight = weights.get("sustainability", 0.34)
+        ecosystem_weight = weights.get("ecosystem", 0.34)
         quality_weight = weights.get("quality", 0.33)
 
         # Extract scores from dimension results
         impact_score = impact.get("score", 0)
-        sustainability_score = sustainability.get("score", 0)
+        ecosystem_score = ecosystem.get("score", 0)
         quality_score = quality.get("score", 0)
 
         # Calculate weighted average
         overall = (
             impact_score * impact_weight
-            + sustainability_score * sustainability_weight
+            + ecosystem_score * ecosystem_weight
             + quality_score * quality_weight
         )
 
@@ -809,7 +809,7 @@ class MetricsOrchestrator:
                 row += f'\n<p class="sub-detail">{info["detail"]}</p>'
             return row
 
-        sust = dims.get("sustainability", {}).get("sub_results", {})
+        eco = dims.get("ecosystem", {}).get("sub_results", {})
 
         # --- 4.1.1 Software Citation and Adoption ---
         impact_sub = dims.get("impact", {}).get("sub_results") or {}
@@ -848,7 +848,7 @@ class MetricsOrchestrator:
             # (new measurement methods, PDF §4.1.1) — sourced from the same
             # ecosyste.ms data collaboration.py already collects for §4.2.7,
             # not re-fetched here. Evidence only, not part of Citation Score.
-            collab = sust.get("collaboration", {})
+            collab = eco.get("collaboration", {})
             registries = collab.get("registries", [])
             if registries:
                 max_packages = max((r["dependent_packages"] for r in registries), default=0)
@@ -878,9 +878,9 @@ class MetricsOrchestrator:
         # 1. Enhanced Document Detection  2. Governance Keyword Analysis
         # 3. OpenSSF Badge Integration    4. CHAOSS Governance Metrics
         # 5. Governance Effectiveness Assessment
-        governance = sust.get("governance", {})
-        scorecard  = sust.get("openssf_scorecard", {})
-        chaoss     = sust.get("chaoss_activity", {})
+        governance = eco.get("governance", {})
+        scorecard  = eco.get("openssf_scorecard", {})
+        chaoss     = eco.get("chaoss_activity", {})
         gov_lines  = []
         gov_pts    = 0
         if governance or scorecard:
@@ -1001,7 +1001,7 @@ class MetricsOrchestrator:
         # 1. Enhanced License Detection  2. Automated FAIR4RS Assessment
         # 3. OSI License Validation      4. License Exception Handling
         # 5. FAIR Metadata Assessment
-        licensing = sust.get("licensing", {})
+        licensing = eco.get("licensing", {})
         analysis  = licensing.get("license_analysis", {})
         compliance = licensing.get("compliance_score", {})
         if licensing:
@@ -1011,7 +1011,7 @@ class MetricsOrchestrator:
             # GitHub returns NOASSERTION for any licence it cannot match verbatim.
             # Fall back to the family recovered from the licence text so a project
             # with extra copyright notices is not recorded as unlicensed.
-            fair_lic = sust.get("fair_licensing", {})
+            fair_lic = eco.get("fair_licensing", {})
             flsub = fair_lic.get("overall_score", {}).get("sub_scores", {})
             resolved = fair_lic.get("license_exceptions", {}).get("resolved_from_text")
             license_name = spdx_id or resolved or analysis.get("license_type") or "Unknown"
@@ -1079,7 +1079,7 @@ class MetricsOrchestrator:
         # 1. Commit Activity Pattern Analysis   2. Maintenance Mode Indicator Detection
         # 3. Activity Trend Monitoring          4. Release Pattern Assessment
         # 5. Multi-Channel Communication        6. Contributor Abandonment Forecasting
-        maintenance = sust.get("maintenance", {})
+        maintenance = eco.get("maintenance", {})
         if maintenance:
             maint_lines = []
             maint_pts   = 0
@@ -1168,7 +1168,7 @@ class MetricsOrchestrator:
             section_423_data = None
 
         # --- 4.2.4 Engagement ---
-        engagement = sust.get("engagement", {})
+        engagement = eco.get("engagement", {})
         if engagement:
             eng_score = engagement.get("overall_score", {})
             sub = eng_score.get("sub_scores", {})
@@ -1336,7 +1336,7 @@ class MetricsOrchestrator:
         section_4210_data = "\n".join(section_4210_lines) if section_4210_lines else None
 
         # --- 4.2.5 Outreach (PDF §4.2.5 — 8 sub-metrics) ---
-        outreach = sust.get("outreach", {})
+        outreach = eco.get("outreach", {})
         if outreach:
             osub = outreach.get("overall_score", {}).get("sub_scores", {})
             out_lines = [
@@ -1361,7 +1361,7 @@ class MetricsOrchestrator:
         # --- 4.2.6 Welcomeness (PDF §4.2.6 — 7 sub-metrics) ---
         # Only Decision-Making Visibility is answerable from repository data;
         # the other six need sentiment/tone analysis or maintainer demographics.
-        welcomeness = sust.get("welcomeness", {})
+        welcomeness = eco.get("welcomeness", {})
         if welcomeness:
             wsub = welcomeness.get("overall_score", {}).get("sub_scores", {})
             wel_lines = [
@@ -1383,7 +1383,7 @@ class MetricsOrchestrator:
             section_426_data = None
 
         # --- 4.2.7 Collaboration (PDF §4.2.7 — 5 sub-metrics) ---
-        collaboration = sust.get("collaboration", {})
+        collaboration = eco.get("collaboration", {})
         if collaboration:
             csub = collaboration.get("overall_score", {}).get("sub_scores", {})
             collab_lines = [
@@ -1405,7 +1405,7 @@ class MetricsOrchestrator:
         # --- 4.2.8 Financial Sustainability / 4.2.9 Institutional Support ---
         # One collector serves both: they rest on the same funding documentation
         # and contributor-affiliation pass.
-        funding = sust.get("funding", {})
+        funding = eco.get("funding", {})
         if funding:
             fsub = funding.get("overall_score", {}).get("sub_scores", {})
             fin_lines = [
@@ -1565,7 +1565,7 @@ class MetricsOrchestrator:
         # 1. CI/CD Effectiveness   2. Testing Framework   3. Code Review Quality
         # 4. Dev Tool Integration  5. Community Contribution Facilitation
         ci_cd = qual.get("ci_cd", {})
-        openssf_badge = sust.get("openssf_badge", {})
+        openssf_badge = eco.get("openssf_badge", {})
         section_432_lines = []
         dp_pts = 0
         if ci_cd or openssf_badge:
@@ -1778,8 +1778,8 @@ class MetricsOrchestrator:
             # the levels already collected under 4.2 for the practices it
             # deliberately doesn't restate (release signing, static analysis,
             # vulnerability response, etc — see collector docstring).
-            badge = sust.get("openssf_badge", {})
-            scorecard = sust.get("openssf_scorecard", {})
+            badge = eco.get("openssf_badge", {})
+            scorecard = eco.get("openssf_scorecard", {})
             if badge.get("badge_exists") or scorecard.get("scorecard_exists"):
                 parts = []
                 if badge.get("badge_exists"):
@@ -1829,7 +1829,7 @@ class MetricsOrchestrator:
                 "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},
                 "4.1.2": {"title": "Field Research Impact", "data": _stub("4.1.2")},
             },
-            "sustainability": {
+            "ecosystem": {
                 "4.2.1": {
                     "title": "Codes of Conduct (CoC), Governance, and Contributor Guidelines",
                     "data": section_421_data,

@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.sustainability.outreach import OutreachCollector
+from collectors.ecosystem.outreach import OutreachCollector
 
 
 @pytest.fixture
@@ -97,12 +97,12 @@ class TestNewcomerLabelQuery:
         # Eight searches (four labels x two states) became two. Comma-separated
         # values in a label: qualifier are ORed, and the OR form deduplicates
         # issues carrying more than one of the labels.
-        from collectors.sustainability.outreach import _NEWCOMER_LABELS
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
         labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
         assert labels == '"good first issue","help wanted",good-first-issue,newcomer'
 
     def test_spaced_labels_are_quoted(self):
-        from collectors.sustainability.outreach import _NEWCOMER_LABELS
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
         labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
         assert '"good first issue"' in labels
         assert "good-first-issue" in labels and '"good-first-issue"' not in labels

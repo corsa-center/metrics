@@ -5,13 +5,13 @@
 | Collector | Metric | File |
 |-----------|--------|------|
 | Citation | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` |
-| CoC / Governance | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/sustainability/chaoss_governance.py` |
-| Licensing | 4.2.2 Open-Source Licensing & FAIR Compliance | `collectors/sustainability/licensing.py` |
-| Active Maintenance | 4.2.3 Active Maintenance | `collectors/sustainability/active_maintenance.py` |
-| Engagement | 4.2.4 Community Engagement | `collectors/sustainability/engagement.py` |
-| Community Health | 4.2.10 Project Longevity & Community Health | `collectors/sustainability/community_health.py` |
-| OpenSSF Badge | OpenSSF Best Practices Badge | `collectors/sustainability/openssf_badge.py` |
-| OpenSSF Scorecard | OpenSSF Scorecard | `collectors/sustainability/openssf_scorecard.py` |
+| CoC / Governance | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/ecosystem/chaoss_governance.py` |
+| Licensing | 4.2.2 Open-Source Licensing & FAIR Compliance | `collectors/ecosystem/licensing.py` |
+| Active Maintenance | 4.2.3 Active Maintenance | `collectors/ecosystem/active_maintenance.py` |
+| Engagement | 4.2.4 Community Engagement | `collectors/ecosystem/engagement.py` |
+| Community Health | 4.2.10 Project Longevity & Community Health | `collectors/ecosystem/community_health.py` |
+| OpenSSF Badge | OpenSSF Best Practices Badge | `collectors/ecosystem/openssf_badge.py` |
+| OpenSSF Scorecard | OpenSSF Scorecard | `collectors/ecosystem/openssf_scorecard.py` |
 | CI/CD | 4.3.2 Development Practices (CI/CD) | `collectors/quality/development_practices/ci_cd.py` |
 | Reproducibility | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` |
 | Accessibility | 4.3.5 Accessibility (portable build systems) | `collectors/quality/accessibility.py` |
@@ -62,7 +62,7 @@ python scripts/generate_corsa_citations.py \
 
 | File | Description |
 |------|-------------|
-| `output/sustainabilityMetrics.json` | Dashboard-ready metrics JSON |
+| `output/ecosystemMetrics.json` | Dashboard-ready metrics JSON |
 | `output/orchestrator_summary.json` | Run summary (scores, counts, top packages) |
 | `orchestrator.log` | Detailed collection log |
 

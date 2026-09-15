@@ -42,10 +42,10 @@ def _render(maintenance):
     orch = MetricsOrchestrator.__new__(MetricsOrchestrator)
     orch.config = {}
     metrics = {
-        "dimensions": {"sustainability": {"sub_results": {"maintenance": maintenance}}}
+        "dimensions": {"ecosystem": {"sub_results": {"maintenance": maintenance}}}
     }
     out = orch._transform_for_dashboard("HDFGroup/hdf5", metrics)
-    return out["sustainability"]["4.2.10"]["data"]
+    return out["ecosystem"]["4.2.10"]["data"]
 
 
 class TestSectionShape:
@@ -263,7 +263,7 @@ class TestProjectAgeDates:
 
 class TestFirstCommitLookup:
     def test_picks_last_page_from_link_header(self):
-        from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+        from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
         header = (
             '<https://api.github.com/repositories/1/commits?per_page=1&page=2>; rel="next", '
@@ -273,7 +273,7 @@ class TestFirstCommitLookup:
         assert ActiveMaintenanceCollector._get_next_link(header).endswith("page=2")
 
     def test_missing_header_returns_none(self):
-        from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+        from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
         assert ActiveMaintenanceCollector._get_rel_link(None, "last") is None
         assert ActiveMaintenanceCollector._get_rel_link("", "last") is None
@@ -281,7 +281,7 @@ class TestFirstCommitLookup:
 
 class TestAgeDerivation:
     def test_longer_of_the_two_ages_wins(self):
-        from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+        from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
         c = ActiveMaintenanceCollector()
         out = c._analyze_maintenance_indicators(
@@ -295,7 +295,7 @@ class TestAgeDerivation:
     def test_empty_repo_created_before_first_commit(self):
         # zfp's first commit landed a day after the repo was created; repo age
         # is then the longer span and must not be discarded.
-        from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+        from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
         c = ActiveMaintenanceCollector()
         out = c._analyze_maintenance_indicators(
@@ -306,7 +306,7 @@ class TestAgeDerivation:
         assert out["project_age_years"] == out["repo_age_years"]
 
     def test_no_dates_yields_none(self):
-        from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+        from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
         c = ActiveMaintenanceCollector()
         out = c._analyze_maintenance_indicators(

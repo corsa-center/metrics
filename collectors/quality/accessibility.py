@@ -18,7 +18,7 @@ import httpx
 import logging
 from typing import Any, Dict, List
 
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

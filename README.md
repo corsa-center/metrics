@@ -84,7 +84,7 @@ metrics/
 │   ├── impact/
 │   │   ├── citation.py     # Citation metrics (✅ implemented)
 │   │   └── dimension.py    # Impact dimension
-│   ├── sustainability/
+│   ├── ecosystem/
 │   │   ├── chaoss_governance.py   # 4.2.1 CoC, governance & contributor guidelines
 │   │   ├── licensing.py           # 4.2.2 Open-source licensing & FAIR compliance
 │   │   ├── active_maintenance.py  # 4.2.3 Active maintenance
@@ -92,7 +92,7 @@ metrics/
 │   │   ├── community_health.py    # 4.2.10 Project longevity & community health
 │   │   ├── openssf_badge.py       # OpenSSF best practices badge
 │   │   ├── openssf_scorecard.py   # OpenSSF scorecard
-│   │   └── dimension.py           # Sustainability dimension aggregator
+│   │   └── dimension.py           # Ecosystem dimension aggregator
 │   ├── quality/
 │   │   ├── development_practices/
 │   │   │   └── ci_cd.py           # 4.3.2 CI/CD development practices
