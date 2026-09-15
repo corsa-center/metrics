@@ -2,13 +2,15 @@
 
 Every metric the framework collects, organized by the section numbering of the
 **CASS Sustainability Metrics Report v3**. Each section lists the sub-metrics
-named by the report, whether the framework fills them today, and where the data
-comes from.
+named by the report, whether the framework fills them today, and where the data comes from.
 
-The report defines three dimensions — **4.1 Impact**, **4.2 Ecosystem**,
+The report defines three dimensions — **4.1 Impact**, **4.2 Sustainability**,
 **4.3 Quality** — and 19 sections beneath them. Sub-metric names below are the
 report's own; they are also the keys used by the `package_config/` override
 files and by `SECTION_SUBMETRICS` in [`orchestrator.py`](orchestrator.py).
+
+> [!NOTE]
+> Throughout the metrics collection framework and sustainability dashboard, we refer to 'Ecosystem' in place of the CASS 'Sustainability' dimension.
 
 **Legend:** ✅ collected · 🔲 rendered as "Not yet collected" · ⬜ whole section
 is a stub
