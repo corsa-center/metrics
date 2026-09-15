@@ -6,7 +6,7 @@ repository can find out how to install the software, how to use it, and where
 the full documentation lives.
 
 Installation Success Tracking for this section is produced by
-`collectors/sustainability/collaboration.py`, which already queries the package
+`collectors/ecosystem/collaboration.py`, which already queries the package
 registries; the orchestrator renders it here rather than repeating that lookup.
 
 Not collected: User Experience Assessment (the report specifies the UEQ
@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

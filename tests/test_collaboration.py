@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.sustainability.collaboration import CollaborationCollector
+from collectors.ecosystem.collaboration import CollaborationCollector
 
 
 @pytest.fixture

@@ -21,7 +21,7 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

@@ -188,8 +188,8 @@ export GITHUB_TOKEN="your_token_here"
 ## 📖 Full Documentation
 
 - **[README.md](README.md)** - Complete documentation
-- **[CORSA_INTEGRATION_PLAN.md](CORSA_INTEGRATION_PLAN.md)** - Integration guide
-- **[SUMMARY.md](SUMMARY.md)** - Project summary
+- **[ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md)** - Integration guide
+- **[METRICS_CATALOG.md](METRICS_CATALOG.md)** - Project summary
 
 ---
 
@@ -208,7 +208,7 @@ export GITHUB_TOKEN="your_token_here"
 1. ✅ **You've completed basic testing!**
 
 2. **To integrate with CORSA:**
-   - Read [CORSA_INTEGRATION_PLAN.md](CORSA_INTEGRATION_PLAN.md)
+   - Read [ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md)
    - Add DOI mappings for your repositories
    - Run full catalog collection
    - Copy output to CORSA dashboard
@@ -222,4 +222,4 @@ export GITHUB_TOKEN="your_token_here"
 
 **Status:** ✅ Ready to use!
 
-*For questions: Read [README.md](README.md) or check [SUMMARY.md](SUMMARY.md)*
+*For questions: Read [README.md](README.md) or check [METRICS_CATALOG.md](METRICS_CATALOG.md)*

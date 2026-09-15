@@ -25,7 +25,7 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

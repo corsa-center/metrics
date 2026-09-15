@@ -1,5 +1,5 @@
 """
-OpenSSF Scorecard Collector (CASS Report Section 4.2 — Sustainability)
+OpenSSF Scorecard Collector (CASS Report Section 4.2 — Ecosystem)
 
 Fetches the OpenSSF Scorecard score for a GitHub repository via the free
 public API. Returns an overall score (0–10) plus per-check breakdowns.
@@ -11,7 +11,7 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

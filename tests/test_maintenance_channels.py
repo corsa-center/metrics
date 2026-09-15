@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.sustainability.active_maintenance import ActiveMaintenanceCollector
+from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
 
 @pytest.fixture

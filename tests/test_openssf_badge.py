@@ -1,7 +1,7 @@
 """Unit tests for OpenSSFBadgeCollector pure computation methods."""
 
 import pytest
-from collectors.sustainability.openssf_badge import OpenSSFBadgeCollector
+from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
 
 
 @pytest.fixture

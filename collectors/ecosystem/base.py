@@ -1,4 +1,4 @@
-"""Shared base class for GitHub-based sustainability collectors."""
+"""Shared base class for GitHub-based ecosystem collectors."""
 
 import re
 import httpx
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class GitHubCollectorBase:
-    """Provides shared GitHub API utilities for sustainability collectors."""
+    """Provides shared GitHub API utilities for ecosystem collectors."""
 
     def __init__(self, github_token: Optional[str] = None):
         if github_token:

@@ -2,7 +2,7 @@
 # Coordinates metrics collection and dashboard integration
 #
 # Based on CASS Sustainability Metrics Report v3 (3 dimensions):
-#   4.1 Impact, 4.2 Sustainability, 4.3 Quality
+#   4.1 Impact, 4.2 Ecosystem, 4.3 Quality
 
 # Dashboard catalog URL (served via GitHub Pages)
 dashboard_base_url: "https://corsa.center/dashboard"
@@ -11,7 +11,7 @@ output_path: "./output"              # Local output directory (published to GitH
 # Enable/disable CASS dimension collectors
 collectors:
   impact: true              # 4.1 Impact (citation, adoption, field research impact)
-  sustainability: true      # 4.2 Sustainability (governance, licensing, maintenance, engagement, ...)
+  ecosystem: true            # 4.2 Ecosystem (governance, licensing, maintenance, engagement, ...)
   quality: true             # 4.3 Quality (reliability, dev practices, reproducibility, usability, ...)
 
 # Fine-grained toggles for individual sub-collectors.
@@ -19,7 +19,7 @@ collectors:
 # Turning one off skips its API calls and drops it from the dimension average
 # (it does not score zero); the sections it feeds then render "Not yet collected".
 
-sustainability_collectors:
+ecosystem_collectors:
   community_health: true    # 4.2.1 governance docs (CoC, GOVERNANCE, CONTRIBUTING)
   chaoss_activity: true     # 4.2.1 CHAOSS Governance Metrics
   openssf_scorecard: true   # 4.2.1 OpenSSF Scorecard
@@ -61,7 +61,7 @@ api_credentials:
 # Note: Weights should sum to 1.0
 metric_weights:
   impact: 0.33             # 33% weight - Research impact, citation, and adoption
-  sustainability: 0.34     # 34% weight - Governance, licensing, maintenance, engagement
+  ecosystem: 0.34          # 34% weight - Governance, licensing, maintenance, engagement
   quality: 0.33            # 33% weight - Reliability, dev practices, usability
 
 # Rate limiting
@@ -84,7 +84,7 @@ filters:
 
 # Output options
 output:
-  dashboard_format: true    # Generate sustainabilityMetrics.json
+  dashboard_format: true    # Generate ecosystemMetrics.json
   detailed_reports: true    # Generate per-package detailed reports
   summary_report: true      # Generate summary statistics
   csv_export: false         # Export to CSV format

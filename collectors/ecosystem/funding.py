@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

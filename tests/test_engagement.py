@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from collectors.sustainability.engagement import EngagementCollector, _is_bot, _hours, _parse_dt
+from collectors.ecosystem.engagement import EngagementCollector, _is_bot, _hours, _parse_dt
 
 
 @pytest.fixture

@@ -1,9 +1,9 @@
 """
-Sustainability Dimension Collector
+Ecosystem Dimension Collector
 
 CASS Sustainability Metrics Report v3 - Section 4.2
 
-The Sustainability dimension encompasses both human and structural elements
+The Ecosystem dimension encompasses both human and structural elements
 that are crucial for ensuring long-term project resilience and continuity.
 
 Sub-categories (4.2.1 - 4.2.10):
@@ -24,28 +24,28 @@ from typing import Dict, Any
 from datetime import datetime, timezone
 
 
-class SustainabilityDimensionCollector:
-    """Collector for Sustainability dimension metrics (CASS Report Section 4.2)"""
+class EcosystemDimensionCollector:
+    """Collector for Ecosystem dimension metrics (CASS Report Section 4.2)"""
 
     def __init__(self, config: Dict[str, Any]):
-        """Initialize Sustainability dimension collector"""
+        """Initialize Ecosystem dimension collector"""
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Collect Sustainability dimension metrics for a package
+        Collect Ecosystem dimension metrics for a package
 
         Args:
             package: Dictionary with package metadata
 
         Returns:
-            Dictionary with Sustainability dimension metrics
+            Dictionary with Ecosystem dimension metrics
         """
-        self.logger.info(f"Collecting Sustainability dimension metrics for {package.get('name')} (placeholder)")
+        self.logger.info(f"Collecting Ecosystem dimension metrics for {package.get('name')} (placeholder)")
 
         return {
-            "dimension": "sustainability",
+            "dimension": "ecosystem",
             "score": 0.0,
             "max_score": 100.0,
             "metadata": {

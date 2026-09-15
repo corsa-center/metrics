@@ -21,7 +21,7 @@ def _orch(config):
     o = MetricsOrchestrator.__new__(MetricsOrchestrator)
     o.config = config
     o.collectors_enabled = config.get("collectors", {})
-    o.sustainability_collectors = config.get("sustainability_collectors", {})
+    o.ecosystem_collectors = config.get("ecosystem_collectors", {})
     o.quality_collectors = config.get("quality_collectors", {})
     return o
 
@@ -29,22 +29,22 @@ def _orch(config):
 class TestSubEnabled:
     def test_absent_config_defaults_to_enabled(self):
         o = _orch({})
-        assert o._sub_enabled("sustainability", "licensing") is True
+        assert o._sub_enabled("ecosystem", "licensing") is True
         assert o._sub_enabled("quality", "ci_cd") is True
 
     def test_absent_key_defaults_to_enabled(self):
-        o = _orch({"sustainability_collectors": {"licensing": False}})
-        assert o._sub_enabled("sustainability", "licensing") is False
-        assert o._sub_enabled("sustainability", "engagement") is True
+        o = _orch({"ecosystem_collectors": {"licensing": False}})
+        assert o._sub_enabled("ecosystem", "licensing") is False
+        assert o._sub_enabled("ecosystem", "engagement") is True
 
     def test_groups_are_independent(self):
         o = _orch(
             {
-                "sustainability_collectors": {"licensing": False},
+                "ecosystem_collectors": {"licensing": False},
                 "quality_collectors": {"ci_cd": False},
             }
         )
-        assert o._sub_enabled("sustainability", "licensing") is False
+        assert o._sub_enabled("ecosystem", "licensing") is False
         assert o._sub_enabled("quality", "licensing") is True
 
 
@@ -60,7 +60,7 @@ class TestConfigMatchesCode:
     @pytest.mark.parametrize(
         "group,block",
         [
-            ("sustainability", "sustainability_collectors"),
+            ("ecosystem", "ecosystem_collectors"),
             ("quality", "quality_collectors"),
         ],
     )
@@ -70,8 +70,8 @@ class TestConfigMatchesCode:
 
     def test_every_guard_is_documented_in_config(self):
         config = yaml.safe_load(CONFIG.read_text())
-        documented = set(config["sustainability_collectors"]) | set(
+        documented = set(config["ecosystem_collectors"]) | set(
             config["quality_collectors"]
         )
-        wired = self._wired_keys("sustainability") | self._wired_keys("quality")
+        wired = self._wired_keys("ecosystem") | self._wired_keys("quality")
         assert wired == documented

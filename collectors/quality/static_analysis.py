@@ -6,7 +6,7 @@ for a CodeQL workflow file. GitHub's code-scanning alerts API
 (/repos/{owner}/{repo}/code-scanning/alerts) requires authentication even
 for public repos (returns 401 unauthenticated), so this uses the same
 workflow-presence proxy pattern as
-collectors/sustainability/openssf_badge.py rather than fetching alert counts.
+collectors/ecosystem/openssf_badge.py rather than fetching alert counts.
 """
 
 import asyncio
@@ -14,7 +14,7 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.sustainability.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase
 
 logger = logging.getLogger(__name__)
 

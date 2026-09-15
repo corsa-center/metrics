@@ -3,7 +3,7 @@
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from collectors.sustainability.openssf_scorecard import OpenSSFScorecardCollector
+from collectors.ecosystem.openssf_scorecard import OpenSSFScorecardCollector
 
 
 @pytest.fixture
