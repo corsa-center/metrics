@@ -10,7 +10,7 @@ This framework collects metrics from multiple sources and integrates with the [C
 
 - **Multi-Source Data Collection**: GitHub, Semantic Scholar, OpenAlex, Zenodo
 - **Orchestrated Workflows**: Configurable collection pipelines
-- **CASS Framework**: Four dimensions - Impact, Community, Viability, Quality
+- **CASS Framework**: Three dimensions - Impact, Ecosystem, Quality
 - **Dashboard Integration**: Generate JSON data for CORSA dashboard
 - **Automated Collection**: GitHub Actions workflows
 - **Extensible Framework**: Modular collector design for incremental implementation
