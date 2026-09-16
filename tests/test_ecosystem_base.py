@@ -66,18 +66,21 @@ class TestRetryingTransport:
         assert response.status_code == 200
         assert wrapped.handle_async_request.call_count == 2
 
-    def test_secondary_rate_limit_message_is_retried(self):
+    def test_403_without_retry_after_header_is_not_retried(self):
+        # An earlier version also retried on "secondary rate limit"/"abuse"
+        # wording in the body. That fired often enough that retrying every
+        # hit (up to 3x, across ~20 collectors x 70+ packages) pushed total
+        # request volume past GitHub's 5,000/hour quota and caused a worse
+        # outcome -- near-total data loss -- than the original bug. Requiring
+        # Retry-After specifically is a stricter, cheaper signal on purpose.
         wrapped = AsyncMock()
         wrapped.handle_async_request = AsyncMock(
-            side_effect=[
-                _resp(403, text="You have exceeded a secondary rate limit"),
-                _resp(200, {"ok": True}),
-            ]
+            return_value=_resp(403, text="You have exceeded a secondary rate limit")
         )
         transport = RetryingTransport(wrapped)
         response = asyncio.run(transport.handle_async_request(_request()))
-        assert response.status_code == 200
-        assert wrapped.handle_async_request.call_count == 2
+        assert response.status_code == 403
+        assert wrapped.handle_async_request.call_count == 1
 
     def test_plain_403_is_not_retried(self):
         # A genuine permission error -- no Retry-After, no rate-limit wording
@@ -115,7 +118,7 @@ class TestRetryingTransport:
         transport = RetryingTransport(wrapped)
         response = asyncio.run(transport.handle_async_request(_request()))
         assert response.status_code == 403
-        assert wrapped.handle_async_request.call_count == 3
+        assert wrapped.handle_async_request.call_count == 2
 
 
 class TestCheckFileExists:

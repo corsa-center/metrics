@@ -66,9 +66,16 @@ metric_weights:
 
 # Rate limiting
 rate_limiting:
-  # 4 produced ~97 secondary-rate-limit 403s across a 67-package run; 2 keeps
-  # the speedup (55min -> ~11min sequential-to-concurrent) without the burst.
-  concurrent_packages: 2     # packages collected in parallel (see process_all_software)
+  # 4 produced ~97 secondary-rate-limit 403s across a 67-package run; 2 kept
+  # the speedup (55min -> ~11min sequential-to-concurrent) without the burst
+  # -- but that was before RetryingTransport (collectors/ecosystem/base.py)
+  # started retrying those 403s instead of silently eating them. Retrying
+  # multiplies request volume on top of 2x concurrency, and a full 71-package
+  # run at concurrent_packages=2 blew through the 5,000/hour authenticated
+  # quota partway through, losing near-total data for the rest of the run --
+  # worse than the un-retried 403s ever were. Dropping to 1 trades some of
+  # that speedup back for staying under budget with retries in the mix.
+  concurrent_packages: 1     # packages collected in parallel (see process_all_software)
   delay_between_packages: 2  # seconds, applied per worker as a stagger
   api_retry_attempts: 3
   api_retry_delay: 5  # seconds

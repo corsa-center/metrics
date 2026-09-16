@@ -102,22 +102,26 @@ class GitHubClient(BaseAPIClient):
         # here during a concurrent run are GitHub's *secondary* (abuse) rate
         # limit -- a short, deliberately-throttled window, not real quota
         # exhaustion -- and retrying those quickly is safe. Distinguish the
-        # two: only retry when the response carries a Retry-After header or
-        # a message naming the secondary limit; anything else (a genuine
-        # permission/404-as-403 case) fails immediately as before.
-        attempts = 3
+        # two by requiring a Retry-After header specifically (GitHub's own
+        # documented signal for this); anything else -- a genuine permission
+        # error, a 404-as-403, or a *primary* quota-exhaustion 403 (which
+        # carries no Retry-After and won't be fixed by retrying at all) --
+        # fails immediately as before. An earlier version of this also
+        # retried on "secondary rate limit"/"abuse" wording in the message,
+        # which fired often enough that multiplying every hit by up to 3x
+        # across a full portfolio run pushed total request volume past the
+        # 5,000/hour authenticated quota -- a worse outcome (near-total data
+        # loss once that budget was exhausted) than the original bug.
+        attempts = 2
         for attempt in range(attempts):
             try:
                 return self.client.get_repo(f"{owner}/{repo}")
             except GithubException as e:
-                message = str((e.data or {}).get("message", "")).lower()
                 headers = e.headers or {}
                 retry_after = headers.get("retry-after")
-                is_secondary_rate_limit = e.status in (403, 429) and (
-                    retry_after or "secondary rate limit" in message or "abuse" in message
-                )
+                is_secondary_rate_limit = e.status in (403, 429) and retry_after
                 if is_secondary_rate_limit and attempt < attempts - 1:
-                    delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
+                    delay = float(retry_after)
                     self.logger.debug(
                         f"Secondary rate limit fetching {owner}/{repo}, retrying in {delay:.0f}s"
                     )

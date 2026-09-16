@@ -37,14 +37,19 @@ class TestGetRepositoryRetry:
         assert result is repo
         assert client.client.get_repo.call_count == 2
 
-    def test_secondary_rate_limit_message_is_retried(self, client):
-        repo = MagicMock()
+    def test_message_alone_without_retry_after_is_not_retried(self, client):
+        # An earlier version also retried on "secondary rate limit"/"abuse"
+        # wording alone. That fired often enough that retrying every hit
+        # (up to 3x, across a full portfolio run) pushed total request
+        # volume past GitHub's 5,000/hour quota -- a worse outcome than the
+        # original bug. Requiring Retry-After specifically is stricter and
+        # retries less often, on purpose.
         client.client.get_repo = MagicMock(
-            side_effect=[_exc(403, message="You have exceeded a secondary rate limit"), repo]
+            side_effect=_exc(403, message="You have exceeded a secondary rate limit")
         )
-        result = asyncio.run(client.get_repository("https://github.com/kokkos/kokkos"))
-        assert result is repo
-        assert client.client.get_repo.call_count == 2
+        with pytest.raises(GithubException):
+            asyncio.run(client.get_repository("https://github.com/kokkos/kokkos"))
+        assert client.client.get_repo.call_count == 1
 
     def test_plain_403_is_not_retried(self, client):
         # A genuine permission error (private/inaccessible repo) shouldn't
@@ -60,7 +65,7 @@ class TestGetRepositoryRetry:
         )
         with pytest.raises(GithubException):
             asyncio.run(client.get_repository("https://github.com/o/r"))
-        assert client.client.get_repo.call_count == 3
+        assert client.client.get_repo.call_count == 2
 
     def test_404_is_not_retried(self, client):
         client.client.get_repo = MagicMock(side_effect=_exc(404, message="Not Found"))

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # code for both a real permission error and its *secondary* (abuse-detection)
 # rate limit, so it needs the extra check below before retrying.
 _RETRYABLE_STATUSES = {403, 429, 500, 502, 503}
-_RETRY_ATTEMPTS = 3
+_RETRY_ATTEMPTS = 2
 
 
 class RetryingTransport(httpx.AsyncBaseTransport):
@@ -29,11 +29,19 @@ class RetryingTransport(httpx.AsyncBaseTransport):
     as "no data" instead of being retried -- turned up in three places.
 
     A plain permission 403 (private repo, bad token) is NOT retried: only a
-    403 carrying a Retry-After header or a "secondary rate limit"/"abuse"
-    message is treated as the throttle it actually is. Returns the final
-    response either way (success, or the last failure once retries are
-    exhausted) so a caller's existing `if response.status_code != 200`
-    check keeps working completely unchanged.
+    403 carrying a Retry-After header is treated as the throttle it actually
+    is. This is deliberately narrower than message-sniffing for "secondary
+    rate limit"/"abuse" text: a first version did that too, and multiplying
+    every throttled call across ~20 collectors x 70+ packages up to 3x each
+    pushed total request volume for a full run past GitHub's 5,000/hour
+    authenticated quota, which produced a *worse* outcome (near-total data
+    loss once the primary quota was exhausted) than the original bug.
+    GitHub's own docs recommend keying off Retry-After specifically; requiring
+    it here is a stricter, cheaper signal that retries less often, on purpose.
+    Returns the final response either way (success, or the last failure once
+    retries are exhausted) so a caller's existing
+    `if response.status_code != 200` check keeps working completely
+    unchanged.
     """
 
     def __init__(self, wrapped: Optional[httpx.AsyncBaseTransport] = None):
@@ -46,20 +54,13 @@ class RetryingTransport(httpx.AsyncBaseTransport):
             if response.status_code not in _RETRYABLE_STATUSES:
                 return response
 
-            if response.status_code == 403:
+            retry_after = response.headers.get("Retry-After")
+            if response.status_code == 403 and not retry_after:
                 await response.aread()
-                message = response.text.lower()
-                is_secondary_rate_limit = (
-                    "retry-after" in response.headers
-                    or "secondary rate limit" in message
-                    or "abuse" in message
-                )
-                if not is_secondary_rate_limit:
-                    return response
+                return response
 
             if attempt < _RETRY_ATTEMPTS - 1:
                 await response.aread()
-                retry_after = response.headers.get("Retry-After")
                 delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
                 logger.debug(
                     f"HTTP {response.status_code} from {request.url}, retrying in {delay:.0f}s"
