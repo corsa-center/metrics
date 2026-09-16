@@ -25,7 +25,7 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class OutreachCollector(GitHubCollectorBase):
         logger.info(f"Collecting outreach metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            contributors, recent_commits, newcomer_issues, onboarding = await asyncio.gather(
+            results = await asyncio.gather(
                 self._get_contributors(client, owner, repo),
                 self._get_recent_commit_authors(client, owner, repo),
                 self._get_newcomer_issues(client, owner, repo),
@@ -89,18 +89,31 @@ class OutreachCollector(GitHubCollectorBase):
                 return_exceptions=True,
             )
 
-        if isinstance(contributors, Exception):
-            logger.warning(f"Contributor fetch failed: {contributors}")
-            contributors = []
-        if isinstance(recent_commits, Exception):
-            logger.warning(f"Recent commit fetch failed: {recent_commits}")
-            recent_commits = {}
-        if isinstance(newcomer_issues, Exception):
-            logger.warning(f"Newcomer issue fetch failed: {newcomer_issues}")
-            newcomer_issues = {}
-        if isinstance(onboarding, Exception):
-            logger.warning(f"Onboarding check failed: {onboarding}")
-            onboarding = {"found": [], "missing": [], "details": {}}
+        if isinstance(results[0], Exception):
+            logger.warning(f"COLLECTION-GAP category=contributors reason=exception:{results[0]!r}")
+            contributors, contributors_gap = [], True
+        else:
+            contributors, contributors_gap = results[0]
+
+        if isinstance(results[1], Exception):
+            logger.warning(f"COLLECTION-GAP category=recent_commits reason=exception:{results[1]!r}")
+            recent_commits, commits_gap = {}, True
+        else:
+            recent_commits, commits_gap = results[1]
+
+        if isinstance(results[2], Exception):
+            logger.warning(f"COLLECTION-GAP category=newcomer_issues reason=exception:{results[2]!r}")
+            newcomer_issues = {"labels_queried": _NEWCOMER_LABELS, "open": 0,
+                               "closed": 0, "total": 0, "not_collected": True}
+        else:
+            newcomer_issues = results[2]
+
+        if isinstance(results[3], Exception):
+            logger.warning(f"COLLECTION-GAP category=onboarding reason=exception:{results[3]!r}")
+            onboarding = {"found": [], "missing": [],
+                          "not_collected": list(_ONBOARDING_PATHS), "details": {}}
+        else:
+            onboarding = results[3]
 
         growth = self._analyze_contributor_growth(contributors, recent_commits)
 
@@ -111,57 +124,89 @@ class OutreachCollector(GitHubCollectorBase):
             "contributor_growth": growth,
             "newcomer_issues": newcomer_issues,
             "onboarding": onboarding,
-            "overall_score": self._calculate_score(growth, newcomer_issues, onboarding),
+            "overall_score": self._calculate_score(
+                growth, newcomer_issues, onboarding, contributors_gap, commits_gap
+            ),
         }
 
     # ------------------------------------------------------------------ fetch
 
+    async def _get_page(
+        self, client: httpx.AsyncClient, url: str, params: Optional[dict] = None
+    ) -> tuple:
+        """GET a paginated GitHub endpoint.
+
+        Returns (items, next_url) on success (items is [] and next_url is
+        None once pagination is confirmed exhausted), or (COLLECTION_GAP,
+        None) if this page couldn't actually be fetched.
+        """
+        try:
+            response = await client.get(url, headers=self.github_headers, params=params)
+        except Exception as e:
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
+            return COLLECTION_GAP, None
+        if response.status_code == 404:
+            return [], None
+        if response.status_code != 200:
+            return COLLECTION_GAP, None
+        page = response.json()
+        if not isinstance(page, list):
+            return [], None
+        return page, self._next_link(response.headers.get("Link"))
+
     async def _get_contributors(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> List[Dict]:
-        """All-time contributors with their total contribution counts."""
+    ) -> tuple:
+        """All-time contributors with their total contribution counts.
+
+        Returns (contributors, saw_gap). A gap partway through pagination
+        still returns whatever pages were fetched before it, but saw_gap
+        tells the caller the list may be incomplete.
+        """
         contributors: List[Dict] = []
-        url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page=100"
+        url = f"https://api.github.com/repos/{owner}/{repo}/contributors"
+        params: Optional[dict] = {"per_page": 100}
+        saw_gap = False
         for _ in range(_MAX_CONTRIBUTOR_PAGES):
-            resp = await client.get(url, headers=self.github_headers)
-            if resp.status_code != 200:
+            page, next_url = await self._get_page(client, url, params)
+            if page is COLLECTION_GAP:
+                saw_gap = True
                 break
-            page = resp.json()
-            if not isinstance(page, list) or not page:
+            if not page:
                 break
             contributors.extend(page)
-            next_url = self._next_link(resp.headers.get("Link"))
             if not next_url:
                 break
-            url = next_url
-        return contributors
+            url, params = next_url, None
+        return contributors, saw_gap
 
     async def _get_recent_commit_authors(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Dict[str, int]:
-        """Commit counts per author over the recent window."""
+    ) -> tuple:
+        """Commit counts per author over the recent window.
+
+        Returns (counts, saw_gap).
+        """
         since = (datetime.now(timezone.utc) - timedelta(days=_RECENT_DAYS)).isoformat()
-        url = (
-            f"https://api.github.com/repos/{owner}/{repo}/commits"
-            f"?since={quote(since)}&per_page=100"
-        )
+        url = f"https://api.github.com/repos/{owner}/{repo}/commits"
+        params: Optional[dict] = {"since": since, "per_page": 100}
         counts: Dict[str, int] = {}
+        saw_gap = False
         for _ in range(_MAX_COMMIT_PAGES):
-            resp = await client.get(url, headers=self.github_headers)
-            if resp.status_code != 200:
+            page, next_url = await self._get_page(client, url, params)
+            if page is COLLECTION_GAP:
+                saw_gap = True
                 break
-            page = resp.json()
-            if not isinstance(page, list) or not page:
+            if not page:
                 break
             for commit in page:
                 login = (commit.get("author") or {}).get("login")
                 if login:
                     counts[login] = counts.get(login, 0) + 1
-            next_url = self._next_link(resp.headers.get("Link"))
             if not next_url:
                 break
-            url = next_url
-        return counts
+            url, params = next_url, None
+        return counts, saw_gap
 
     async def _get_newcomer_issues(
         self, client: httpx.AsyncClient, owner: str, repo: str
@@ -179,44 +224,61 @@ class OutreachCollector(GitHubCollectorBase):
             f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS
         )
 
-        counts: Dict[str, int] = {}
-        for state in ("open", "closed"):
+        async def count(state: str) -> tuple:
             q = f'repo:{owner}/{repo} is:issue state:{state} label:{labels}'
             url = f"https://api.github.com/search/issues?q={quote(q)}&per_page=1"
             resp = await search_get(client, url, self.github_headers)
-            counts[state] = resp.json().get("total_count", 0) if resp else 0
+            if resp is None:
+                return 0, True
+            return resp.json().get("total_count", 0), False
 
-        return {
+        (open_count, open_gap), (closed_count, closed_gap) = await asyncio.gather(
+            count("open"), count("closed"),
+        )
+        result = {
             "labels_queried": _NEWCOMER_LABELS,
-            "open": counts["open"],
-            "closed": counts["closed"],
-            "total": counts["open"] + counts["closed"],
+            "open": open_count,
+            "closed": closed_count,
+            "total": open_count + closed_count,
         }
+        # Only the open count drives good_first_issue's passing check below;
+        # a gap on the closed-state search alone doesn't make an already
+        # confirmed nonzero open count untrustworthy.
+        if open_gap and open_count == 0:
+            result["not_collected"] = True
+        return result
 
     async def _check_onboarding(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
         """Which onboarding resources the repository provides."""
 
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str]]:
+        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
+            saw_gap = False
             for path in paths:
                 url = await self._check_file_exists(client, owner, repo, path)
+                if url is COLLECTION_GAP:
+                    saw_gap = True
+                    continue
                 if url:
-                    return label, url
-            return label, None
+                    return label, url, saw_gap
+            return label, None, saw_gap
 
         results = await asyncio.gather(
             *[check(label, paths) for label, paths in _ONBOARDING_PATHS.items()]
         )
-        found, missing, details = [], [], {}
-        for label, url in results:
+        found, missing, not_collected, details = [], [], [], {}
+        for label, url, saw_gap in results:
             if url:
                 found.append(label)
                 details[label] = {"exists": True, "url": url}
+            elif saw_gap:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
             else:
                 missing.append(label)
                 details[label] = {"exists": False}
-        return {"found": found, "missing": missing, "details": details}
+        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
 
     @staticmethod
     def _next_link(link_header: Optional[str]) -> Optional[str]:
@@ -290,56 +352,76 @@ class OutreachCollector(GitHubCollectorBase):
         }
 
     def _calculate_score(
-        self, growth: Dict, newcomer_issues: Dict, onboarding: Dict
+        self, growth: Dict, newcomer_issues: Dict, onboarding: Dict,
+        contributors_gap: bool = False, commits_gap: bool = False,
     ) -> Dict[str, Any]:
         """Score the five collected sub-metrics; three remain uncollected."""
         sub: Dict[str, Dict[str, Any]] = {}
 
         new_count = growth.get("new_contributors", 0)
-        sub["new_contributor_tracking"] = {
+        new_passing = new_count > 0
+        new_entry: Dict[str, Any] = {
             "label": "New Contributor Tracking",
             "value": f"{new_count} in last {_RECENT_DAYS // 365} year"
                      + ("s" if _RECENT_DAYS // 365 != 1 else ""),
-            "passing": new_count > 0,
+            "passing": new_passing,
         }
+        if not new_passing and (contributors_gap or commits_gap):
+            new_entry["not_collected"] = True
+        sub["new_contributor_tracking"] = new_entry
 
         rate = growth.get("retention_rate")
-        sub["contributor_retention"] = {
+        # Half of newcomers coming back is a healthy return rate for OSS.
+        retention_passing = rate is not None and rate >= 50
+        retention_entry: Dict[str, Any] = {
             "label": "Contributor Retention Analysis",
             "value": f"{rate}% of new contributors returned" if rate is not None
                      else "No new contributors to measure",
-            # Half of newcomers coming back is a healthy return rate for OSS.
-            "passing": rate is not None and rate >= 50,
+            "passing": retention_passing,
         }
+        if not retention_passing and (contributors_gap or commits_gap):
+            retention_entry["not_collected"] = True
+        sub["contributor_retention"] = retention_entry
 
         lifecycle = growth.get("lifecycle", {})
         repeat = lifecycle.get("repeat", 0)
-        total = growth.get("total_contributors", 0)
-        sub["contributor_lifecycle"] = {
+        # A community sustained by more than a handful of regulars.
+        lifecycle_passing = repeat >= 3
+        lifecycle_entry: Dict[str, Any] = {
             "label": "Contributor Lifecycle Mapping",
             "value": f"{lifecycle.get('one_time', 0)} one-time / "
                      f"{lifecycle.get('casual', 0)} casual / {repeat} repeat",
-            # A community sustained by more than a handful of regulars.
-            "passing": repeat >= 3,
+            "passing": lifecycle_passing,
         }
+        if not lifecycle_passing and contributors_gap:
+            lifecycle_entry["not_collected"] = True
+        sub["contributor_lifecycle"] = lifecycle_entry
 
         gfi_total = newcomer_issues.get("total", 0)
         gfi_open = newcomer_issues.get("open", 0)
-        sub["good_first_issue"] = {
+        gfi_passing = gfi_open > 0
+        gfi_entry: Dict[str, Any] = {
             "label": "Good First Issue Effectiveness",
             "value": f"{gfi_open} open, {newcomer_issues.get('closed', 0)} closed"
                      if gfi_total else "No newcomer-labelled issues",
-            "passing": gfi_open > 0,
+            "passing": gfi_passing,
         }
+        if not gfi_passing and newcomer_issues.get("not_collected"):
+            gfi_entry["not_collected"] = True
+        sub["good_first_issue"] = gfi_entry
 
         found = onboarding.get("found", [])
-        sub["onboarding_infrastructure"] = {
+        # Over half the onboarding resources present.
+        onboarding_passing = len(found) >= 3
+        onboarding_entry: Dict[str, Any] = {
             "label": "Onboarding Infrastructure Assessment",
             "value": f"{len(found)}/{len(_ONBOARDING_PATHS)} resources",
             "detail": ", ".join(found) if found else None,
-            # Over half the onboarding resources present.
-            "passing": len(found) >= 3,
+            "passing": onboarding_passing,
         }
+        if not onboarding_passing and onboarding.get("not_collected"):
+            onboarding_entry["not_collected"] = True
+        sub["onboarding_infrastructure"] = onboarding_entry
 
         for key, label in [
             ("contribution_type_diversity", "Contribution Type Diversity"),
@@ -348,8 +430,14 @@ class OutreachCollector(GitHubCollectorBase):
         ]:
             sub[key] = {"label": label, "value": None, "passing": False, "not_collected": True}
 
-        score = sum(1 for s in sub.values() if s.get("passing"))
-        max_score = len(sub)
+        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        score = sum(1 for s in scorable.values() if s.get("passing"))
+        max_score = len(scorable)
+        if not max_score:
+            return {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "sub_scores": sub,
+            }
         return {
             "score": score,
             "max_score": max_score,
@@ -364,6 +452,6 @@ class OutreachCollector(GitHubCollectorBase):
             "timestamp": self._get_timestamp(),
             "contributor_growth": {},
             "newcomer_issues": {},
-            "onboarding": {"found": [], "missing": [], "details": {}},
-            "overall_score": {"score": 0, "max_score": 8, "percentage": 0, "sub_scores": {}},
+            "onboarding": {"found": [], "missing": [], "not_collected": [], "details": {}},
+            "overall_score": {"score": 0, "max_score": 5, "percentage": 0, "sub_scores": {}},
         }
