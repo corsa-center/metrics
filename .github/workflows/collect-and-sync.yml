@@ -2,21 +2,18 @@ name: Collect Metrics
 
 on:
   schedule:
-    # Two fixed entries rather than one weekly run split by date arithmetic:
-    # a full run's GitHub request volume is already close to the hourly
-    # quota before any retries, so the catalog is split into 2 groups (see
-    # the "Run orchestrator" step) -- but every package should still
-    # refresh weekly, not every other week, so each group gets its own
-    # fixed day instead of alternating a single weekly slot.
-    # github.event.schedule tells the "Run orchestrator" step which of
-    # these fired, so which group runs is a lookup, not computed from the
-    # date -- deliberately avoiding a parity trick (e.g. ISO week % 2),
-    # which only alternates correctly for evenly-spaced firings. Sunday to
-    # Wednesday is 3 days, Wednesday to the next Sunday is 4; a scheme
-    # relying on the gap being consistently odd would occasionally run the
-    # same group twice in a row.
-    - cron: '0 0 * * 0'  # Sunday: group 0
-    - cron: '0 0 * * 3'  # Wednesday: group 1
+    # Hourly, ~2 packages/run (see GROUP_COUNT below) rather than the whole
+    # catalog or even a weekly half of it. A single package's GitHub request
+    # volume (~80-100 requests) is trivially under any rate limit regardless
+    # of which token is used or how many collectors get added later -- this
+    # sidesteps needing to reason precisely about the budget at all, unlike
+    # the two earlier attempts this same day that got the math wrong (once
+    # assuming 5,000/hour when the automatic token is actually 1,000/hour;
+    # once because a ~36-package group still wasn't small enough even at
+    # 5,000/hour once retries were added back in). It also means every
+    # package refreshes roughly every day and a half, fresher than the
+    # weekly cadence before any of today's fixes.
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       software_filter:
@@ -40,13 +37,9 @@ on:
 jobs:
   collect-metrics:
     runs-on: ubuntu-latest
-    # A full 68-package run took 55min on 2026-08-31; the two full runs since
-    # (2026-09-06 schedule, 2026-09-09 dispatch) each ran to exactly the old
-    # 120min limit and were auto-cancelled, so no full run has succeeded in
-    # over a week -- the downstream dashboard silently fell back to whatever
-    # older/narrower run last had a "success" conclusion. 240 gives headroom
-    # for that growth (more collectors keep being added) without masking a
-    # true hang indefinitely.
+    # Outer safety net sized for the rare manual full-catalog dispatch (see
+    # "Run orchestrator" below for the tighter per-step timeout that
+    # actually applies to the common case -- an hourly ~2-package run).
     timeout-minutes: 240
 
     steps:
@@ -66,14 +59,26 @@ jobs:
           pip install pyyaml
 
       - name: Run orchestrator
+        # A scheduled run is ~2 packages (see GROUP_COUNT below); anything
+        # taking anywhere near this long means something is actually stuck,
+        # not just slow, so fail fast rather than block the next hourly run.
+        # A manual full-catalog dispatch (group_count left blank) needs the
+        # same headroom a full run always has -- github context is
+        # well-documented as available at step level, unlike at the job
+        # level above, which is why the dynamic part lives here.
+        timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.group_count == '') && 240 || 30 }}
         env:
-          # The automatic secrets.GITHUB_TOKEN is capped at 1,000 requests/hour
-          # per repository -- far below what this pipeline needs even after
-          # the retry/dedup/batching fixes above, since it calls out to ~70
-          # *other* repos' worth of GitHub API, not this one. A fine-grained
-          # PAT (public-repo read-only, so it can't write anywhere) gets the
-          # standard 5,000/hour authenticated budget instead.
-          GITHUB_TOKEN: ${{ secrets.METRICS_COLLECTOR_PAT }}
+          # Small hourly batches (see GROUP_COUNT below) keep real request
+          # volume around ~200/hour -- comfortably under even the automatic
+          # token's 1,000/hour-per-repository cap (itself well below the
+          # 5,000/hour a personal token gets), so routine operation doesn't
+          # need an elevated credential, or the bus-factor risk of tying one
+          # to a specific person's account, at all. A manual full-catalog
+          # dispatch is the one case that still exceeds 1,000/hour; that's
+          # an occasional manual/debugging path, not something the schedule
+          # depends on, so it's an accepted limitation rather than a reason
+          # to keep routine runs on an elevated token.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SEMANTIC_SCHOLAR_KEY: ${{ secrets.SEMANTIC_SCHOLAR_KEY }}
           OPENALEX_EMAIL: ${{ secrets.OPENALEX_EMAIL }}
         run: |
@@ -91,22 +96,23 @@ jobs:
             echo "::notice::Running in dry-run mode, no artifact will be uploaded"
           fi
 
-          # Scheduled runs always split 2 ways -- which group is a direct
-          # lookup from which cron entry fired (see the `on.schedule`
-          # comment above for why this isn't computed from the date).
+          # Scheduled runs always split into GROUP_COUNT round-robin groups,
+          # picked by hours-since-epoch -- safe as a plain modulo here
+          # because every hourly firing is evenly spaced (unlike the earlier
+          # weekly Sunday/Wednesday design this replaced, where the uneven
+          # 3-vs-4-day gap made a parity trick unsafe).
           # A manual dispatch only splits if asked (group_count/group inputs);
           # left blank, it runs the whole catalog, same as before batching --
           # useful for validating a fix across everything at once.
+          GROUP_COUNT=36  # ~2 packages/run for a ~71-package catalog; grows
+                          # gracefully (batch size creeps up, not coverage
+                          # breaking) if the catalog grows past ~72.
           if [ -n "$SOFTWARE_ARG" ]; then
             : # targeting one package by name -- grouping would be meaningless
           elif [ "${{ github.event_name }}" = "schedule" ]; then
-            case "${{ github.event.schedule }}" in
-              '0 0 * * 0') GROUP=0 ;;
-              '0 0 * * 3') GROUP=1 ;;
-              *) echo "::error::Unrecognized schedule '${{ github.event.schedule }}'"; exit 1 ;;
-            esac
-            CMD="$CMD --group-count 2 --group $GROUP"
-            echo "::notice::Scheduled run (${{ github.event.schedule }}): group $GROUP/2"
+            GROUP=$(( $(date -u +%s) / 3600 % GROUP_COUNT ))
+            CMD="$CMD --group-count $GROUP_COUNT --group $GROUP"
+            echo "::notice::Scheduled run: group $GROUP/$GROUP_COUNT"
           elif [ -n "${{ github.event.inputs.group_count }}" ] && [ -n "${{ github.event.inputs.group }}" ]; then
             CMD="$CMD --group-count ${{ github.event.inputs.group_count }} --group ${{ github.event.inputs.group }}"
           fi
