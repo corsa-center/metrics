@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +84,36 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
                 return_exceptions=True,
             )
 
-        popularity = results[0] if not isinstance(results[0], Exception) else {}
-        documentation = results[1] if not isinstance(results[1], Exception) else {}
-        issue_metrics = results[2] if not isinstance(results[2], Exception) else {}
-        pr_metrics = results[3] if not isinstance(results[3], Exception) else {}
-        release_freq = results[4] if not isinstance(results[4], Exception) else {}
-        inclusivity = results[5] if not isinstance(results[5], Exception) else {}
+        # An outright exception (as opposed to a handled HTTP-level gap) is
+        # itself a gap, not a 0 -- same not_collected marker so
+        # _calculate_overall_score excludes it from the weighted average
+        # instead of silently scoring it as a failure.
+        _gap = {"not_collected": True}
+        if isinstance(results[0], Exception):
+            logger.warning(f"COLLECTION-GAP category=project_popularity reason=exception:{results[0]!r}")
+        if isinstance(results[1], Exception):
+            logger.warning(f"COLLECTION-GAP category=documentation_usability reason=exception:{results[1]!r}")
+        if isinstance(results[2], Exception):
+            logger.warning(f"COLLECTION-GAP category=issue_metrics reason=exception:{results[2]!r}")
+        if isinstance(results[3], Exception):
+            logger.warning(f"COLLECTION-GAP category=change_request_metrics reason=exception:{results[3]!r}")
+        if isinstance(results[4], Exception):
+            logger.warning(f"COLLECTION-GAP category=release_frequency reason=exception:{results[4]!r}")
+        if isinstance(results[5], Exception):
+            logger.warning(f"COLLECTION-GAP category=issues_inclusivity reason=exception:{results[5]!r}")
+
+        popularity = results[0] if not isinstance(results[0], Exception) else _gap
+        documentation = results[1] if not isinstance(results[1], Exception) else _gap
+        issue_metrics = (
+            results[2] if not isinstance(results[2], Exception)
+            else {"time_to_close": _gap, "issue_age": _gap}
+        )
+        pr_metrics = (
+            results[3] if not isinstance(results[3], Exception)
+            else {"closure_ratio": _gap}
+        )
+        release_freq = results[4] if not isinstance(results[4], Exception) else _gap
+        inclusivity = results[5] if not isinstance(results[5], Exception) else _gap
 
         overall_score = self._calculate_overall_score(
             popularity, documentation, issue_metrics, pr_metrics, release_freq, inclusivity
@@ -120,12 +144,22 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
     async def _get_project_popularity(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
-        """CHAOSS: Project Popularity — stars, forks, watchers."""
+        """CHAOSS: Project Popularity — stars, forks, watchers.
+
+        Not-found on the bare repo-info endpoint would mean the repo doesn't
+        exist at all, which is anomalous for something already being
+        tracked -- so both COLLECTION_GAP and a genuine miss here get
+        not_collected=True rather than a confident 0/100. A real, previously
+        working repo reading "0/100 popularity" is a data-quality bug, not a
+        finding; this is what made kokkos/kokkos's CHAOSS score reach the
+        dashboard as "0.0/100 (critical)" during the 2026-09-16 incident
+        instead of "we don't know."
+        """
         data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
         try:
             if not data:
                 logger.warning(f"Popularity fetch failed for {owner}/{repo}")
-                return {}
+                return {"not_collected": True}
             stars = data.get("stargazers_count", 0)
             forks = data.get("forks_count", 0)
             watchers = data.get("watchers_count", 0)
@@ -150,12 +184,26 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
     async def _get_documentation_usability(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
-        """CHAOSS: Documentation Usability — README quality and docs presence."""
+        """CHAOSS: Documentation Usability — README quality and docs presence.
+
+        Four independent checks feed one score; if any of them gapped
+        (couldn't tell, rather than confirmed absent), the whole aggregate
+        is unreliable -- e.g. a wiki gap reading as "no wiki" would still
+        drag the composite score down even though 3/4 signals might be
+        solid. not_collected=True on the whole thing in that case, matching
+        the "don't report something collected that wasn't" rule -- a
+        partially-known composite isn't a confident score, it's a gap with
+        extra steps.
+        """
         found_docs = []
         doc_details: Dict[str, Any] = {}
+        has_gap = False
 
         readme_data = await self._get_readme_content(client, owner, repo)
-        if readme_data:
+        if readme_data is COLLECTION_GAP:
+            has_gap = True
+            doc_details["readme"] = {"exists": False, "quality_score": 0}
+        elif readme_data:
             found_docs.append("readme")
             quality = self._assess_readme_quality(readme_data.get("content", ""))
             doc_details["readme"] = {"exists": True, "size": readme_data.get("size", 0), "quality_score": quality}
@@ -164,25 +212,39 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             doc_details["readme"] = {"exists": False, "quality_score": 0}
 
         for pattern in ["CONTRIBUTING.md", ".github/CONTRIBUTING.md"]:
-            if await self._check_file_exists(client, owner, repo, pattern):
+            result = await self._check_file_exists(client, owner, repo, pattern)
+            if result is COLLECTION_GAP:
+                has_gap = True
+                continue
+            if result:
                 found_docs.append("contributing")
                 doc_details["contributing"] = {"exists": True, "file": pattern}
                 break
         else:
-            doc_details["contributing"] = {"exists": False}
+            doc_details.setdefault("contributing", {"exists": False})
 
         for pattern in ["docs/", "documentation/", "doc/"]:
-            if await self._check_file_exists(client, owner, repo, pattern):
+            result = await self._check_file_exists(client, owner, repo, pattern)
+            if result is COLLECTION_GAP:
+                has_gap = True
+                continue
+            if result:
                 found_docs.append("docs_folder")
                 doc_details["docs_folder"] = {"exists": True, "path": pattern}
                 break
         else:
-            doc_details["docs_folder"] = {"exists": False}
+            doc_details.setdefault("docs_folder", {"exists": False})
 
         has_wiki = await self._check_wiki_enabled(client, owner, repo)
-        if has_wiki:
+        if has_wiki is COLLECTION_GAP:
+            has_gap = True
+            has_wiki = False
+        elif has_wiki:
             found_docs.append("wiki")
-        doc_details["wiki"] = {"exists": has_wiki}
+        doc_details["wiki"] = {"exists": bool(has_wiki)}
+
+        if has_gap:
+            return {"not_collected": True, "found": found_docs, "details": doc_details}
 
         max_docs = 4
         base_score = (len(found_docs) / max_docs) * 100
@@ -213,7 +275,12 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
     ) -> Dict[str, Any]:
         """CHAOSS: Change Request Closure Ratio — merged vs closed-without-merge."""
         closed_prs = await self._get_closed_pull_requests(client, owner, repo, limit=50)
+        if closed_prs is COLLECTION_GAP:
+            return {"closure_ratio": {"not_collected": True}}
         if not closed_prs:
+            # A genuinely empty list -- a real repo with zero closed PRs --
+            # is a legitimate, confirmed result, not a gap. Contrast with
+            # the COLLECTION_GAP branch above.
             return {"closure_ratio": {"total": 0, "merged": 0, "closed_without_merge": 0, "ratio": 0, "score": 0}}
 
         merged = sum(1 for pr in closed_prs if pr.get("merged_at"))
@@ -240,8 +307,8 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
                 client, f"https://api.github.com/repos/{owner}/{repo}/releases",
                 params={"per_page": 30},
             )
-            if releases is None:
-                return {}
+            if releases is COLLECTION_GAP:
+                return {"not_collected": True}
             if not releases:
                 return {"total_releases": 0, "recent_releases": 0, "avg_days_between_releases": 0, "latest_release": None, "score": 0}
 
@@ -283,6 +350,8 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         depth of engagement.
         """
         issues = await self._get_recent_issues_with_comments(client, owner, repo, limit=30)
+        if issues is COLLECTION_GAP:
+            return {"not_collected": True}
         if not issues:
             return {"total_issues": 0, "unique_participants": 0, "avg_participants_per_issue": 0, "score": 0}
 
@@ -313,53 +382,67 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
 
     async def _get_readme_content(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Optional[Dict[str, Any]]:
+    ):
+        """Dict, None (confirmed no README), or COLLECTION_GAP."""
         data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
         if not data:
             return None
         content = base64.b64decode(data.get("content", "")).decode("utf-8", errors="ignore")
         return {"size": data.get("size", 0), "content": content}
 
-    async def _check_wiki_enabled(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> bool:
+    async def _check_wiki_enabled(self, client: httpx.AsyncClient, owner: str, repo: str):
+        """bool, or COLLECTION_GAP."""
         data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
         return bool(data and data.get("has_wiki", False))
 
     async def _get_closed_issues(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 30
-    ) -> List[Dict[str, Any]]:
+    ):
+        """List, or COLLECTION_GAP -- NOT an empty list, which is a real,
+        distinct outcome (a repo with zero closed issues)."""
         data = await self._github_get(
             client, f"https://api.github.com/repos/{owner}/{repo}/issues",
             params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
         )
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
         return [i for i in data if "pull_request" not in i] if data else []
 
     async def _get_open_issues(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ):
         data = await self._github_get(
             client, f"https://api.github.com/repos/{owner}/{repo}/issues",
             params={"state": "open", "per_page": limit},
         )
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
         return [i for i in data if "pull_request" not in i] if data else []
 
     async def _get_closed_pull_requests(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ):
         data = await self._github_get(
             client, f"https://api.github.com/repos/{owner}/{repo}/pulls",
             params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
         )
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
         return data or []
 
     async def _get_recent_issues_with_comments(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 30
-    ) -> List[Dict[str, Any]]:
+    ):
         data = await self._github_get(
             client, f"https://api.github.com/repos/{owner}/{repo}/issues",
             params={"state": "all", "per_page": limit, "sort": "updated", "direction": "desc"},
         )
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
         return [i for i in data if "pull_request" not in i] if data else []
 
     # ------------------------------------------------------------------ #
@@ -387,8 +470,10 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             score = min(100, score + 10)
         return float(min(100, score))
 
-    def _calculate_time_to_close(self, closed_issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _calculate_time_to_close(self, closed_issues) -> Dict[str, Any]:
         """Compute time-to-close statistics from a list of closed issues."""
+        if closed_issues is COLLECTION_GAP:
+            return {"not_collected": True}
         if not closed_issues:
             return {"count": 0, "avg_days": 0, "median_days": 0, "min_days": 0, "max_days": 0, "score": 0}
 
@@ -413,8 +498,10 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             "score": _bracket_score(avg, _TIME_CLOSE_BRACKETS, _TIME_CLOSE_DEFAULT_SCORE),
         }
 
-    def _calculate_issue_age(self, open_issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _calculate_issue_age(self, open_issues) -> Dict[str, Any]:
         """Compute age distribution of open issues."""
+        if open_issues is COLLECTION_GAP:
+            return {"not_collected": True}
         if not open_issues:
             return {"count": 0, "avg_days": 0, "median_days": 0, "max_days": 0, "stale_issues": 0, "score": 0}
 
@@ -450,24 +537,50 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         release_freq: Dict[str, Any],
         inclusivity: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Compute weighted overall CHAOSS health score (0–100)."""
-        pop_score = popularity.get("score", 0)
-        doc_score = documentation.get("score", 0)
-        time_close_score = issue_metrics.get("time_to_close", {}).get("score", 0)
-        issue_age_score = issue_metrics.get("issue_age", {}).get("score", 0)
-        pr_score = pr_metrics.get("closure_ratio", {}).get("score", 0)
-        release_score = release_freq.get("score", 0)
-        incl_score = inclusivity.get("score", 0)
+        """Compute weighted overall CHAOSS health score (0-100).
 
-        weighted_score = (
-            pop_score * 0.15
-            + doc_score * 0.20
-            + time_close_score * 0.15
-            + issue_age_score * 0.10
-            + pr_score * 0.15
-            + release_score * 0.15
-            + incl_score * 0.10
-        )
+        Any category that came back not_collected (a gap, not a confirmed
+        result) is dropped from both the weighted sum and its denominator,
+        rather than counted as a 0 -- the same convention collaboration.py
+        and supply_chain.py already use, extended here to a compound score
+        with per-category weights instead of a flat pass/fail count.
+        Re-normalizes the remaining weights so they still sum to what's
+        actually being scored. If every category gapped, there is no score
+        to report at all: this is what actually happened to kokkos/kokkos
+        during the 2026-09-16 incident, where a total gap read as a
+        confident "0.0/100 (critical)" instead of "we don't know."
+        """
+        categories = {
+            "project_popularity": (popularity, 0.15),
+            "documentation_usability": (documentation, 0.20),
+            "time_to_close": (issue_metrics.get("time_to_close", {}), 0.15),
+            "issue_age": (issue_metrics.get("issue_age", {}), 0.10),
+            "change_request_closure_ratio": (pr_metrics.get("closure_ratio", {}), 0.15),
+            "release_frequency": (release_freq, 0.15),
+            "issues_inclusivity": (inclusivity, 0.10),
+        }
+
+        category_scores: Dict[str, Any] = {}
+        weighted_sum = 0.0
+        weight_total = 0.0
+        for key, (data, weight) in categories.items():
+            if data.get("not_collected"):
+                category_scores[key] = {"not_collected": True}
+                continue
+            score = data.get("score", 0)
+            category_scores[key] = score
+            weighted_sum += score * weight
+            weight_total += weight
+
+        if weight_total == 0:
+            return {
+                "score": None,
+                "max_score": 100,
+                "status": "not_collected",
+                "category_scores": category_scores,
+            }
+
+        weighted_score = weighted_sum / weight_total
 
         if weighted_score >= 80:
             status = "excellent"
@@ -484,15 +597,8 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             "score": round(weighted_score, 2),
             "max_score": 100,
             "status": status,
-            "category_scores": {
-                "project_popularity": pop_score,
-                "documentation_usability": doc_score,
-                "time_to_close": time_close_score,
-                "issue_age": issue_age_score,
-                "change_request_closure_ratio": pr_score,
-                "release_frequency": release_score,
-                "issues_inclusivity": incl_score,
-            },
+            "coverage": round(weight_total, 2),  # fraction of categories actually collected
+            "category_scores": category_scores,
         }
 
     def _parse_date(self, date_str: Optional[str]) -> Optional[datetime]:

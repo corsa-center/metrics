@@ -1,6 +1,7 @@
 """Unit tests for CHAOSSGovernanceCollector pure computation methods."""
 
 import pytest
+from collectors.ecosystem.base import COLLECTION_GAP
 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
 
 
@@ -143,6 +144,82 @@ class TestCalculateOverallScore:
         cats = result["category_scores"]
         assert cats["project_popularity"] == 50
         assert cats["documentation_usability"] == 0
+
+
+class TestNotCollectedExclusion:
+    """This is the fix for the 2026-09-16 incident: kokkos/kokkos's CHAOSS
+    section reached the dashboard as a confident "0.0/100 (critical)" when
+    every category had actually gapped (rate-limited, not genuinely zero).
+    A not_collected category must be excluded from the weighted average --
+    not counted as a 0 -- with the remaining weights re-normalized.
+    """
+
+    def test_one_gapped_category_is_excluded_and_weights_renormalize(self, collector):
+        # Every real category scores 100 except popularity, which gapped.
+        # If popularity silently counted as 0, the result would be
+        # 100 * (1 - 0.15) = 85, not 100.
+        result = collector._calculate_overall_score(
+            {"not_collected": True},
+            {"score": 100},
+            {"time_to_close": {"score": 100}, "issue_age": {"score": 100}},
+            {"closure_ratio": {"score": 100}},
+            {"score": 100},
+            {"score": 100},
+        )
+        assert result["score"] == 100.0
+        assert result["category_scores"]["project_popularity"] == {"not_collected": True}
+        assert result["coverage"] == pytest.approx(0.85)
+
+    def test_everything_gapped_reports_no_score_not_zero(self, collector):
+        gap = {"not_collected": True}
+        result = collector._calculate_overall_score(
+            gap, gap, {"time_to_close": gap, "issue_age": gap}, {"closure_ratio": gap}, gap, gap
+        )
+        assert result["score"] is None
+        assert result["status"] == "not_collected"
+        assert all(v == {"not_collected": True} for v in result["category_scores"].values())
+
+    def test_fully_collected_result_is_unaffected(self, collector):
+        # No not_collected anywhere -- behavior must match the pre-existing
+        # weighted-average path exactly (see TestCalculateOverallScore).
+        result = self._score_all(collector, 70)
+        assert result["score"] == 70.0
+        assert result["coverage"] == 1.0
+
+    @staticmethod
+    def _score_all(collector, value):
+        return collector._calculate_overall_score(
+            {"score": value},
+            {"score": value},
+            {"time_to_close": {"score": value}, "issue_age": {"score": value}},
+            {"closure_ratio": {"score": value}},
+            {"score": value},
+            {"score": value},
+        )
+
+
+class TestGapPropagatesThroughAggregation:
+    """_calculate_time_to_close/_calculate_issue_age must not treat
+    COLLECTION_GAP (couldn't fetch) the same as an empty list (confirmed:
+    this repo really has zero closed/open issues) -- both are falsy, but
+    only one is a trustworthy result.
+    """
+
+    def test_time_to_close_gap_is_not_collected(self, collector):
+        assert collector._calculate_time_to_close(COLLECTION_GAP) == {"not_collected": True}
+
+    def test_time_to_close_genuinely_empty_is_a_real_zero(self, collector):
+        result = collector._calculate_time_to_close([])
+        assert result.get("not_collected") is not True
+        assert result["count"] == 0
+
+    def test_issue_age_gap_is_not_collected(self, collector):
+        assert collector._calculate_issue_age(COLLECTION_GAP) == {"not_collected": True}
+
+    def test_issue_age_genuinely_empty_is_a_real_zero(self, collector):
+        result = collector._calculate_issue_age([])
+        assert result.get("not_collected") is not True
+        assert result["count"] == 0
 
 
 # ------------------------------------------------------------------ #

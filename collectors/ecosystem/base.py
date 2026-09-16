@@ -15,6 +15,35 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUSES = {403, 429, 500, 502, 503}
 _RETRY_ATTEMPTS = 2
 
+
+class _CollectionGap:
+    """Sentinel: this fetch did not succeed, and it was NOT a confirmed 404.
+
+    _check_file_exists/_github_get used to collapse both into the same
+    `None` -- a genuine "this file doesn't exist" (trustworthy) and "we
+    couldn't tell" (a rate limit, a network error, a non-retried failure)
+    read identically to every caller, which is how Kokkos's CHAOSS score
+    reached the dashboard as a confident "0.0/100 (critical)" instead of
+    "we don't know." Per CASS §3.5, only a confirmed negative should ever
+    render as a negative result; anything else should render as not
+    collected.
+
+    Deliberately falsy (`bool(COLLECTION_GAP) is False`), so every existing
+    `if not data:` / `if data:` check across the codebase keeps working
+    exactly as before with zero changes -- this is opt-in. A collector that
+    wants to report the distinction checks `is COLLECTION_GAP` explicitly
+    and sets not_collected=True instead of a confident False/0.
+    """
+
+    def __repr__(self) -> str:
+        return "<COLLECTION_GAP>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+COLLECTION_GAP = _CollectionGap()
+
 # Every collector builds its own httpx client, so this has to be module-level
 # (not per-instance) to actually coalesce requests issued by different
 # collector objects for the same package. One process per orchestrator run,
@@ -160,8 +189,9 @@ class GitHubCollectorBase:
 
     async def _check_file_exists(
         self, client: httpx.AsyncClient, owner: str, repo: str, path: str
-    ) -> Optional[str]:
-        """Return the file's html_url if it exists, None otherwise.
+    ):
+        """Return the file's html_url if it exists, None if confirmed absent
+        (a real 404), or COLLECTION_GAP if we couldn't actually tell.
 
         Using the GitHub Contents API without a ?ref= parameter so the
         repo's actual default branch is used (works for develop, main,
@@ -174,6 +204,10 @@ class GitHubCollectorBase:
         explicitly below since a plain `.get("html_url", ...)` on a list raises
         AttributeError, which previously got swallowed and misreported as
         "not found".
+
+        COLLECTION_GAP is falsy, same as None, so `if not result:` keeps
+        working unchanged for callers that haven't opted into the
+        distinction; `if result is COLLECTION_GAP:` is for ones that have.
         """
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
         try:
@@ -186,32 +220,37 @@ class GitHubCollectorBase:
             # let it join the same silent "None" every other gap collapses
             # into.
             logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
-            return None
+            return COLLECTION_GAP
         if response.status_code == 200:
             data = response.json()
             if isinstance(data, list):
                 return f"https://github.com/{owner}/{repo}/tree/HEAD/{path}"
             return data.get("html_url", url)
-        return None
+        if response.status_code == 404:
+            return None
+        return COLLECTION_GAP
 
     async def _github_get(
         self, client: httpx.AsyncClient, url: str, params: Optional[dict] = None
-    ) -> Optional[object]:
-        """GET a GitHub API endpoint and return the parsed JSON body.
-
-        Retrying a throttled request is the client's job now (see
-        RetryingTransport). Returns None for a real 404, or if the final
-        response after retries still isn't a 200; callers should treat None
-        as "unknown", not "zero" or "absent", per CASS §3.5.
+    ):
+        """GET a GitHub API endpoint and return the parsed JSON body, None
+        for a confirmed 404, or COLLECTION_GAP if we couldn't actually tell
+        (rate limit, network error, other non-2xx). Per CASS §3.5, only a
+        confirmed 404 should read as "absent" -- COLLECTION_GAP is falsy,
+        same as None, so `if not data:` keeps working unchanged for callers
+        that haven't opted into the distinction; `if data is COLLECTION_GAP:`
+        is for ones that have.
         """
         try:
             response = await client.get(url, headers=self.github_headers, params=params)
         except Exception as e:
             logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
-            return None
+            return COLLECTION_GAP
         if response.status_code == 200:
             return response.json()
-        return None
+        if response.status_code == 404:
+            return None
+        return COLLECTION_GAP
 
     def _get_timestamp(self) -> str:
         """Return current UTC timestamp in ISO format."""

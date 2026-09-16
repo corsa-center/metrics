@@ -15,7 +15,12 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, _repo_info_cache
+from collectors.ecosystem.base import (
+    COLLECTION_GAP,
+    GitHubCollectorBase,
+    RetryingTransport,
+    _repo_info_cache,
+)
 
 
 @pytest.fixture
@@ -228,18 +233,20 @@ class TestCheckFileExists:
         result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
         assert result is None
 
-    def test_final_failure_after_transport_retries_returns_none(self, collector):
+    def test_final_failure_after_transport_retries_is_a_gap_not_a_negative(self, collector):
         # By the time this code sees the response, the transport has already
-        # retried and given up -- this just needs to not crash on it.
+        # retried and given up. A 403 here is unknown, not "confirmed
+        # absent" -- must not collapse into the same None a real 404 returns.
         client = self._client(403)
         result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
-        assert result is None
+        assert result is COLLECTION_GAP
+        assert not result  # still falsy, so `if not result:` callers are unaffected
 
-    def test_network_exception_returns_none(self, collector):
+    def test_network_exception_is_a_gap_not_a_negative(self, collector):
         client = AsyncMock()
         client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
         result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
-        assert result is None
+        assert result is COLLECTION_GAP
 
 
 class TestGithubGet:
@@ -266,8 +273,8 @@ class TestGithubGet:
         _, kwargs = client.get.call_args
         assert kwargs["params"] == {"state": "open"}
 
-    def test_network_exception_returns_none(self, collector):
+    def test_network_exception_is_a_gap_not_a_negative(self, collector):
         client = AsyncMock()
         client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
         result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
-        assert result is None
+        assert result is COLLECTION_GAP
