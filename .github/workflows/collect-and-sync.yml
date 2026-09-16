@@ -2,11 +2,21 @@ name: Collect Metrics
 
 on:
   schedule:
-    # Run every Sunday at 00:00 UTC. Split across 2 groups (see the "Run
-    # orchestrator" step) rather than the whole catalog every time -- a full
-    # run's GitHub request volume is already close to the hourly quota
-    # before any retries, so each package refreshes every other Sunday.
-    - cron: '0 0 * * 0'
+    # Two fixed entries rather than one weekly run split by date arithmetic:
+    # a full run's GitHub request volume is already close to the hourly
+    # quota before any retries, so the catalog is split into 2 groups (see
+    # the "Run orchestrator" step) -- but every package should still
+    # refresh weekly, not every other week, so each group gets its own
+    # fixed day instead of alternating a single weekly slot.
+    # github.event.schedule tells the "Run orchestrator" step which of
+    # these fired, so which group runs is a lookup, not computed from the
+    # date -- deliberately avoiding a parity trick (e.g. ISO week % 2),
+    # which only alternates correctly for evenly-spaced firings. Sunday to
+    # Wednesday is 3 days, Wednesday to the next Sunday is 4; a scheme
+    # relying on the gap being consistently odd would occasionally run the
+    # same group twice in a row.
+    - cron: '0 0 * * 0'  # Sunday: group 0
+    - cron: '0 0 * * 3'  # Wednesday: group 1
   workflow_dispatch:
     inputs:
       software_filter:
@@ -75,17 +85,22 @@ jobs:
             echo "::notice::Running in dry-run mode, no artifact will be uploaded"
           fi
 
-          # Scheduled runs always split 2 ways, picked by ISO week number so
-          # consecutive Sundays alternate groups with no state to track.
+          # Scheduled runs always split 2 ways -- which group is a direct
+          # lookup from which cron entry fired (see the `on.schedule`
+          # comment above for why this isn't computed from the date).
           # A manual dispatch only splits if asked (group_count/group inputs);
           # left blank, it runs the whole catalog, same as before batching --
           # useful for validating a fix across everything at once.
           if [ -n "$SOFTWARE_ARG" ]; then
             : # targeting one package by name -- grouping would be meaningless
           elif [ "${{ github.event_name }}" = "schedule" ]; then
-            GROUP=$(( 10#$(date -u +%V) % 2 ))
+            case "${{ github.event.schedule }}" in
+              '0 0 * * 0') GROUP=0 ;;
+              '0 0 * * 3') GROUP=1 ;;
+              *) echo "::error::Unrecognized schedule '${{ github.event.schedule }}'"; exit 1 ;;
+            esac
             CMD="$CMD --group-count 2 --group $GROUP"
-            echo "::notice::Scheduled run: group $GROUP/2 (ISO week $(date -u +%V))"
+            echo "::notice::Scheduled run (${{ github.event.schedule }}): group $GROUP/2"
           elif [ -n "${{ github.event.inputs.group_count }}" ] && [ -n "${{ github.event.inputs.group }}" ]; then
             CMD="$CMD --group-count ${{ github.event.inputs.group_count }} --group ${{ github.event.inputs.group }}"
           fi
