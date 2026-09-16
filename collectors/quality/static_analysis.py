@@ -14,7 +14,7 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,12 @@ class StaticAnalysisCollector(GitHubCollectorBase):
         logger.info(f"Checking CodeQL / static analysis for {owner}/{repo}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            saw_gap = False
             for path in _CODEQL_WORKFLOW_PATHS:
                 html_url = await self._check_file_exists(client, owner, repo, path)
+                if html_url is COLLECTION_GAP:
+                    saw_gap = True
+                    continue
                 if html_url:
                     return {
                         "package_name": repo_name,
@@ -62,7 +66,7 @@ class StaticAnalysisCollector(GitHubCollectorBase):
             # into a differently-named workflow (e.g. ADIOS2's `everything.yml`).
             # Fall back to scanning workflow file contents for a codeql-action
             # reference, since filename guessing alone produces false negatives.
-            found = await self._scan_workflows_for_codeql(client, owner, repo)
+            found, scan_gap = await self._scan_workflows_for_codeql(client, owner, repo)
             if found:
                 return {
                     "package_name": repo_name,
@@ -72,8 +76,9 @@ class StaticAnalysisCollector(GitHubCollectorBase):
                     "workflow_file": found["file"],
                     "workflow_url": found["url"],
                 }
+            saw_gap = saw_gap or scan_gap
 
-        return {
+        result = {
             "package_name": repo_name,
             "repository": f"{owner}/{repo}",
             "timestamp": self._get_timestamp(),
@@ -81,46 +86,55 @@ class StaticAnalysisCollector(GitHubCollectorBase):
             "workflow_file": None,
             "workflow_url": None,
         }
+        # A False here built on a gap isn't a confirmed "no CodeQL" -- the
+        # gap could be hiding the workflow file that would have matched.
+        if saw_gap:
+            result["not_collected"] = True
+        return result
 
     async def _scan_workflows_for_codeql(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Optional[Dict[str, str]]:
-        """Scan workflow file contents for a `codeql-action` reference."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{_WORKFLOWS_DIR}"
-        try:
-            response = await client.get(url, headers=self.github_headers)
-            if response.status_code != 200:
-                return None
-            entries = response.json()
-            if not isinstance(entries, list):
-                return None
-        except Exception as e:
-            logger.debug(f"Error listing workflows for {owner}/{repo}: {e}")
-            return None
+    ) -> tuple:
+        """Scan workflow file contents for a `codeql-action` reference.
+
+        Returns (match_or_None, saw_gap).
+        """
+        entries = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{_WORKFLOWS_DIR}"
+        )
+        if entries is COLLECTION_GAP:
+            return None, True
+        if not isinstance(entries, list):
+            return None, False
 
         yaml_files = [
             e for e in entries if e.get("name", "").endswith((".yml", ".yaml"))
         ][:_MAX_WORKFLOWS_TO_SCAN]
 
-        async def check_file(entry: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        async def check_file(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             download_url = entry.get("download_url")
             if not download_url:
                 return None
             try:
                 resp = await client.get(download_url)
-                if resp.status_code == 200 and "codeql-action" in resp.text:
-                    return {
-                        "file": f"{_WORKFLOWS_DIR}/{entry['name']}",
-                        "url": entry.get("html_url", download_url),
-                    }
             except Exception as e:
-                logger.debug(f"Error fetching workflow {entry.get('name')}: {e}")
+                logger.debug(f"COLLECTION-GAP workflow={entry.get('name')} reason=exception:{e!r}")
+                return COLLECTION_GAP
+            if resp.status_code != 200:
+                return COLLECTION_GAP
+            if "codeql-action" in resp.text:
+                return {
+                    "file": f"{_WORKFLOWS_DIR}/{entry['name']}",
+                    "url": entry.get("html_url", download_url),
+                }
             return None
 
-        for result in await asyncio.gather(*[check_file(e) for e in yaml_files]):
-            if result:
-                return result
-        return None
+        results = await asyncio.gather(*[check_file(e) for e in yaml_files])
+        saw_gap = any(r is COLLECTION_GAP for r in results)
+        for result in results:
+            if result and result is not COLLECTION_GAP:
+                return result, saw_gap
+        return None, saw_gap
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {
