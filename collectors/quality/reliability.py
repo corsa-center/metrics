@@ -30,7 +30,7 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -122,25 +122,35 @@ class ReliabilityCollector(GitHubCollectorBase):
         logger.info(f"Collecting reliability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            workflows = await self._read_analysis_workflows(client, owner, repo)
-            tools, hardening, trend = await asyncio.gather(
+            workflows, workflows_gap = await self._read_analysis_workflows(client, owner, repo)
+            results = await asyncio.gather(
                 self._find_analysis_tools(client, owner, repo, workflows),
                 self._find_hardening(client, owner, repo, workflows),
                 self._defect_trend(client, owner, repo),
                 return_exceptions=True,
             )
 
-        if isinstance(tools, Exception):
-            logger.warning(f"Analysis tool scan failed: {tools}")
-            tools = []
-        if isinstance(workflows, Exception):
-            workflows = []
-        if isinstance(hardening, Exception):
-            logger.warning(f"Hardening scan failed: {hardening}")
-            hardening = []
-        if isinstance(trend, Exception):
-            logger.warning(f"Defect trend failed: {trend}")
-            trend = {"measurable": False, "recent": 0, "previous": 0, "direction": None}
+        if isinstance(results[0], Exception):
+            logger.warning(f"COLLECTION-GAP category=analysis_tools reason=exception:{results[0]!r}")
+            tools, tools_gap = [], True
+        else:
+            tools, tools_gap = results[0]
+
+        if isinstance(results[1], Exception):
+            logger.warning(f"COLLECTION-GAP category=hardening reason=exception:{results[1]!r}")
+            hardening, hardening_gap = [], True
+        else:
+            hardening, hardening_gap = results[1]
+
+        if isinstance(results[2], Exception):
+            logger.warning(f"COLLECTION-GAP category=defect_trend reason=exception:{results[2]!r}")
+            trend = {"measurable": False, "recent": 0, "previous": 0,
+                     "direction": None, "not_collected": True}
+        else:
+            trend = results[2]
+
+        tools_gap = tools_gap or workflows_gap
+        hardening_gap = hardening_gap or workflows_gap
 
         return {
             "package_name": repo_name,
@@ -149,7 +159,7 @@ class ReliabilityCollector(GitHubCollectorBase):
             "analysis_tools": tools,
             "hardening": hardening,
             "defect_trend": trend,
-            "overall_score": self._calculate_score(tools, hardening, trend),
+            "overall_score": self._calculate_score(tools, hardening, trend, tools_gap, hardening_gap),
         }
 
     # ------------------------------------------------------------------ fetch
@@ -157,41 +167,53 @@ class ReliabilityCollector(GitHubCollectorBase):
     async def _find_analysis_tools(
         self, client: httpx.AsyncClient, owner: str, repo: str,
         workflows: List[str],
-    ) -> List[str]:
-        """Defect-finding tools, from config files and analysis-shaped workflows."""
+    ) -> tuple:
+        """Defect-finding tools, from config files and analysis-shaped workflows.
+
+        Returns (sorted tool names, saw_gap). A tool found via a config file
+        or in the CI text is real regardless of gaps elsewhere; saw_gap only
+        matters to the caller when the result is otherwise empty.
+        """
         found = set()
+        saw_gap = False
 
-        async def check(tool: str, paths: List[str]) -> Optional[str]:
+        async def check(tool: str, paths: List[str]) -> tuple:
+            gap = False
             for path in paths:
-                if await self._check_file_exists(client, owner, repo, path):
-                    return tool
-            return None
+                result = await self._check_file_exists(client, owner, repo, path)
+                if result is COLLECTION_GAP:
+                    gap = True
+                    continue
+                if result:
+                    return tool, gap
+            return None, gap
 
-        results = await asyncio.gather(
-            *[check(t, p) for t, p in _ANALYSIS_CONFIGS.items()],
-            return_exceptions=True,
-        )
-        found.update(r for r in results if isinstance(r, str))
+        results = await asyncio.gather(*[check(t, p) for t, p in _ANALYSIS_CONFIGS.items()])
+        for tool, gap in results:
+            if tool:
+                found.add(tool)
+            elif gap:
+                saw_gap = True
 
         for text in workflows:
             for tool, pattern in _ANALYSIS_IN_CI.items():
                 if pattern.search(text):
                     found.add(tool)
-        return sorted(found)
+        return sorted(found), saw_gap
 
     async def _read_analysis_workflows(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> List[str]:
-        """Text of the workflows whose names suggest they run analysis."""
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}/contents/.github/workflows",
-            headers=self.github_headers,
+    ) -> tuple:
+        """Text of the workflows whose names suggest they run analysis, and
+        whether the directory listing (or any candidate read) gapped.
+        """
+        entries = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/contents/.github/workflows",
         )
-        if resp.status_code != 200:
-            return []
-        entries = resp.json()
+        if entries is COLLECTION_GAP:
+            return [], True
         if not isinstance(entries, list):
-            return []
+            return [], False
         candidates = [
             e for e in entries
             if e.get("name", "").endswith((".yml", ".yaml"))
@@ -199,78 +221,82 @@ class ReliabilityCollector(GitHubCollectorBase):
             and _ANALYSIS_WORKFLOW_HINT.search(e["name"])
         ][:_MAX_ANALYSIS_WORKFLOWS]
 
-        async def read(url: str) -> str:
+        async def read(url: str) -> Optional[str]:
             try:
                 r = await client.get(url)
-                return r.text if r.status_code == 200 else ""
+                return r.text if r.status_code == 200 else None
             except Exception:
-                return ""
+                return None
 
-        return [t for t in await asyncio.gather(*[read(e["download_url"]) for e in candidates]) if t]
+        texts = await asyncio.gather(*[read(e["download_url"]) for e in candidates])
+        saw_gap = any(t is None for t in texts)
+        return [t for t in texts if t], saw_gap
 
     async def _find_hardening(
         self, client: httpx.AsyncClient, owner: str, repo: str,
         workflows: List[str],
-    ) -> List[str]:
+    ) -> tuple:
         """Secure-coding practice indicators in the build files and in CI.
 
         Large projects keep compiler flags out of the root build file — HDF5's
         live under config/cmake/ — and sanitizer runs are usually CI jobs rather
-        than build settings, so both corpora are searched.
+        than build settings, so both corpora are searched. Returns (markers
+        found, saw_gap): a marker actually found is real regardless of gaps
+        elsewhere, but an empty result needs saw_gap to tell "no hardening
+        configured" from "couldn't read enough of the repo to tell".
         """
 
-        async def read(path: str) -> str:
-            try:
-                r = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-                    headers=self.github_headers,
-                )
-                if r.status_code != 200:
-                    return ""
-                return base64.b64decode(r.json().get("content", "")).decode("utf-8", "replace")
-            except Exception:
+        async def read(path: str):
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+            )
+            if data is COLLECTION_GAP:
+                return COLLECTION_GAP
+            if data is None:
                 return ""
+            return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
-        flag_paths = await self._find_flag_files(client, owner, repo)
+        flag_paths, flag_gap = await self._find_flag_files(client, owner, repo)
         texts = await asyncio.gather(
             *[read(p) for p in _BUILD_FILES + flag_paths]
         )
+        saw_gap = flag_gap or any(t is COLLECTION_GAP for t in texts)
+        # COLLECTION_GAP is falsy, same as "", so this filter drops both.
         corpus = "\n".join([t for t in texts if t] + workflows)
         if not corpus:
-            return []
+            return [], saw_gap
         return [
             label for label, pattern in _HARDENING_MARKERS.items()
             if pattern.search(corpus)
-        ]
+        ], saw_gap
 
     async def _find_flag_files(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> List[str]:
-        """Paths of build-configuration files whose names suggest compiler flags."""
+    ) -> tuple:
+        """Paths of build-configuration files whose names suggest compiler
+        flags, and whether any directory listing gapped.
+        """
 
-        async def listing(directory: str) -> List[str]:
-            try:
-                r = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}/contents/{directory}",
-                    headers=self.github_headers,
-                )
-                if r.status_code != 200:
-                    return []
-                entries = r.json()
-                if not isinstance(entries, list):
-                    return []
-                return [
-                    e["path"] for e in entries
-                    if e.get("type") == "file" and _FLAG_FILE_HINT.search(e.get("name", ""))
-                ]
-            except Exception:
-                return []
+        async def listing(directory: str) -> tuple:
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{directory}"
+            )
+            if data is COLLECTION_GAP:
+                return [], True
+            if not isinstance(data, list):
+                return [], False
+            return [
+                e["path"] for e in data
+                if e.get("type") == "file" and _FLAG_FILE_HINT.search(e.get("name", ""))
+            ], False
 
         results = await asyncio.gather(*[listing(d) for d in _FLAG_DIRECTORIES])
         paths: List[str] = []
-        for group in results:
-            paths.extend(group)
-        return paths[:_MAX_FLAG_FILES]
+        saw_gap = False
+        for group_paths, gap in results:
+            paths.extend(group_paths)
+            saw_gap = saw_gap or gap
+        return paths[:_MAX_FLAG_FILES], saw_gap
 
     async def _defect_trend(
         self, client: httpx.AsyncClient, owner: str, repo: str
@@ -292,14 +318,18 @@ class ReliabilityCollector(GitHubCollectorBase):
             f'"{l}"' if (" " in l or ":" in l) else l for l in _DEFECT_LABELS
         )
 
-        async def count(qualifier: str, date_range: str) -> int:
+        async def count(qualifier: str, date_range: str) -> tuple:
             q = f'repo:{owner}/{repo} is:issue {qualifier} created:{date_range}'
             r = await search_get(
                 client,
                 f"https://api.github.com/search/issues?q={quote(q)}&per_page=1",
                 self.github_headers,
             )
-            return r.json().get("total_count", 0) if r else 0
+            if r is None:
+                # Exhausted retries or a non-200: we don't know the real
+                # count, so this is not the same as a confirmed 0.
+                return 0, True
+            return r.json().get("total_count", 0), False
 
         recent_range = f"{recent_start}..{today}"
         prev_range = f"{prev_start}..{recent_start}"
@@ -307,20 +337,28 @@ class ReliabilityCollector(GitHubCollectorBase):
         # Issue types first, since a project using them generally does not also
         # label defects; fall back to labels only when types yield nothing.
         type_expr = ",".join(_DEFECT_ISSUE_TYPES)
-        recent, previous = await asyncio.gather(
+        (recent, recent_gap), (previous, previous_gap) = await asyncio.gather(
             count(f"type:{type_expr}", recent_range),
             count(f"type:{type_expr}", prev_range),
         )
+        saw_gap = recent_gap or previous_gap
         source = "issue type"
 
         if recent + previous == 0:
             # Comma-separated values in a label: qualifier are ORed, so one
-            # query covers every convention in _DEFECT_LABELS.
-            recent, previous = await asyncio.gather(
+            # query covers every convention in _DEFECT_LABELS. Attempted even
+            # if the type search gapped, since it's an independent query --
+            # any gap it hits is merged into saw_gap below either way.
+            (recent, recent_gap), (previous, previous_gap) = await asyncio.gather(
                 count(f"label:{labels}", recent_range),
                 count(f"label:{labels}", prev_range),
             )
+            saw_gap = saw_gap or recent_gap or previous_gap
             source = "label"
+
+        if saw_gap:
+            return {"measurable": False, "recent": recent, "previous": previous,
+                    "direction": None, "source": source, "not_collected": True}
 
         if recent + previous < _MIN_TREND_VOLUME:
             return {"measurable": False, "recent": recent, "previous": previous,
@@ -340,18 +378,25 @@ class ReliabilityCollector(GitHubCollectorBase):
     # ---------------------------------------------------------------- scoring
 
     def _calculate_score(
-        self, tools: List[str], hardening: List[str], trend: Dict
+        self, tools: List[str], hardening: List[str], trend: Dict,
+        tools_gap: bool = False, hardening_gap: bool = False,
     ) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
 
-        sub["advanced_static_analysis"] = {
+        analysis_entry: Dict[str, Any] = {
             "label": "Advanced Static Analysis",
             "value": ", ".join(tools) if tools
                      else "No defect-analysis tooling found beyond CodeQL",
             "passing": len(tools) >= _MIN_ANALYSIS_TOOLS,
         }
+        # An empty result built on a gap isn't a confirmed "no tooling" --
+        # a found tool stands regardless, since it came from data that did
+        # come back.
+        if not tools and tools_gap:
+            analysis_entry["not_collected"] = True
+        sub["advanced_static_analysis"] = analysis_entry
 
-        sub["cert_compliance"] = {
+        cert_entry: Dict[str, Any] = {
             "label": "CERT Guidelines Compliance",
             "value": f"{len(hardening)} secure-coding indicator"
                      f"{'s' if len(hardening) != 1 else ''}: " + ", ".join(hardening)
@@ -359,8 +404,14 @@ class ReliabilityCollector(GitHubCollectorBase):
             "detail": "Practice indicators, not audited conformance",
             "passing": len(hardening) >= _MIN_HARDENING_MARKERS,
         }
+        if not hardening and hardening_gap:
+            cert_entry["not_collected"] = True
+        sub["cert_compliance"] = cert_entry
 
-        if not trend.get("measurable"):
+        if trend.get("not_collected"):
+            value = "Defect trend could not be measured (search rate limited)"
+            passing = False
+        elif not trend.get("measurable"):
             value = "Project does not record defect reports by type or label"
             passing = False
         else:
@@ -368,17 +419,27 @@ class ReliabilityCollector(GitHubCollectorBase):
                      f"{trend['previous']} the year before ({trend['direction']}, "
                      f"by {trend.get('source', 'label')})")
             passing = trend["direction"] in ("stable", "improving")
-        sub["reliability_trend"] = {
+        trend_entry: Dict[str, Any] = {
             "label": "Reliability Trend Analysis",
             "value": value,
             "passing": passing,
         }
+        if trend.get("not_collected"):
+            trend_entry["not_collected"] = True
+        sub["reliability_trend"] = trend_entry
 
-        score = sum(1 for s in sub.values() if s["passing"])
+        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        score = sum(1 for s in scorable.values() if s["passing"])
+        max_score = len(scorable)
+        if not max_score:
+            return {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "sub_scores": sub,
+            }
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": max_score,
+            "percentage": round(score / max_score * 100, 2),
             "sub_scores": sub,
         }
 
