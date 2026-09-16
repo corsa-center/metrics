@@ -67,8 +67,15 @@ class GitHubClient(BaseAPIClient):
             'https://github.com/owner/repo' -> ('owner', 'repo')
             'https://github.com/owner/repo.git' -> ('owner', 'repo')
         """
-        # Clean up URL
-        repo_url = repo_url.rstrip("/").rstrip(".git")
+        # Clean up URL. NOT .rstrip(".git") -- rstrip takes a set of
+        # characters, not a suffix, so it eats into any repo name ending in
+        # '.', 'g', 'i', or 't' (flang -> flan, dyninst -> dynins,
+        # hpctoolkit -> hpctoolk, papi -> pap), silently mangling the URL
+        # before the request is even made. Confirmed live: this alone
+        # explained a "still zero after every rate-limit fix" result for
+        # flang-compiler/flang even at a 2-package batch, nothing to do with
+        # rate limiting at all.
+        repo_url = repo_url.rstrip("/").removesuffix(".git")
 
         # Handle different URL formats
         if "github.com/" in repo_url:

@@ -23,6 +23,34 @@ def client():
     return c
 
 
+class TestParseRepoUrl:
+    """Regression coverage for .rstrip(".git") silently mangling any repo
+    name ending in '.', 'g', 'i', or 't' -- rstrip strips a set of
+    characters, not a suffix. 14 of 71 tracked packages were affected
+    (flang -> flan, dyninst -> dynins, hpctoolkit -> hpctoolk, papi -> pap,
+    ...), independent of and undiscovered by every rate-limit fix this
+    session, since a mangled URL just 404s and reads the same as any other
+    "no data" result.
+    """
+
+    @pytest.mark.parametrize("name", ["flang", "dyninst", "hpctoolkit", "papi", "ompi", "gasnet"])
+    def test_name_ending_in_git_letters_is_not_truncated(self, client, name):
+        owner, repo = client._parse_repo_url(f"https://github.com/org/{name}")
+        assert repo == name
+
+    def test_git_suffix_is_still_stripped(self, client):
+        owner, repo = client._parse_repo_url("https://github.com/HDFGroup/hdf5.git")
+        assert repo == "hdf5"
+
+    def test_git_suffix_with_trailing_slash(self, client):
+        owner, repo = client._parse_repo_url("https://github.com/HDFGroup/hdf5.git/")
+        assert repo == "hdf5"
+
+    def test_ordinary_name_unaffected(self, client):
+        owner, repo = client._parse_repo_url("https://github.com/kokkos/kokkos")
+        assert (owner, repo) == ("kokkos", "kokkos")
+
+
 def _exc(status, message="", headers=None):
     return GithubException(status, {"message": message}, headers or {})
 
