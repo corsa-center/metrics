@@ -25,7 +25,7 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +59,13 @@ class SupplyChainCollector(GitHubCollectorBase):
         logger.info(f"Collecting supply chain metrics for {owner}/{repo}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            release_assets, root_sbom = await asyncio.gather(
+            (release_assets, assets_gap), (root_sbom, root_gap) = await asyncio.gather(
                 self._fetch_release_assets(client, owner, repo),
                 self._check_root_sbom(client, owner, repo),
             )
 
-        sbom = self._find_sbom(root_sbom, release_assets)
-        provenance = self._find_provenance(release_assets)
+        sbom = self._find_sbom(root_sbom, release_assets, root_gap or assets_gap)
+        provenance = self._find_provenance(release_assets, assets_gap)
 
         sub_metrics = {
             "sbom_detection": sbom,
@@ -98,27 +98,37 @@ class SupplyChainCollector(GitHubCollectorBase):
 
     async def _check_root_sbom(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Optional[str]:
+    ) -> tuple:
+        """Returns (html_url_or_None, saw_gap). A gap on one candidate path
+        doesn't stop the rest from being checked, but is tracked so a
+        resulting "not found" can be reported as not_collected rather than
+        a confirmed absence.
+        """
+        saw_gap = False
         for path in _SBOM_ROOT_FILES:
             html_url = await self._check_file_exists(client, owner, repo, path)
+            if html_url is COLLECTION_GAP:
+                saw_gap = True
+                continue
             if html_url:
-                return html_url
-        return None
+                return html_url, saw_gap
+        return None, saw_gap
 
     async def _fetch_release_assets(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> List[Dict[str, str]]:
-        """Flat list of {name, url, release} for assets on recent releases."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/releases"
-        try:
-            resp = await client.get(
-                url, headers=self.github_headers, params={"per_page": _RELEASES_SAMPLE}
-            )
-            resp.raise_for_status()
-            releases = resp.json()
-        except Exception as e:
-            logger.warning(f"Could not fetch releases for {owner}/{repo}: {e}")
-            return []
+    ) -> tuple:
+        """Returns (flat list of {name, url, release}, is_gap). An empty
+        list with is_gap=False is a real, confirmed result (no releases);
+        is_gap=True means the release list itself couldn't be fetched, so
+        an empty list here says nothing trustworthy about SBOM/provenance
+        presence.
+        """
+        releases = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
+            params={"per_page": _RELEASES_SAMPLE},
+        )
+        if releases is COLLECTION_GAP:
+            return [], True
 
         assets = []
         for release in releases or []:
@@ -130,14 +140,16 @@ class SupplyChainCollector(GitHubCollectorBase):
                         "url": asset.get("browser_download_url", ""),
                         "release": release.get("tag_name", ""),
                     })
-        return assets
+        return assets, False
 
     # ------------------------------------------------------------------ #
     # Matching                                                             #
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _find_sbom(root_url: Optional[str], assets: List[Dict[str, str]]) -> Dict[str, Any]:
+    def _find_sbom(
+        root_url: Optional[str], assets: List[Dict[str, str]], has_gap: bool = False
+    ) -> Dict[str, Any]:
         if root_url:
             return {
                 "label": "SBOM Detection", "passing": True,
@@ -151,10 +163,13 @@ class SupplyChainCollector(GitHubCollectorBase):
                     "value": f'Published with release {asset["release"]}: {asset["name"]}',
                     "detail": asset["url"],
                 }
+        if has_gap:
+            return {"label": "SBOM Detection", "passing": False,
+                     "value": None, "not_collected": True}
         return {"label": "SBOM Detection", "passing": False, "value": "No SBOM found"}
 
     @staticmethod
-    def _find_provenance(assets: List[Dict[str, str]]) -> Dict[str, Any]:
+    def _find_provenance(assets: List[Dict[str, str]], has_gap: bool = False) -> Dict[str, Any]:
         for asset in assets:
             lower = asset["name"].lower()
             if any(hint in lower for hint in _PROVENANCE_ASSET_HINTS):
@@ -163,6 +178,9 @@ class SupplyChainCollector(GitHubCollectorBase):
                     "value": f'Published with release {asset["release"]}: {asset["name"]}',
                     "detail": asset["url"],
                 }
+        if has_gap:
+            return {"label": "Build Provenance", "passing": False,
+                     "value": None, "not_collected": True}
         return {
             "label": "Build Provenance", "passing": False,
             "value": "No build provenance found",

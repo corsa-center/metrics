@@ -5,7 +5,8 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.quality.supply_chain import SupplyChainCollector
+from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.quality.supply_chain import SupplyChainCollector, _SBOM_ROOT_FILES
 
 
 @pytest.fixture
@@ -62,6 +63,19 @@ class TestFindSbom:
         result = collector._find_sbom(None, assets)
         assert result["passing"] is False
 
+    def test_no_match_under_gap_is_not_collected_not_a_negative(self, collector):
+        result = collector._find_sbom(None, [], has_gap=True)
+        assert result["passing"] is False
+        assert result["not_collected"] is True
+
+    def test_positive_match_survives_a_gap_elsewhere(self, collector):
+        # Found in a release asset despite has_gap=True (e.g. the root
+        # check gapped but the release-assets fetch succeeded) -- still real.
+        assets = [{"name": "sbom.spdx.json", "url": "http://x", "release": "v1"}]
+        result = collector._find_sbom(None, assets, has_gap=True)
+        assert result["passing"] is True
+        assert "not_collected" not in result
+
 
 class TestFindProvenance:
     def test_intoto_attestation_match(self, collector):
@@ -79,6 +93,11 @@ class TestFindProvenance:
         result = collector._find_provenance(assets)
         assert result["passing"] is False
         assert result["value"] == "No build provenance found"
+
+    def test_no_match_under_gap_is_not_collected_not_a_negative(self, collector):
+        result = collector._find_provenance([], has_gap=True)
+        assert result["passing"] is False
+        assert result["not_collected"] is True
 
 
 class TestComputeOverall:
@@ -119,7 +138,9 @@ class TestCheckRootSbom:
                 with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
                     return await collector._check_root_sbom(client, "o", "r")
 
-        assert asyncio.run(run()) is not None
+        url, saw_gap = asyncio.run(run())
+        assert url is not None
+        assert saw_gap is False
 
     def test_not_found(self, collector):
         async def mock_exists(client, owner, repo, path):
@@ -130,15 +151,29 @@ class TestCheckRootSbom:
                 with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
                     return await collector._check_root_sbom(client, "o", "r")
 
-        assert asyncio.run(run()) is None
+        url, saw_gap = asyncio.run(run())
+        assert url is None
+        assert saw_gap is False
+
+    def test_gap_on_one_path_is_tracked_even_if_a_later_path_is_confirmed_absent(self, collector):
+        async def mock_exists(client, owner, repo, path):
+            return COLLECTION_GAP if path == _SBOM_ROOT_FILES[0] else None
+
+        async def run():
+            async with httpx.AsyncClient() as client:
+                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
+                    return await collector._check_root_sbom(client, "o", "r")
+
+        url, saw_gap = asyncio.run(run())
+        assert url is None
+        assert saw_gap is True
 
 
 class TestFetchReleaseAssets:
-    def _mock_client(self, releases):
+    def _mock_client(self, status_code, body=None):
         mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = releases
-        mock_resp.raise_for_status = MagicMock()
+        mock_resp.status_code = status_code
+        mock_resp.json.return_value = body
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_resp)
         return mock_client
@@ -148,18 +183,34 @@ class TestFetchReleaseAssets:
             {"tag_name": "v2.0.0", "assets": [{"name": "a.tar.gz", "browser_download_url": "u1"}]},
             {"tag_name": "v1.0.0", "assets": [{"name": "sbom.json", "browser_download_url": "u2"}]},
         ]
-        client = self._mock_client(releases)
-        assets = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        client = self._mock_client(200, releases)
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
         assert len(assets) == 2
         assert assets[1]["release"] == "v1.0.0"
+        assert is_gap is False
 
     def test_no_assets(self, collector):
-        client = self._mock_client([{"tag_name": "v1.0.0", "assets": []}])
-        assets = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        client = self._mock_client(200, [{"tag_name": "v1.0.0", "assets": []}])
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
         assert assets == []
+        assert is_gap is False
 
-    def test_request_failure_returns_empty_list(self, collector):
+    def test_confirmed_404_is_a_real_empty_list_not_a_gap(self, collector):
+        # A repo with no releases at all -- a real, trustworthy result.
+        client = self._mock_client(404)
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        assert assets == []
+        assert is_gap is False
+
+    def test_request_failure_is_a_gap_not_a_confirmed_empty_list(self, collector):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
-        assets = asyncio.run(collector._fetch_release_assets(mock_client, "o", "r"))
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(mock_client, "o", "r"))
         assert assets == []
+        assert is_gap is True
+
+    def test_rate_limited_after_retries_is_a_gap(self, collector):
+        client = self._mock_client(403)
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        assert assets == []
+        assert is_gap is True
