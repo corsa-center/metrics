@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -67,18 +67,23 @@ class WelcomenessCollector(GitHubCollectorBase):
         logger.info(f"Collecting welcomeness metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            channels, documents = await asyncio.gather(
+            results = await asyncio.gather(
                 self._get_public_channels(client, owner, repo),
                 self._find_decision_documents(client, owner, repo),
                 return_exceptions=True,
             )
 
-        if isinstance(channels, Exception):
-            logger.warning(f"Channel lookup failed: {channels}")
-            channels = []
-        if isinstance(documents, Exception):
-            logger.warning(f"Decision document scan failed: {documents}")
-            documents = {"found": [], "details": {}}
+        if isinstance(results[0], Exception):
+            logger.warning(f"COLLECTION-GAP category=public_channels reason=exception:{results[0]!r}")
+            channels, channels_gap = [], True
+        else:
+            channels, channels_gap = results[0]
+
+        if isinstance(results[1], Exception):
+            logger.warning(f"COLLECTION-GAP category=decision_documents reason=exception:{results[1]!r}")
+            documents = {"found": [], "not_collected": [], "details": {}}
+        else:
+            documents = results[1]
 
         return {
             "package_name": repo_name,
@@ -86,58 +91,75 @@ class WelcomenessCollector(GitHubCollectorBase):
             "timestamp": self._get_timestamp(),
             "public_channels": channels,
             "decision_documents": documents,
-            "overall_score": self._calculate_score(channels, documents),
+            "overall_score": self._calculate_score(channels, documents, channels_gap),
         }
 
     async def _get_public_channels(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> List[str]:
-        """Discussions / wiki / pages flags, straight off the repository object."""
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}", headers=self.github_headers
-        )
-        if resp.status_code != 200:
-            return []
-        data = resp.json()
-        return [label for flag, label in _PUBLIC_CHANNELS.items() if data.get(flag)]
+    ) -> tuple:
+        """Discussions / wiki / pages flags, straight off the repository object.
+
+        Returns (channels, saw_gap).
+        """
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        if data is COLLECTION_GAP:
+            return [], True
+        if data is None:
+            return [], False
+        return [label for flag, label in _PUBLIC_CHANNELS.items() if data.get(flag)], False
 
     async def _find_decision_documents(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
         """Roadmaps, meeting notes, decision records and governance docs."""
 
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str]]:
+        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
+            saw_gap = False
             for path in paths:
                 url = await self._check_file_exists(client, owner, repo, path)
+                if url is COLLECTION_GAP:
+                    saw_gap = True
+                    continue
                 if url:
-                    return label, url
-            return label, None
+                    return label, url, saw_gap
+            return label, None, saw_gap
 
         results = await asyncio.gather(
             *[check(label, paths) for label, paths in _DECISION_PATHS.items()]
         )
-        found, details = [], {}
-        for label, url in results:
+        found, not_collected, details = [], [], {}
+        for label, url, saw_gap in results:
             if url:
                 found.append(label)
                 details[label] = {"exists": True, "url": url}
+            elif saw_gap:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
             else:
                 details[label] = {"exists": False}
-        return {"found": found, "details": details}
+        return {"found": found, "not_collected": not_collected, "details": details}
 
-    def _calculate_score(self, channels: List[str], documents: Dict) -> Dict[str, Any]:
+    def _calculate_score(
+        self, channels: List[str], documents: Dict, channels_gap: bool = False
+    ) -> Dict[str, Any]:
         signals = list(channels) + list(documents.get("found", []))
         passing = len(signals) >= _MIN_VISIBILITY_SIGNALS
 
-        sub: Dict[str, Dict[str, Any]] = {
-            "decision_making_visibility": {
-                "label": "Decision-Making Visibility",
-                "value": f"{len(signals)} public channel(s)" if signals
-                         else "No public decision-making channels found",
-                "detail": ", ".join(signals) if signals else None,
-                "passing": passing,
-            }
+        # A below-threshold count built on a gap isn't confirmed -- a gapped
+        # channel lookup or decision-document candidate could have supplied
+        # the missing signal. A count that already clears the threshold from
+        # confirmed data stands regardless.
+        visibility_entry: Dict[str, Any] = {
+            "label": "Decision-Making Visibility",
+            "value": f"{len(signals)} public channel(s)" if signals
+                     else "No public decision-making channels found",
+            "detail": ", ".join(signals) if signals else None,
+            "passing": passing,
         }
+        if not passing and (channels_gap or documents.get("not_collected")):
+            visibility_entry["not_collected"] = True
+
+        sub: Dict[str, Dict[str, Any]] = {"decision_making_visibility": visibility_entry}
         for key, label in [
             ("chaoss_community_experience", "CHAOSS Community Experience Metrics"),
             ("response_quality_tone", "Response Quality and Tone Analysis"),
@@ -148,11 +170,18 @@ class WelcomenessCollector(GitHubCollectorBase):
         ]:
             sub[key] = {"label": label, "value": None, "passing": False, "not_collected": True}
 
-        score = sum(1 for s in sub.values() if s.get("passing"))
+        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        score = sum(1 for s in scorable.values() if s.get("passing"))
+        max_score = len(scorable)
+        if not max_score:
+            return {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "sub_scores": sub,
+            }
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": max_score,
+            "percentage": round(score / max_score * 100, 2),
             "sub_scores": sub,
         }
 
@@ -162,6 +191,6 @@ class WelcomenessCollector(GitHubCollectorBase):
             "repository": "unknown",
             "timestamp": self._get_timestamp(),
             "public_channels": [],
-            "decision_documents": {"found": [], "details": {}},
+            "decision_documents": {"found": [], "not_collected": [], "details": {}},
             "overall_score": self._calculate_score([], {"found": []}),
         }
