@@ -121,13 +121,11 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
         """CHAOSS: Project Popularity — stars, forks, watchers."""
-        url = f"https://api.github.com/repos/{owner}/{repo}"
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
         try:
-            response = await client.get(url, headers=self.github_headers)
-            if response.status_code != 200:
-                logger.warning(f"Popularity fetch failed: {response.status_code}")
+            if not data:
+                logger.warning(f"Popularity fetch failed for {owner}/{repo}")
                 return {}
-            data = response.json()
             stars = data.get("stargazers_count", 0)
             forks = data.get("forks_count", 0)
             watchers = data.get("watchers_count", 0)
@@ -237,12 +235,13 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
         """CHAOSS: Release Frequency — cadence of new releases."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/releases"
         try:
-            response = await client.get(url, headers=self.github_headers, params={"per_page": 30})
-            if response.status_code != 200:
+            releases = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/releases",
+                params={"per_page": 30},
+            )
+            if releases is None:
                 return {}
-            releases = response.json()
             if not releases:
                 return {"total_releases": 0, "recent_releases": 0, "avg_days_between_releases": 0, "latest_release": None, "score": 0}
 
@@ -315,86 +314,53 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
     async def _get_readme_content(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Optional[Dict[str, Any]]:
-        url = f"https://api.github.com/repos/{owner}/{repo}/readme"
-        try:
-            response = await client.get(url, headers=self.github_headers)
-            if response.status_code == 200:
-                data = response.json()
-                content = base64.b64decode(data.get("content", "")).decode("utf-8", errors="ignore")
-                return {"size": data.get("size", 0), "content": content}
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
+        if not data:
             return None
-        except Exception:
-            return None
+        content = base64.b64decode(data.get("content", "")).decode("utf-8", errors="ignore")
+        return {"size": data.get("size", 0), "content": content}
 
     async def _check_wiki_enabled(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> bool:
-        url = f"https://api.github.com/repos/{owner}/{repo}"
-        try:
-            response = await client.get(url, headers=self.github_headers)
-            return response.status_code == 200 and response.json().get("has_wiki", False)
-        except Exception:
-            return False
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        return bool(data and data.get("has_wiki", False))
 
     async def _get_closed_issues(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 30
     ) -> List[Dict[str, Any]]:
-        url = f"https://api.github.com/repos/{owner}/{repo}/issues"
-        try:
-            response = await client.get(
-                url, headers=self.github_headers,
-                params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
-            )
-            if response.status_code == 200:
-                return [i for i in response.json() if "pull_request" not in i]
-        except Exception:
-            pass
-        return []
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/issues",
+            params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
+        )
+        return [i for i in data if "pull_request" not in i] if data else []
 
     async def _get_open_issues(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 50
     ) -> List[Dict[str, Any]]:
-        url = f"https://api.github.com/repos/{owner}/{repo}/issues"
-        try:
-            response = await client.get(
-                url, headers=self.github_headers,
-                params={"state": "open", "per_page": limit},
-            )
-            if response.status_code == 200:
-                return [i for i in response.json() if "pull_request" not in i]
-        except Exception:
-            pass
-        return []
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/issues",
+            params={"state": "open", "per_page": limit},
+        )
+        return [i for i in data if "pull_request" not in i] if data else []
 
     async def _get_closed_pull_requests(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 50
     ) -> List[Dict[str, Any]]:
-        url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
-        try:
-            response = await client.get(
-                url, headers=self.github_headers,
-                params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
-            )
-            if response.status_code == 200:
-                return response.json()
-        except Exception:
-            pass
-        return []
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/pulls",
+            params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
+        )
+        return data or []
 
     async def _get_recent_issues_with_comments(
         self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 30
     ) -> List[Dict[str, Any]]:
-        url = f"https://api.github.com/repos/{owner}/{repo}/issues"
-        try:
-            response = await client.get(
-                url, headers=self.github_headers,
-                params={"state": "all", "per_page": limit, "sort": "updated", "direction": "desc"},
-            )
-            if response.status_code == 200:
-                return [i for i in response.json() if "pull_request" not in i]
-        except Exception:
-            pass
-        return []
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/issues",
+            params={"state": "all", "per_page": limit, "sort": "updated", "direction": "desc"},
+        )
+        return [i for i in data if "pull_request" not in i] if data else []
 
     # ------------------------------------------------------------------ #
     # Pure computation helpers                                             #

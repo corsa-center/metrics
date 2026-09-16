@@ -92,13 +92,39 @@ class GitHubClient(BaseAPIClient):
 
         try:
             owner, repo = self._parse_repo_url(repo_url)
-            return self.client.get_repo(f"{owner}/{repo}")
-        except GithubException as e:
-            self.logger.error(f"Error fetching repository {repo_url}: {e}")
-            raise
         except ValueError as e:
             self.logger.error(f"Invalid repository URL {repo_url}: {e}")
             raise
+
+        # 403 is excluded from the urllib3 Retry above because PyGithub's own
+        # backoff, once it sees a rate-limit 403, can stall for thousands of
+        # seconds waiting out the primary hourly quota. But most 403s hit
+        # here during a concurrent run are GitHub's *secondary* (abuse) rate
+        # limit -- a short, deliberately-throttled window, not real quota
+        # exhaustion -- and retrying those quickly is safe. Distinguish the
+        # two: only retry when the response carries a Retry-After header or
+        # a message naming the secondary limit; anything else (a genuine
+        # permission/404-as-403 case) fails immediately as before.
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                return self.client.get_repo(f"{owner}/{repo}")
+            except GithubException as e:
+                message = str((e.data or {}).get("message", "")).lower()
+                headers = e.headers or {}
+                retry_after = headers.get("retry-after")
+                is_secondary_rate_limit = e.status in (403, 429) and (
+                    retry_after or "secondary rate limit" in message or "abuse" in message
+                )
+                if is_secondary_rate_limit and attempt < attempts - 1:
+                    delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
+                    self.logger.debug(
+                        f"Secondary rate limit fetching {owner}/{repo}, retrying in {delay:.0f}s"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                self.logger.error(f"Error fetching repository {repo_url}: {e}")
+                raise
 
     async def get_file_content(self, repo_url: str, file_path: str) -> Optional[str]:
         """

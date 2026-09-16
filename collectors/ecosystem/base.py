@@ -85,6 +85,43 @@ class GitHubCollectorBase:
                 return None
         return None
 
+    async def _github_get(
+        self, client: httpx.AsyncClient, url: str, params: Optional[dict] = None
+    ) -> Optional[object]:
+        """GET a GitHub API endpoint and return the parsed JSON body.
+
+        Retries on the same conditions _check_file_exists does (403/429/5xx,
+        Retry-After-aware backoff) rather than treating a throttled request
+        as if the resource didn't exist. Returns None for a real 404 or if
+        every attempt is exhausted; callers should treat None as "unknown",
+        not "zero" or "absent", per CASS §3.5.
+        """
+        import asyncio
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                response = await client.get(url, headers=self.github_headers, params=params)
+                if response.status_code == 200:
+                    return response.json()
+                if response.status_code == 404:
+                    return None
+                if attempt < attempts - 1 and response.status_code in (403, 429, 500, 502, 503):
+                    retry_after = response.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
+                    logger.debug(
+                        f"HTTP {response.status_code} from {url}, retrying in {delay:.0f}s"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                return None
+            except Exception as e:
+                if attempt < attempts - 1:
+                    logger.debug(f"Error fetching {url}: {e}, retrying…")
+                    await asyncio.sleep(1 + attempt)
+                    continue
+                return None
+        return None
+
     def _get_timestamp(self) -> str:
         """Return current UTC timestamp in ISO format."""
         return datetime.now(timezone.utc).isoformat()
