@@ -87,6 +87,18 @@ class CommunityHealthCollector:
         "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS",
     ]
 
+    # Some projects keep governance material in a dedicated sibling repo
+    # rather than co-located with the code -- Kokkos among them: kokkos/kokkos
+    # has neither GOVERNANCE.md nor any link to kokkos/governance (confirmed
+    # via GitHub code search -- the CoC/Contributing docs it does have link to
+    # kokkos.org pages, not the sibling repo), but kokkos/governance itself
+    # has GOVERNANCE.md, code-of-conduct.md, and a technical charter. These
+    # are conventional enough names to check automatically, with no per-
+    # project configuration needed, whenever the primary repo comes up short.
+    # A project with a differently-named governance repo still has the
+    # existing package_config/.corsa overrides as an escape hatch.
+    FALLBACK_REPO_NAMES = ["governance", ".github"]
+
     # A governance document untouched for this long has stopped describing how
     # the project actually runs.
     GOVERNANCE_STALE_DAYS = 1095  # three years
@@ -127,17 +139,24 @@ class CommunityHealthCollector:
         # One listing of the directories these documents live in, matched
         # case-insensitively, instead of guessing spellings one request at a time.
         index = await self._build_file_index(owner, repo)
-        coc_result = self._match_pattern(index, self.COC_PATTERNS)
-        governance_result = self._match_pattern(index, self.GOVERNANCE_PATTERNS)
-        contributing_result = self._match_pattern(index, self.CONTRIBUTING_PATTERNS)
+        coc_result = self._match_pattern(index, self.COC_PATTERNS, owner, repo)
+        governance_result = self._match_pattern(index, self.GOVERNANCE_PATTERNS, owner, repo)
+        contributing_result = self._match_pattern(index, self.CONTRIBUTING_PATTERNS, owner, repo)
+
+        coc_result, governance_result, contributing_result = await self._check_fallback_repos(
+            owner, coc_result, governance_result, contributing_result
+        )
 
         # Get community profile from GitHub API (if token available)
         community_profile = await self._get_community_profile(owner, repo)
 
         # Section 4.2.2 asks not just whether these documents exist but whether
-        # they describe a real process and are still being maintained.
+        # they describe a real process and are still being maintained. Each
+        # document carries its own "repository" now (it may have come from a
+        # fallback repo above), so these read from that rather than assuming
+        # everything lives in the primary repo.
         keyword_analysis = await self._analyze_governance_keywords(
-            owner, repo, [governance_result, contributing_result, coc_result]
+            [governance_result, contributing_result, coc_result]
         )
         effectiveness = await self._assess_effectiveness(
             owner, repo, [governance_result, contributing_result]
@@ -159,20 +178,28 @@ class CommunityHealthCollector:
         }
 
     async def _analyze_governance_keywords(
-        self, owner: str, repo: str, documents: List[Dict[str, Any]]
+        self, documents: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Which decision-making concepts the governance documents actually cover.
 
         Reads the full documents rather than the 200-character preview kept for
         display — a preview is the title and a sentence, which says nothing about
         whether a decision process is written down.
+
+        Each document carries its own "repository" (usually the primary repo,
+        but a fallback one like {org}/governance when that's where it was
+        actually found), so this reads each from wherever it really lives
+        rather than assuming they're all co-located.
         """
-        paths = [d.get("file_path") for d in documents if d.get("exists") and d.get("file_path")]
-        if not paths:
+        located = [
+            (d["repository"].split("/", 1)[0], d["repository"].split("/", 1)[1], d["file_path"])
+            for d in documents if d.get("exists") and d.get("file_path") and d.get("repository")
+        ]
+        if not located:
             return {"groups_found": [], "documents_read": 0}
 
         texts = await asyncio.gather(
-            *[self._get_file_text(owner, repo, p) for p in paths],
+            *[self._get_file_text(o, r, p) for o, r, p in located],
             return_exceptions=True,
         )
         corpus = " ".join(
@@ -185,13 +212,23 @@ class CommunityHealthCollector:
             group for group, terms in self.GOVERNANCE_KEYWORDS.items()
             if any(term in corpus for term in terms)
         ]
-        return {"groups_found": found, "documents_read": len(paths)}
+        return {"groups_found": found, "documents_read": len(located)}
 
     async def _assess_effectiveness(
         self, owner: str, repo: str, documents: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Whether governance is live: owners assigned and documents maintained."""
-        paths = [d.get("file_path") for d in documents if d.get("exists") and d.get("file_path")]
+        """Whether governance is live: owners assigned and documents maintained.
+
+        CODEOWNERS is checked on the primary repo only -- it names people
+        with review authority over *this* repo's code, so a fallback repo's
+        CODEOWNERS (if it even has one) wouldn't mean anything here. Document
+        staleness, in contrast, reads each document from wherever it was
+        actually found, same as _analyze_governance_keywords.
+        """
+        located = [
+            (d["repository"].split("/", 1)[0], d["repository"].split("/", 1)[1], d["file_path"])
+            for d in documents if d.get("exists") and d.get("file_path") and d.get("repository")
+        ]
 
         has_codeowners = False
         for path in self.CODEOWNERS_PATHS:
@@ -200,9 +237,9 @@ class CommunityHealthCollector:
                 break
 
         last_updated_days = None
-        if paths:
+        if located:
             ages = await asyncio.gather(
-                *[self._days_since_last_change(owner, repo, p) for p in paths],
+                *[self._days_since_last_change(o, r, p) for o, r, p in located],
                 return_exceptions=True,
             )
             valid = [a for a in ages if isinstance(a, int)]
@@ -298,9 +335,16 @@ class CommunityHealthCollector:
         return index
 
     def _match_pattern(
-        self, index: Dict[str, Dict], patterns: List[str]
+        self, index: Dict[str, Dict], patterns: List[str], owner: str, repo: str
     ) -> Dict[str, Any]:
-        """First pattern present in the index, compared case-insensitively."""
+        """First pattern present in the index, compared case-insensitively.
+
+        Carries which repo this index came from on every hit, since it may
+        be a fallback repo (see _check_fallback_repos) rather than the
+        primary one -- callers that read the file's own content
+        (_analyze_governance_keywords, _assess_effectiveness) need to know
+        where to actually fetch it from.
+        """
         for pattern in patterns:
             entry = index.get(pattern.lower())
             if entry:
@@ -310,59 +354,52 @@ class CommunityHealthCollector:
                     "url": entry.get("html_url", ""),
                     "size": entry.get("size", 0),
                     "content_preview": "",
+                    "repository": f"{owner}/{repo}",
                 }
-        return {"exists": False, "file_path": None, "url": None}
+        return {"exists": False, "file_path": None, "url": None, "repository": None}
 
-    async def _check_code_of_conduct(self, owner: str, repo: str) -> Dict[str, Any]:
-        """Check for Code of Conduct"""
-        logger.info(f"Checking Code of Conduct for {owner}/{repo}")
+    async def _check_fallback_repos(
+        self,
+        owner: str,
+        coc_result: Dict[str, Any],
+        governance_result: Dict[str, Any],
+        contributing_result: Dict[str, Any],
+    ) -> tuple:
+        """Retry whichever of CoC/Governance/Contributing came up empty
+        against FALLBACK_REPO_NAMES, e.g. {owner}/governance.
 
-        for pattern in self.COC_PATTERNS:
-            result = await self._check_file_exists(owner, repo, pattern)
-            if result["exists"]:
-                return {
-                    "exists": True,
-                    "file_path": pattern,
-                    "url": result["url"],
-                    "size": result.get("size", 0),
-                    "content_preview": result.get("content_preview", ""),
-                }
+        Kokkos is the confirmed case: kokkos/kokkos has neither GOVERNANCE.md
+        nor a link to kokkos/governance anywhere in it (checked via GitHub
+        code search), but kokkos/governance has GOVERNANCE.md,
+        code-of-conduct.md, and a technical charter. Only runs when at least
+        one of the three is still missing, and stops as soon as all three are
+        resolved, to avoid spending requests on projects that don't need this.
+        """
+        pending = {
+            "coc": (self.COC_PATTERNS, coc_result),
+            "governance": (self.GOVERNANCE_PATTERNS, governance_result),
+            "contributing": (self.CONTRIBUTING_PATTERNS, contributing_result),
+        }
+        missing = {k for k, (_, r) in pending.items() if not r["exists"]}
+        if not missing:
+            return coc_result, governance_result, contributing_result
 
-        return {"exists": False, "file_path": None, "url": None}
+        results = {"coc": coc_result, "governance": governance_result, "contributing": contributing_result}
+        for fallback_repo in self.FALLBACK_REPO_NAMES:
+            if not missing:
+                break
+            fb_index = await self._build_file_index(owner, fallback_repo)
+            if not fb_index:
+                continue  # repo doesn't exist or has none of these files
+            for key in list(missing):
+                patterns, _ = pending[key]
+                match = self._match_pattern(fb_index, patterns, owner, fallback_repo)
+                if match["exists"]:
+                    logger.info(f"{key} found in fallback repo {owner}/{fallback_repo}")
+                    results[key] = match
+                    missing.discard(key)
 
-    async def _check_governance(self, owner: str, repo: str) -> Dict[str, Any]:
-        """Check for Governance documentation"""
-        logger.info(f"Checking Governance for {owner}/{repo}")
-
-        for pattern in self.GOVERNANCE_PATTERNS:
-            result = await self._check_file_exists(owner, repo, pattern)
-            if result["exists"]:
-                return {
-                    "exists": True,
-                    "file_path": pattern,
-                    "url": result["url"],
-                    "size": result.get("size", 0),
-                    "content_preview": result.get("content_preview", ""),
-                }
-
-        return {"exists": False, "file_path": None, "url": None}
-
-    async def _check_contributing(self, owner: str, repo: str) -> Dict[str, Any]:
-        """Check for Contributing guidelines"""
-        logger.info(f"Checking Contributing guidelines for {owner}/{repo}")
-
-        for pattern in self.CONTRIBUTING_PATTERNS:
-            result = await self._check_file_exists(owner, repo, pattern)
-            if result["exists"]:
-                return {
-                    "exists": True,
-                    "file_path": pattern,
-                    "url": result["url"],
-                    "size": result.get("size", 0),
-                    "content_preview": result.get("content_preview", ""),
-                }
-
-        return {"exists": False, "file_path": None, "url": None}
+        return results["coc"], results["governance"], results["contributing"]
 
     async def _check_file_exists(
         self, owner: str, repo: str, file_path: str
