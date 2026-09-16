@@ -53,8 +53,10 @@ class TestConfigMatchesCode:
 
     @staticmethod
     def _wired_keys(group):
+        # Call sites pass a trailing `package` arg (per-package config
+        # precedence), so match on the key alone rather than the closing `)`.
         return set(
-            re.findall(rf'_sub_enabled\("{group}", "([a-z_]+)"\)', ORCHESTRATOR_SRC)
+            re.findall(rf'_sub_enabled\("{group}", "([a-z_]+)"', ORCHESTRATOR_SRC)
         )
 
     @pytest.mark.parametrize(
