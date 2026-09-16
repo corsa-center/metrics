@@ -67,7 +67,13 @@ jobs:
 
       - name: Run orchestrator
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The automatic secrets.GITHUB_TOKEN is capped at 1,000 requests/hour
+          # per repository -- far below what this pipeline needs even after
+          # the retry/dedup/batching fixes above, since it calls out to ~70
+          # *other* repos' worth of GitHub API, not this one. A fine-grained
+          # PAT (public-repo read-only, so it can't write anywhere) gets the
+          # standard 5,000/hour authenticated budget instead.
+          GITHUB_TOKEN: ${{ secrets.METRICS_COLLECTOR_PAT }}
           SEMANTIC_SCHOLAR_KEY: ${{ secrets.SEMANTIC_SCHOLAR_KEY }}
           OPENALEX_EMAIL: ${{ secrets.OPENALEX_EMAIL }}
         run: |
