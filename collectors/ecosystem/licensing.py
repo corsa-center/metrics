@@ -15,12 +15,12 @@ import logging
 from typing import Dict, Any, Optional, List
 import re
 
-from collectors.ecosystem.base import RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
 
-class LicensingCollector:
+class LicensingCollector(GitHubCollectorBase):
     """Collects licensing metrics from GitHub repositories"""
 
     # Common license file patterns
@@ -132,14 +132,6 @@ class LicensingCollector:
         },
     }
 
-    def __init__(self, github_token: Optional[str] = None):
-        """Initialize collector with optional GitHub token"""
-        self.github_token = github_token
-        self.headers = {}
-        if github_token:
-            self.headers["Authorization"] = f"token {github_token}"
-            self.headers["Accept"] = "application/vnd.github.v3+json"
-
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """
         Collect licensing metrics for a package
@@ -163,14 +155,23 @@ class LicensingCollector:
 
         owner, repo = owner_repo
 
-        # Try GitHub License API first (most accurate)
-        license_api_result = await self._get_license_from_api(owner, repo)
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            # Try GitHub License API first (most accurate)
+            license_api_result = await self._get_license_from_api(client, owner, repo)
 
-        # Fallback: Check for license files manually
-        if not license_api_result.get("found"):
-            license_file_result = await self._check_license_file(owner, repo)
-        else:
-            license_file_result = license_api_result
+            # Fallback: Check for license files manually
+            if not license_api_result.get("found"):
+                license_file_result = await self._check_license_file(client, owner, repo)
+                # Neither step found a license -- only a real negative if
+                # neither step gapped either; a gap on either one means the
+                # license could be there and we just couldn't confirm it.
+                if not license_file_result.get("found") and (
+                    license_api_result.get("not_collected")
+                    or license_file_result.get("not_collected")
+                ):
+                    license_file_result = {**license_file_result, "not_collected": True}
+            else:
+                license_file_result = license_api_result
 
         # Analyze license content
         license_analysis = self._analyze_license(license_file_result)
@@ -186,52 +187,52 @@ class LicensingCollector:
             ),
         }
 
-    async def _get_license_from_api(self, owner: str, repo: str) -> Dict[str, Any]:
+    async def _get_license_from_api(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Dict[str, Any]:
         """
         Get license information from GitHub License API
         This is the most accurate method as GitHub detects license type
         """
         logger.info(f"Checking GitHub License API for {owner}/{repo}")
-        url = f"https://api.github.com/repos/{owner}/{repo}/license"
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                response = await client.get(url, headers=self.headers)
-                if response.status_code == 200:
-                    data = response.json()
-
-                    license_data = data.get("license", {})
-
-                    return {
-                        "found": True,
-                        "source": "github_api",
-                        "file_path": data.get("name", "LICENSE"),
-                        "url": data.get("html_url", ""),
-                        "size": data.get("size", 0),
-                        "license_key": license_data.get("key", "unknown"),
-                        "license_name": license_data.get("name", "Unknown"),
-                        "spdx_id": license_data.get("spdx_id"),
-                        "download_url": data.get("download_url", ""),
-                        "content": None,  # Will fetch if needed
-                    }
-                else:
-                    logger.debug(f"GitHub License API returned {response.status_code}")
-                    return {"found": False, "source": "github_api"}
-        except Exception as e:
-            logger.debug(f"Error calling GitHub License API: {e}")
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/license"
+        )
+        if data is COLLECTION_GAP:
+            return {"found": False, "source": "github_api", "not_collected": True}
+        if data is None:
             return {"found": False, "source": "github_api"}
 
-    async def _check_license_file(self, owner: str, repo: str) -> Dict[str, Any]:
+        license_data = data.get("license") or {}
+        return {
+            "found": True,
+            "source": "github_api",
+            "file_path": data.get("name", "LICENSE"),
+            "url": data.get("html_url", ""),
+            "size": data.get("size", 0),
+            "license_key": license_data.get("key", "unknown"),
+            "license_name": license_data.get("name", "Unknown"),
+            "spdx_id": license_data.get("spdx_id"),
+            "download_url": data.get("download_url", ""),
+            "content": None,  # Will fetch if needed
+        }
+
+    async def _check_license_file(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Dict[str, Any]:
         """Check for license file manually by trying common patterns"""
         logger.info(f"Manually checking for license files in {owner}/{repo}")
 
+        saw_gap = False
         for pattern in self.LICENSE_PATTERNS:
-            result = await self._check_file_exists(owner, repo, pattern)
-            if result["exists"]:
-                # Try to fetch content
+            result = await self._probe_license_file(client, owner, repo, pattern)
+            if result is COLLECTION_GAP:
+                saw_gap = True
+                continue
+            if result:
                 content = ""
                 if result.get("download_url"):
-                    content = await self._get_file_content(result["download_url"])
+                    content = await self._get_file_content(client, result["download_url"])
 
                 return {
                     "found": True,
@@ -245,40 +246,46 @@ class LicensingCollector:
                     "spdx_id": None,
                 }
 
-        return {"found": False, "source": "manual_check"}
+        result = {"found": False, "source": "manual_check"}
+        if saw_gap:
+            result["not_collected"] = True
+        return result
 
-    async def _check_file_exists(
-        self, owner: str, repo: str, file_path: str
-    ) -> Dict[str, Any]:
-        """Check if a file exists in the repository"""
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
+    async def _probe_license_file(
+        self, client: httpx.AsyncClient, owner: str, repo: str, file_path: str
+    ):
+        """Check if a file exists, returning its metadata, None if confirmed
+        absent, or COLLECTION_GAP if we couldn't tell. Unlike the base
+        _check_file_exists, this also returns size/download_url, which the
+        manual fallback needs to fetch content for license-type detection.
+        """
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
+        )
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
+        if data is None or isinstance(data, list):
+            return None
+        return {
+            "url": data.get("html_url", ""),
+            "size": data.get("size", 0),
+            "download_url": data.get("download_url", ""),
+        }
 
+    async def _get_file_content(
+        self, client: httpx.AsyncClient, download_url: str, max_size: int = 50000
+    ) -> str:
+        """Get file content from download URL.
+
+        Best-effort only: this only refines an already-found license's
+        detected type, and _analyze_license already falls back to GitHub's
+        own classification when content can't be read, so a failure here
+        doesn't need its own not_collected tracking.
+        """
         try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                response = await client.get(url, headers=self.headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    return {
-                        "exists": True,
-                        "url": data.get("html_url", ""),
-                        "size": data.get("size", 0),
-                        "download_url": data.get("download_url", ""),
-                    }
-                else:
-                    return {"exists": False}
-        except Exception as e:
-            logger.debug(f"Error checking {file_path}: {e}")
-            return {"exists": False}
-
-    async def _get_file_content(self, download_url: str, max_size: int = 50000) -> str:
-        """Get file content from download URL"""
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                response = await client.get(download_url)
-                if response.status_code == 200:
-                    text = response.text
-                    # Limit size to avoid huge files
-                    return text[:max_size]
+            response = await client.get(download_url)
+            if response.status_code == 200:
+                return response.text[:max_size]
         except Exception as e:
             logger.debug(f"Error fetching file content: {e}")
         return ""
@@ -286,13 +293,17 @@ class LicensingCollector:
     def _analyze_license(self, license_info: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze license information and categorize"""
         if not license_info.get("found"):
-            return {
+            result = {
                 "license_type": None,
                 "osi_approved": None,
                 "category": None,
                 "spdx_id": None,
                 "description": "No license found",
             }
+            if license_info.get("not_collected"):
+                result["description"] = "Could not determine license (collection gap)"
+                result["not_collected"] = True
+            return result
 
         # If we have SPDX ID from GitHub API, use it
         spdx_id = license_info.get("spdx_id")
@@ -402,11 +413,14 @@ class LicensingCollector:
         score = 0
         max_score = 3
         details = []
+        gap = bool(license_info.get("not_collected"))
 
         # Check 1: License file exists
         if license_info.get("found"):
             score += 1
             details.append("License file exists: ✓")
+        elif gap:
+            details.append("License file exists: ? (not collected)")
         else:
             details.append("License file exists: ✗")
 
@@ -414,6 +428,8 @@ class LicensingCollector:
         if analysis.get("license_type") and analysis["license_type"] != "Unknown":
             score += 1
             details.append(f"License identified: ✓ ({analysis['license_type']})")
+        elif gap:
+            details.append("License identified: ? (not collected)")
         else:
             details.append("License identified: ✗")
 
@@ -426,6 +442,15 @@ class LicensingCollector:
         else:
             details.append("OSI approved: ? (unknown)")
 
+        # A gap that never confirmed the license one way or the other means
+        # nothing here was actually measured -- report it as such instead of
+        # a confident 0/3 or 1/3.
+        if gap:
+            return {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "details": details,
+                "category": analysis.get("category", "Unknown"),
+            }
         return {
             "score": score,
             "max_score": max_score,
