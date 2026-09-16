@@ -217,42 +217,65 @@ class CommunityHealthCollector:
             "maintained": maintained,
         }
 
+    async def _github_get(self, url: str, params: Optional[dict] = None) -> Optional[Any]:
+        """GET a GitHub API endpoint, retrying on secondary rate limits.
+
+        Every method below used to make this call inline with a bare
+        `if status != 200: return <empty>` — which silently turned a GitHub
+        secondary rate limit (403, common under this pipeline's concurrent
+        per-package bursts) into "this file doesn't exist" instead of
+        retrying. That's what made kokkos/kokkos's CoC/governance docs (which
+        do exist, under docs/) read as "not found" on the dashboard. Mirrors
+        the Retry-After-aware backoff collectors.ecosystem.base already uses.
+        """
+        attempts = 3
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for attempt in range(attempts):
+                try:
+                    response = await client.get(url, headers=self.headers, params=params)
+                    if response.status_code == 200:
+                        return response.json()
+                    if response.status_code == 404:
+                        return None
+                    if attempt < attempts - 1 and response.status_code in (403, 429, 500, 502, 503):
+                        retry_after = response.headers.get("Retry-After")
+                        delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
+                        logger.debug(
+                            f"HTTP {response.status_code} from {url}, retrying in {delay:.0f}s"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    return None
+                except Exception as e:
+                    if attempt < attempts - 1:
+                        logger.debug(f"Error fetching {url}: {e}, retrying…")
+                        await asyncio.sleep(1 + attempt)
+                        continue
+                    return None
+        return None
+
     async def _get_file_text(self, owner: str, repo: str, path: str) -> str:
         """Full decoded text of a repository file."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code != 200:
-                    return ""
-                import base64
-                return base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
-        except Exception as e:
-            logger.debug(f"Could not read {path}: {e}")
+        data = await self._github_get(f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
+        if not data:
             return ""
+        import base64
+        return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
     async def _days_since_last_change(
         self, owner: str, repo: str, path: str
     ) -> Optional[int]:
         """Days since the most recent commit touching a given path."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/commits"
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(
-                    url, headers=self.headers, params={"path": path, "per_page": 1}
-                )
-                if resp.status_code != 200:
-                    return None
-                data = resp.json()
-                if not data:
-                    return None
-                from datetime import datetime, timezone
-                when = data[0]["commit"]["committer"]["date"]
-                dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
-                return (datetime.now(timezone.utc) - dt).days
-        except Exception as e:
-            logger.debug(f"Could not date {path}: {e}")
+        data = await self._github_get(
+            f"https://api.github.com/repos/{owner}/{repo}/commits",
+            params={"path": path, "per_page": 1},
+        )
+        if not data:
             return None
+        from datetime import datetime, timezone
+        when = data[0]["commit"]["committer"]["date"]
+        dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).days
 
     async def _list_dir(self, owner: str, repo: str, path: str = "") -> Dict[str, Dict]:
         """Directory listing keyed by lower-cased path, for case-insensitive lookup.
@@ -262,23 +285,16 @@ class CommunityHealthCollector:
         `Contributing.md`, which no reasonable list of upper/lower variants
         catches, and the file was invisible to this collector.
         """
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}".rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code != 200:
-                    return {}
-                entries = resp.json()
-                if not isinstance(entries, list):
-                    return {}
-                prefix = f"{path}/" if path else ""
-                return {
-                    f"{prefix}{e['name']}".lower(): e
-                    for e in entries if e.get("type") == "file"
-                }
-        except Exception as e:
-            logger.debug(f"Could not list {path or 'root'}: {e}")
+        entries = await self._github_get(
+            f"https://api.github.com/repos/{owner}/{repo}/contents/{path}".rstrip("/")
+        )
+        if not isinstance(entries, list):
             return {}
+        prefix = f"{path}/" if path else ""
+        return {
+            f"{prefix}{e['name']}".lower(): e
+            for e in entries if e.get("type") == "file"
+        }
 
     async def _build_file_index(self, owner: str, repo: str) -> Dict[str, Dict]:
         """Case-insensitive index of the directories community docs live in."""
@@ -375,36 +391,31 @@ class CommunityHealthCollector:
         Returns:
             Dictionary with exists, url, size, and optional content_preview
         """
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url, headers=self.headers)
-                if response.status_code == 200:
-                    data = response.json()
-
-                    # Get content preview (first 200 chars)
-                    content_preview = ""
-                    if "download_url" in data:
-                        preview = await self._get_content_preview(data["download_url"])
-                        content_preview = preview
-
-                    return {
-                        "exists": True,
-                        "url": data.get("html_url", ""),
-                        "size": data.get("size", 0),
-                        "content_preview": content_preview,
-                    }
-                else:
-                    return {"exists": False}
-        except Exception as e:
-            logger.debug(f"Error checking {file_path}: {e}")
+        data = await self._github_get(f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}")
+        if not data:
             return {"exists": False}
+
+        # Get content preview (first 200 chars)
+        content_preview = ""
+        if "download_url" in data:
+            content_preview = await self._get_content_preview(data["download_url"])
+
+        return {
+            "exists": True,
+            "url": data.get("html_url", ""),
+            "size": data.get("size", 0),
+            "content_preview": content_preview,
+        }
 
     async def _get_content_preview(
         self, download_url: str, max_chars: int = 200
     ) -> str:
-        """Get preview of file content"""
+        """Get preview of file content.
+
+        Served from raw.githubusercontent.com, not api.github.com, so it
+        isn't subject to the same secondary rate limit -- a plain best-effort
+        fetch is fine here; a missing preview isn't reported as anything.
+        """
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(download_url)
@@ -427,21 +438,8 @@ class CommunityHealthCollector:
         if not self.github_token:
             return {}
 
-        url = f"https://api.github.com/repos/{owner}/{repo}/community/profile"
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url, headers=self.headers)
-                if response.status_code == 200:
-                    return response.json()
-                else:
-                    logger.debug(
-                        f"Could not get community profile: {response.status_code}"
-                    )
-                    return {}
-        except Exception as e:
-            logger.debug(f"Error getting community profile: {e}")
-            return {}
+        data = await self._github_get(f"https://api.github.com/repos/{owner}/{repo}/community/profile")
+        return data or {}
 
     def _extract_owner_repo(self, repo_url: str) -> Optional[tuple]:
         """Extract owner and repo name from GitHub URL"""
