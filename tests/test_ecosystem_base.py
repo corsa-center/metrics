@@ -15,12 +15,22 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, _repo_info_cache
 
 
 @pytest.fixture
 def collector():
     return GitHubCollectorBase()
+
+
+@pytest.fixture(autouse=True)
+def _clear_shared_cache():
+    """The repo-info dedup cache is module-level by design (see base.py) so
+    it coalesces requests across different collector instances -- which
+    means it persists across tests too unless cleared."""
+    _repo_info_cache.clear()
+    yield
+    _repo_info_cache.clear()
 
 
 def _resp(status_code, json_body=None, headers=None, text=""):
@@ -37,6 +47,80 @@ def _resp(status_code, json_body=None, headers=None, text=""):
 
 def _request():
     return httpx.Request("GET", "https://api.github.com/repos/o/r")
+
+
+class TestRepoInfoDeduping:
+    """Second permanent fix, alongside the retry-volume tightening: at
+    least 5 collectors independently re-fetch the same package's bare
+    GET /repos/{owner}/{repo} within one run. Coalescing those into a
+    single real request is free volume reduction with no staleness risk
+    -- the whole point is these all want the exact same answer at
+    essentially the exact same moment.
+    """
+
+    def test_concurrent_requests_for_same_url_share_one_real_fetch(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(200, {"stars": 5}))
+        transport = RetryingTransport(wrapped)
+
+        async def run():
+            return await asyncio.gather(
+                *[transport.handle_async_request(_request()) for _ in range(5)]
+            )
+
+        responses = asyncio.run(run())
+        assert all(r.status_code == 200 for r in responses)
+        assert wrapped.handle_async_request.call_count == 1
+
+    def test_sequential_requests_for_same_url_also_reuse_the_cached_result(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(200, {"stars": 5}))
+        transport = RetryingTransport(wrapped)
+
+        asyncio.run(transport.handle_async_request(_request()))
+        asyncio.run(transport.handle_async_request(_request()))
+        assert wrapped.handle_async_request.call_count == 1
+
+    def test_different_urls_are_not_conflated(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(200, {}))
+        transport = RetryingTransport(wrapped)
+
+        asyncio.run(transport.handle_async_request(httpx.Request("GET", "https://api.github.com/repos/a/b")))
+        asyncio.run(transport.handle_async_request(httpx.Request("GET", "https://api.github.com/repos/c/d")))
+        assert wrapped.handle_async_request.call_count == 2
+
+    def test_non_repo_info_endpoints_are_not_deduped(self):
+        # Issues/PRs/releases listings legitimately vary by query params and
+        # aren't confirmed-safe to coalesce -- only the bare repo-info shape is.
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(200, []))
+        transport = RetryingTransport(wrapped)
+
+        req = httpx.Request("GET", "https://api.github.com/repos/o/r/issues")
+        asyncio.run(transport.handle_async_request(req))
+        asyncio.run(transport.handle_async_request(req))
+        assert wrapped.handle_async_request.call_count == 2
+
+    def test_a_failed_fetch_is_cached_too_not_repeatedly_retried_by_every_caller(self):
+        # If the one real request does exhaust its retries and fail, every
+        # collector wanting this package's repo info should see that same
+        # failure once, not each independently burn their own retry budget.
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(
+            return_value=_resp(403, headers={"Retry-After": "0"})
+        )
+        transport = RetryingTransport(wrapped)
+
+        async def run():
+            return await asyncio.gather(
+                *[transport.handle_async_request(_request()) for _ in range(3)]
+            )
+
+        responses = asyncio.run(run())
+        assert all(r.status_code == 403 for r in responses)
+        # _RETRY_ATTEMPTS=2 for the one real fetch, not 2 x 3 callers.
+        assert wrapped.handle_async_request.call_count == 2
 
 
 class TestRetryingTransport:

@@ -5,7 +5,7 @@ import re
 import httpx
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,27 @@ logger = logging.getLogger(__name__)
 # rate limit, so it needs the extra check below before retrying.
 _RETRYABLE_STATUSES = {403, 429, 500, 502, 503}
 _RETRY_ATTEMPTS = 2
+
+# Every collector builds its own httpx client, so this has to be module-level
+# (not per-instance) to actually coalesce requests issued by different
+# collector objects for the same package. One process per orchestrator run,
+# so it's never cleared -- at most ~1 entry per tracked package, trivial
+# memory, and each URL is only ever fetched during that package's brief
+# collection window anyway.
+_repo_info_cache: Dict[str, "asyncio.Future[httpx.Response]"] = {}
+
+# The bare repo-info endpoint, no query string -- confirmed independently
+# re-fetched for the same package by at least 5 collectors
+# (chaoss_governance.py twice on its own), each treating it as if no one
+# else wanted the same thing. Deliberately narrow: only this exact shape is
+# cached, not e.g. issues/PRs/releases listings, whose results legitimately
+# vary by query params and where staleness risk is less obviously nil.
+_REPO_INFO_URL_RE = re.compile(r"^https://api\.github\.com/repos/[^/]+/[^/]+$")
+
+
+def _clear_repo_info_cache() -> None:
+    """Test-only: module-level cache state must not leak between tests."""
+    _repo_info_cache.clear()
 
 
 class RetryingTransport(httpx.AsyncBaseTransport):
@@ -48,10 +69,33 @@ class RetryingTransport(httpx.AsyncBaseTransport):
         self._wrapped = wrapped or httpx.AsyncHTTPTransport()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and _REPO_INFO_URL_RE.match(str(request.url)):
+            return await self._deduped(request)
+        return await self._request_with_retry(request)
+
+    async def _deduped(self, request: httpx.Request) -> httpx.Response:
+        """Coalesce concurrent/repeated fetches of the same repo-info URL.
+
+        Collectors within one package's collection window fire together via
+        asyncio.gather, so a plain "check cache, else fetch" dict would still
+        miss on every one of them -- none has finished by the time the next
+        one checks. Storing the in-flight Future itself (not just its
+        eventual result) means every caller for the same URL awaits the one
+        real request in progress instead of starting their own.
+        """
+        key = str(request.url)
+        future = _repo_info_cache.get(key)
+        if future is None:
+            future = asyncio.ensure_future(self._request_with_retry(request))
+            _repo_info_cache[key] = future
+        return await future
+
+    async def _request_with_retry(self, request: httpx.Request) -> httpx.Response:
         response: Optional[httpx.Response] = None
         for attempt in range(_RETRY_ATTEMPTS):
             response = await self._wrapped.handle_async_request(request)
             if response.status_code not in _RETRYABLE_STATUSES:
+                await response.aread()
                 return response
 
             retry_after = response.headers.get("Retry-After")
@@ -66,6 +110,8 @@ class RetryingTransport(httpx.AsyncBaseTransport):
                     f"HTTP {response.status_code} from {request.url}, retrying in {delay:.0f}s"
                 )
                 await asyncio.sleep(delay)
+            else:
+                await response.aread()
         return response
 
     async def aclose(self) -> None:
