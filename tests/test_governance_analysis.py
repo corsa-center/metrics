@@ -52,6 +52,24 @@ class TestCaseInsensitiveDetection:
         out = collector._match_pattern(index, collector.GOVERNANCE_PATTERNS, "kokkos", "governance")
         assert out["repository"] == "kokkos/governance"
 
+    def test_negative_result_under_gap_is_not_collected_not_confirmed_absent(self, collector):
+        out = collector._match_pattern({}, collector.GOVERNANCE_PATTERNS, "o", "r", has_gap=True)
+        assert out["exists"] is False
+        assert out["not_collected"] is True
+
+    def test_positive_result_under_gap_is_still_trustworthy(self, collector):
+        # Found it despite has_gap=True: one of the underlying listings
+        # succeeded and had it, so this is real regardless of the other one.
+        index = {"governance.md": _entry("GOVERNANCE.md")}
+        out = collector._match_pattern(index, collector.GOVERNANCE_PATTERNS, "o", "r", has_gap=True)
+        assert out["exists"] is True
+        assert "not_collected" not in out
+
+    def test_negative_result_without_gap_is_a_confirmed_absence(self, collector):
+        out = collector._match_pattern({}, collector.GOVERNANCE_PATTERNS, "o", "r", has_gap=False)
+        assert out["exists"] is False
+        assert "not_collected" not in out
+
 
 class TestKeywordGroups:
     def _groups(self, collector, text):
@@ -113,8 +131,8 @@ class TestFallbackRepos:
 
         async def fake_index(owner, repo):
             if repo == "governance":
-                return {"governance.md": {"path": "GOVERNANCE.md", "html_url": "http://x", "size": 1}}
-            return {}
+                return {"governance.md": {"path": "GOVERNANCE.md", "html_url": "http://x", "size": 1}}, False
+            return {}, False
 
         with patch.object(collector, "_build_file_index", side_effect=fake_index):
             result_coc, result_gov, result_contrib = asyncio.run(
@@ -133,8 +151,8 @@ class TestFallbackRepos:
         async def fake_index(owner, repo):
             calls.append(repo)
             if repo == ".github":
-                return {"governance.md": {"path": "GOVERNANCE.md", "html_url": "http://x", "size": 1}}
-            return {}
+                return {"governance.md": {"path": "GOVERNANCE.md", "html_url": "http://x", "size": 1}}, False
+            return {}, False
 
         with patch.object(collector, "_build_file_index", side_effect=fake_index):
             _, result_gov, _ = asyncio.run(
@@ -152,7 +170,7 @@ class TestFallbackRepos:
             return {
                 "governance.md": {"path": "GOVERNANCE.md", "html_url": "http://x", "size": 1},
                 "code_of_conduct.md": {"path": "CODE_OF_CONDUCT.md", "html_url": "http://y", "size": 1},
-            }
+            }, False
 
         with patch.object(collector, "_build_file_index", side_effect=fake_index):
             asyncio.run(
@@ -161,8 +179,47 @@ class TestFallbackRepos:
         assert calls == ["governance"]  # never needed to try .github
 
     def test_nonexistent_fallback_repo_does_not_crash(self, collector):
-        with patch.object(collector, "_build_file_index", new=AsyncMock(return_value={})):
+        with patch.object(collector, "_build_file_index", new=AsyncMock(return_value=({}, False))):
             result = asyncio.run(
                 collector._check_fallback_repos("o", _not_found(), _not_found(), _not_found())
             )
         assert all(r["exists"] is False for r in result)
+
+    def test_gapped_fallback_repo_reports_not_collected_not_a_confident_absence(self, collector):
+        # Both fallback repos gap entirely (e.g. rate-limited) -- the result
+        # must not read as a confirmed "no governance", since we never
+        # actually got to look.
+        with patch.object(collector, "_build_file_index", new=AsyncMock(return_value=({}, True))):
+            _, result_gov, _ = asyncio.run(
+                collector._check_fallback_repos("o", _not_found(), _not_found(), _not_found())
+            )
+        assert result_gov["exists"] is False
+        assert result_gov["not_collected"] is True
+
+
+class TestCalculateScore:
+    def test_not_collected_excluded_from_denominator_not_scored_as_failure(self, collector):
+        result = collector._calculate_score(
+            _found("CODE_OF_CONDUCT.md"),
+            {"exists": False, "not_collected": True},
+            _found("CONTRIBUTING.md"),
+        )
+        # If the gap silently counted as a failure this would be 2/3, 67%.
+        assert result["score"] == 2
+        assert result["max_score"] == 2
+        assert result["percentage"] == 100.0
+        assert "Governance: ? (not collected)" in result["details"]
+
+    def test_all_not_collected_reports_no_percentage(self, collector):
+        gap = {"exists": False, "not_collected": True}
+        result = collector._calculate_score(gap, gap, gap)
+        assert result["max_score"] == 0
+        assert result["percentage"] is None
+
+    def test_fully_collected_matches_prior_behavior(self, collector):
+        result = collector._calculate_score(
+            _found("x"), {"exists": False}, _found("y")
+        )
+        assert result["score"] == 2
+        assert result["max_score"] == 3
+        assert result["percentage"] == pytest.approx(66.67)

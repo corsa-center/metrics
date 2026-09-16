@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from collectors.ecosystem.base import RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RetryingTransport
 from collectors.ecosystem.community_health import CommunityHealthCollector
 
 
@@ -68,14 +68,16 @@ class TestGithubGet:
             result = asyncio.run(collector._github_get("https://api.github.com/repos/o/r/contents/missing"))
         assert result is None
 
-    def test_non_200_returns_none(self, collector):
+    def test_non_200_is_a_gap_not_a_negative(self, collector):
         # By the time this code sees the response, RetryingTransport has
-        # already retried and given up -- just needs to not crash on it.
+        # already retried and given up. Must not read the same as a real
+        # 404 -- that's how a rate-limited fetch used to silently score as
+        # a confirmed "not found" instead of "unknown".
         get_mock = AsyncMock(return_value=_resp(403))
         patcher, _ = _patched_client(get_mock)
         with patcher:
             result = asyncio.run(collector._github_get("https://api.github.com/repos/o/r"))
-        assert result is None
+        assert result is COLLECTION_GAP
 
     def test_wires_in_the_retrying_transport(self, collector):
         """The actual fix: without this, _github_get has no retry at all."""

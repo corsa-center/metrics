@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import re
 
-from collectors.ecosystem.base import RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -138,10 +138,10 @@ class CommunityHealthCollector:
 
         # One listing of the directories these documents live in, matched
         # case-insensitively, instead of guessing spellings one request at a time.
-        index = await self._build_file_index(owner, repo)
-        coc_result = self._match_pattern(index, self.COC_PATTERNS, owner, repo)
-        governance_result = self._match_pattern(index, self.GOVERNANCE_PATTERNS, owner, repo)
-        contributing_result = self._match_pattern(index, self.CONTRIBUTING_PATTERNS, owner, repo)
+        index, has_gap = await self._build_file_index(owner, repo)
+        coc_result = self._match_pattern(index, self.COC_PATTERNS, owner, repo, has_gap)
+        governance_result = self._match_pattern(index, self.GOVERNANCE_PATTERNS, owner, repo, has_gap)
+        contributing_result = self._match_pattern(index, self.CONTRIBUTING_PATTERNS, owner, repo, has_gap)
 
         coc_result, governance_result, contributing_result = await self._check_fallback_repos(
             owner, coc_result, governance_result, contributing_result
@@ -256,8 +256,10 @@ class CommunityHealthCollector:
             "maintained": maintained,
         }
 
-    async def _github_get(self, url: str, params: Optional[dict] = None) -> Optional[Any]:
-        """GET a GitHub API endpoint.
+    async def _github_get(self, url: str, params: Optional[dict] = None):
+        """GET a GitHub API endpoint. Returns the parsed body, None for a
+        confirmed 404, or COLLECTION_GAP if we couldn't actually tell
+        (rate limit, network error, other non-2xx).
 
         Every method below used to make this call inline with a bare
         `if status != 200: return <empty>` — which silently turned a GitHub
@@ -267,6 +269,10 @@ class CommunityHealthCollector:
         do exist, under docs/) read as "not found" on the dashboard.
         Retrying is now RetryingTransport's job (below), transparent to this
         method — it only needs to interpret whatever the final response is.
+
+        COLLECTION_GAP is falsy, same as None, so `if not data:` keeps
+        working unchanged for callers that haven't opted into the
+        distinction; `if data is COLLECTION_GAP:` is for ones that have.
         """
         try:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
@@ -275,10 +281,12 @@ class CommunityHealthCollector:
             # COLLECTION-GAP: grep-able tag for "why is this metric empty"
             # -- see the matching tag in collectors/ecosystem/base.py.
             logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
-            return None
+            return COLLECTION_GAP
         if response.status_code == 200:
             return response.json()
-        return None
+        if response.status_code == 404:
+            return None
+        return COLLECTION_GAP
 
     async def _get_file_text(self, owner: str, repo: str, path: str) -> str:
         """Full decoded text of a repository file."""
@@ -304,7 +312,10 @@ class CommunityHealthCollector:
         return (datetime.now(timezone.utc) - dt).days
 
     async def _list_dir(self, owner: str, repo: str, path: str = "") -> Dict[str, Dict]:
-        """Directory listing keyed by lower-cased path, for case-insensitive lookup.
+        """Directory listing keyed by lower-cased path, for case-insensitive
+        lookup. Returns COLLECTION_GAP (not an empty dict) if the listing
+        itself couldn't be fetched -- an empty dict must only ever mean
+        "this directory has no files", not "we don't know what's in it".
 
         GitHub's Contents API is case-sensitive, so a pattern list can only ever
         match the spellings someone thought to enumerate. ADIOS2 names its guide
@@ -314,6 +325,8 @@ class CommunityHealthCollector:
         entries = await self._github_get(
             f"https://api.github.com/repos/{owner}/{repo}/contents/{path}".rstrip("/")
         )
+        if entries is COLLECTION_GAP:
+            return COLLECTION_GAP
         if not isinstance(entries, list):
             return {}
         prefix = f"{path}/" if path else ""
@@ -322,8 +335,16 @@ class CommunityHealthCollector:
             for e in entries if e.get("type") == "file"
         }
 
-    async def _build_file_index(self, owner: str, repo: str) -> Dict[str, Dict]:
-        """Case-insensitive index of the directories community docs live in."""
+    async def _build_file_index(self, owner: str, repo: str) -> tuple:
+        """Case-insensitive index of the directories community docs live in,
+        plus whether any of the three listings that feed it gapped.
+
+        A gapped listing is dropped from the merged index rather than
+        raising -- the other two listings' real data is still worth having
+        -- but the caller needs to know coverage was incomplete, since
+        "not in the index" now might mean "wasn't listed", not "doesn't
+        exist". Returns (index, has_gap).
+        """
         listings = await asyncio.gather(
             self._list_dir(owner, repo),
             self._list_dir(owner, repo, ".github"),
@@ -331,13 +352,17 @@ class CommunityHealthCollector:
             return_exceptions=True,
         )
         index: Dict[str, Dict] = {}
+        has_gap = False
         for listing in listings:
-            if isinstance(listing, dict):
+            if listing is COLLECTION_GAP or isinstance(listing, Exception):
+                has_gap = True
+            elif isinstance(listing, dict):
                 index.update(listing)
-        return index
+        return index, has_gap
 
     def _match_pattern(
-        self, index: Dict[str, Dict], patterns: List[str], owner: str, repo: str
+        self, index: Dict[str, Dict], patterns: List[str], owner: str, repo: str,
+        has_gap: bool = False,
     ) -> Dict[str, Any]:
         """First pattern present in the index, compared case-insensitively.
 
@@ -346,6 +371,13 @@ class CommunityHealthCollector:
         primary one -- callers that read the file's own content
         (_analyze_governance_keywords, _assess_effectiveness) need to know
         where to actually fetch it from.
+
+        A positive result (found in the index) is trustworthy even if
+        has_gap is True -- finding it means at least one of the underlying
+        listings succeeded and had it, regardless of whether another one
+        failed. A negative result under has_gap is NOT trustworthy: the
+        file could be sitting in whichever directory listing didn't come
+        back, so this reports not_collected instead of a confident "absent".
         """
         for pattern in patterns:
             entry = index.get(pattern.lower())
@@ -358,6 +390,9 @@ class CommunityHealthCollector:
                     "content_preview": "",
                     "repository": f"{owner}/{repo}",
                 }
+        if has_gap:
+            return {"exists": False, "file_path": None, "url": None, "repository": None,
+                     "not_collected": True}
         return {"exists": False, "file_path": None, "url": None, "repository": None}
 
     async def _check_fallback_repos(
@@ -390,16 +425,22 @@ class CommunityHealthCollector:
         for fallback_repo in self.FALLBACK_REPO_NAMES:
             if not missing:
                 break
-            fb_index = await self._build_file_index(owner, fallback_repo)
-            if not fb_index:
-                continue  # repo doesn't exist or has none of these files
+            fb_index, fb_has_gap = await self._build_file_index(owner, fallback_repo)
+            if not fb_index and not fb_has_gap:
+                continue  # repo doesn't exist or genuinely has none of these files
             for key in list(missing):
                 patterns, _ = pending[key]
-                match = self._match_pattern(fb_index, patterns, owner, fallback_repo)
+                match = self._match_pattern(fb_index, patterns, owner, fallback_repo, fb_has_gap)
                 if match["exists"]:
                     logger.info(f"{key} found in fallback repo {owner}/{fallback_repo}")
                     results[key] = match
                     missing.discard(key)
+                elif match.get("not_collected"):
+                    # Still unresolved, but now know it's specifically
+                    # because the fallback repo's own listing gapped --
+                    # worth reporting that instead of the primary repo's
+                    # possibly-different not_collected/absent result.
+                    results[key] = match
 
         return results["coc"], results["governance"], results["contributing"]
 
@@ -487,33 +528,36 @@ class CommunityHealthCollector:
     def _calculate_score(
         self, coc: Dict, governance: Dict, contributing: Dict
     ) -> Dict[str, Any]:
-        """Calculate overall community health score"""
+        """Calculate overall community health score.
+
+        A not_collected item (gap, not a confirmed absence) is dropped from
+        both score and max_score, not counted as a failing ✗ -- same
+        convention as chaoss_governance.py's weighted-average exclusion,
+        applied here to a simple count instead.
+        """
         score = 0
-        max_score = 3
+        max_score = 0
         details = []
 
-        if coc.get("exists"):
-            score += 1
-            details.append("Code of Conduct: ✓")
-        else:
-            details.append("Code of Conduct: ✗")
-
-        if governance.get("exists"):
-            score += 1
-            details.append("Governance: ✓")
-        else:
-            details.append("Governance: ✗")
-
-        if contributing.get("exists"):
-            score += 1
-            details.append("Contributing Guidelines: ✓")
-        else:
-            details.append("Contributing Guidelines: ✗")
+        for label, result in [
+            ("Code of Conduct", coc),
+            ("Governance", governance),
+            ("Contributing Guidelines", contributing),
+        ]:
+            if result.get("not_collected"):
+                details.append(f"{label}: ? (not collected)")
+                continue
+            max_score += 1
+            if result.get("exists"):
+                score += 1
+                details.append(f"{label}: ✓")
+            else:
+                details.append(f"{label}: ✗")
 
         return {
             "score": score,
             "max_score": max_score,
-            "percentage": round((score / max_score) * 100, 2),
+            "percentage": round((score / max_score) * 100, 2) if max_score else None,
             "details": details,
         }
 
