@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class FairLicensingCollector(GitHubCollectorBase):
         logger.info(f"Collecting FAIR and licensing detail for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            license_data, citation, has_codemeta, has_zenodo, releases = await asyncio.gather(
+            results = await asyncio.gather(
                 self._get_license(client, owner, repo),
                 self._get_citation(client, owner, repo),
                 self._any_exists(client, owner, repo, _CODEMETA_PATHS),
@@ -92,25 +92,33 @@ class FairLicensingCollector(GitHubCollectorBase):
                 return_exceptions=True,
             )
 
-        if isinstance(license_data, Exception):
-            logger.warning(f"License fetch failed: {license_data}")
-            license_data = {"spdx_id": None, "text": ""}
-        if isinstance(citation, Exception):
-            logger.warning(f"Citation fetch failed: {citation}")
-            citation = {}
-        for name, value in [("codemeta", has_codemeta), ("zenodo", has_zenodo),
-                            ("releases", releases)]:
+        names = ["license", "citation", "codemeta", "zenodo", "releases"]
+        defaults = [
+            ({"spdx_id": None, "text": ""}, True),
+            ({}, True),
+            (False, True),
+            (False, True),
+            (False, True),
+        ]
+        unpacked = []
+        for name, default, value in zip(names, defaults, results):
             if isinstance(value, Exception):
-                logger.warning(f"{name} check failed: {value}")
+                logger.warning(f"COLLECTION-GAP category={name} reason=exception:{value!r}")
+                unpacked.append(default)
+            else:
+                unpacked.append(value)
 
-        has_codemeta = has_codemeta is True
-        has_zenodo = has_zenodo is True
-        releases = releases is True
+        (license_data, license_gap) = unpacked[0]
+        (citation, citation_gap) = unpacked[1]
+        (has_codemeta, codemeta_gap) = unpacked[2]
+        (has_zenodo, zenodo_gap) = unpacked[3]
+        (releases, releases_gap) = unpacked[4]
 
-        exceptions = self._analyze_license_text(license_data)
-        metadata = self._analyze_citation(citation)
+        exceptions = self._analyze_license_text(license_data, license_gap)
+        metadata = self._analyze_citation(citation, citation_gap)
         fair = self._assess_fair(
-            license_data, exceptions, citation, metadata, has_codemeta, has_zenodo, releases
+            exceptions, metadata, has_codemeta, has_zenodo, releases,
+            codemeta_gap, zenodo_gap, releases_gap,
         )
 
         return {
@@ -127,15 +135,13 @@ class FairLicensingCollector(GitHubCollectorBase):
 
     async def _get_license(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Dict[str, Any]:
-        """SPDX id from the API plus the raw licence text."""
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}/license",
-            headers=self.github_headers,
-        )
-        if resp.status_code != 200:
-            return {"spdx_id": None, "text": ""}
-        data = resp.json()
+    ) -> tuple:
+        """SPDX id from the API plus the raw licence text. Returns (data, saw_gap)."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/license")
+        if data is COLLECTION_GAP:
+            return {"spdx_id": None, "text": ""}, True
+        if data is None:
+            return {"spdx_id": None, "text": ""}, False
         text = ""
         if data.get("content"):
             text = base64.b64decode(data["content"]).decode("utf-8", "replace")
@@ -143,47 +149,65 @@ class FairLicensingCollector(GitHubCollectorBase):
             "spdx_id": (data.get("license") or {}).get("spdx_id"),
             "name": (data.get("license") or {}).get("name"),
             "text": text,
-        }
+        }, False
 
     async def _get_citation(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Dict[str, Any]:
-        """Parsed CITATION.cff, or an empty dict if absent or unparseable."""
+    ) -> tuple:
+        """Parsed CITATION.cff, or an empty dict if absent or unparseable.
+
+        Returns (citation, saw_gap).
+        """
+        saw_gap = False
         for path in _CITATION_PATHS:
-            resp = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-                headers=self.github_headers,
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
             )
-            if resp.status_code != 200:
+            if data is COLLECTION_GAP:
+                saw_gap = True
+                continue
+            if data is None:
                 continue
             try:
-                text = base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
+                text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
                 parsed = yaml.safe_load(text)
-                return parsed if isinstance(parsed, dict) else {}
+                if isinstance(parsed, dict):
+                    return parsed, saw_gap
             except Exception as e:
                 logger.debug(f"Could not parse {path}: {e}")
-        return {}
+        return {}, saw_gap
 
     async def _any_exists(
         self, client: httpx.AsyncClient, owner: str, repo: str, paths: List[str]
-    ) -> bool:
+    ) -> tuple:
+        """Returns (found, saw_gap)."""
+        saw_gap = False
         for path in paths:
-            if await self._check_file_exists(client, owner, repo, path):
-                return True
-        return False
+            result = await self._check_file_exists(client, owner, repo, path)
+            if result is COLLECTION_GAP:
+                saw_gap = True
+                continue
+            if result:
+                return True, saw_gap
+        return False, saw_gap
 
     async def _has_releases(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> bool:
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=1",
-            headers=self.github_headers,
+    ) -> tuple:
+        """Returns (has_releases, saw_gap)."""
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
+            params={"per_page": 1},
         )
-        return resp.status_code == 200 and bool(resp.json())
+        if data is COLLECTION_GAP:
+            return False, True
+        return bool(data), False
 
     # ---------------------------------------------------------------- analyze
 
-    def _analyze_license_text(self, license_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_license_text(
+        self, license_data: Dict[str, Any], saw_gap: bool = False
+    ) -> Dict[str, Any]:
         """Recover a license family the API could not name, and flag extra terms."""
         spdx = license_data.get("spdx_id")
         text = license_data.get("text") or ""
@@ -202,18 +226,30 @@ class FairLicensingCollector(GitHubCollectorBase):
         ]
         if text and len(_COPYRIGHT_LINE.findall(text)) >= _MULTIPLE_HOLDERS:
             markers.append("Multiple copyright holders")
-        return {
+        identified = classified or bool(resolved)
+        result = {
             "api_spdx": spdx,
             "api_classified": classified,
             "resolved_from_text": resolved,
             "exception_markers": markers,
-            "identified": classified or bool(resolved),
+            "identified": identified,
         }
+        # An unidentified result built on a gap isn't a confirmed "no
+        # license" -- an identified one stands regardless, since it came
+        # from text/SPDX data that did come back.
+        if not identified and saw_gap:
+            result["not_collected"] = True
+        return result
 
-    def _analyze_citation(self, citation: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_citation(
+        self, citation: Dict[str, Any], saw_gap: bool = False
+    ) -> Dict[str, Any]:
         """Which of the expected citation fields are actually populated."""
         if not citation:
-            return {"exists": False, "present": [], "missing": _CITATION_FIELDS}
+            result = {"exists": False, "present": [], "missing": _CITATION_FIELDS}
+            if saw_gap:
+                result["not_collected"] = True
+            return result
 
         present = []
         for field in _CITATION_FIELDS:
@@ -233,15 +269,66 @@ class FairLicensingCollector(GitHubCollectorBase):
             "missing": [f for f in _CITATION_FIELDS if f not in present],
         }
 
+    @staticmethod
+    def _or_gap(*operands: tuple) -> tuple:
+        """OR over (value, is_uncertain) pairs: any confirmed True wins outright;
+        otherwise any uncertain operand makes the result uncertain; otherwise
+        every operand was a confirmed False, so the result is too.
+        """
+        if any(v for v, _ in operands):
+            return True, False
+        if any(u for _, u in operands):
+            return False, True
+        return False, False
+
+    @staticmethod
+    def _and_gap(*operands: tuple) -> tuple:
+        """AND over (value, is_uncertain) pairs: any confirmed False wins
+        outright (ANDing with a real False can't become True); otherwise any
+        uncertain operand makes the result uncertain; otherwise every operand
+        was a confirmed True.
+        """
+        if any((not v) and (not u) for v, u in operands):
+            return False, False
+        if any(u for _, u in operands):
+            return False, True
+        return True, False
+
     def _assess_fair(
-        self, license_data: Dict, exceptions: Dict, citation: Dict,
-        metadata: Dict, has_codemeta: bool, has_zenodo: bool, releases: bool,
+        self, exceptions: Dict, metadata: Dict,
+        has_codemeta: bool, has_zenodo: bool, releases: bool,
+        codemeta_gap: bool = False, zenodo_gap: bool = False, releases_gap: bool = False,
     ) -> Dict[str, Any]:
-        """Score the four FAIR4RS principles independently."""
-        findable = "doi" in metadata.get("present", []) or has_zenodo
-        accessible = exceptions.get("identified", False)
-        interoperable = metadata.get("exists", False) or has_codemeta
-        reusable = exceptions.get("identified", False) and releases
+        """Score the four FAIR4RS principles independently.
+
+        Each principle is an AND/OR of signals that may themselves be
+        gap-tainted. _or_gap/_and_gap propagate that uncertainty correctly:
+        a principle stays a confirmed True/False whenever the confirmed data
+        alone already determines it, and is only reported uncertain when a
+        gap could actually have changed the outcome.
+        """
+        doi_present = "doi" in metadata.get("present", [])
+        doi_uncertain = not doi_present and bool(metadata.get("not_collected"))
+        zenodo_uncertain = not has_zenodo and zenodo_gap
+        findable, findable_gap = self._or_gap(
+            (doi_present, doi_uncertain), (has_zenodo, zenodo_uncertain)
+        )
+
+        identified = exceptions.get("identified", False)
+        identified_uncertain = not identified and bool(exceptions.get("not_collected"))
+        accessible, accessible_gap = identified, identified_uncertain
+
+        metadata_exists = metadata.get("exists", False)
+        metadata_uncertain = not metadata_exists and bool(metadata.get("not_collected"))
+        codemeta_uncertain = not has_codemeta and codemeta_gap
+        interoperable, interoperable_gap = self._or_gap(
+            (metadata_exists, metadata_uncertain), (has_codemeta, codemeta_uncertain)
+        )
+
+        releases_uncertain = not releases and releases_gap
+        reusable, reusable_gap = self._and_gap(
+            (identified, identified_uncertain), (releases, releases_uncertain)
+        )
 
         principles = {
             "Findable": findable,
@@ -249,8 +336,15 @@ class FairLicensingCollector(GitHubCollectorBase):
             "Interoperable": interoperable,
             "Reusable": reusable,
         }
+        principle_gaps = {
+            "Findable": findable_gap,
+            "Accessible": accessible_gap,
+            "Interoperable": interoperable_gap,
+            "Reusable": reusable_gap,
+        }
         return {
             "principles": principles,
+            "principle_gaps": principle_gaps,
             "satisfied": [k for k, v in principles.items() if v],
             "count": sum(principles.values()),
         }
@@ -263,12 +357,18 @@ class FairLicensingCollector(GitHubCollectorBase):
         sub: Dict[str, Dict[str, Any]] = {}
 
         satisfied = fair.get("satisfied", [])
-        sub["fair4rs_assessment"] = {
+        fair_passing = fair.get("count", 0) >= _MIN_FAIR_PRINCIPLES
+        fair_entry: Dict[str, Any] = {
             "label": "Automated FAIR4RS Assessment",
             "value": f"{fair.get('count', 0)}/4 principles satisfied",
             "detail": ", ".join(satisfied) if satisfied else None,
-            "passing": fair.get("count", 0) >= _MIN_FAIR_PRINCIPLES,
+            "passing": fair_passing,
         }
+        # A below-threshold count is unconfirmed if any of the principles
+        # currently counted against it could have flipped from a gap.
+        if not fair_passing and any(fair.get("principle_gaps", {}).values()):
+            fair_entry["not_collected"] = True
+        sub["fair4rs_assessment"] = fair_entry
 
         if exceptions.get("api_classified"):
             value = f"{exceptions['api_spdx']} recognised by the GitHub classifier"
@@ -277,27 +377,42 @@ class FairLicensingCollector(GitHubCollectorBase):
                      f"text identifies {exceptions['resolved_from_text']}")
         else:
             value = "License could not be identified from the API or the text"
-        sub["license_exception_handling"] = {
+        exc_passing = exceptions.get("identified", False)
+        exc_entry: Dict[str, Any] = {
             "label": "License Exception Handling",
             "value": value,
             "detail": ", ".join(exceptions.get("exception_markers", [])) or None,
-            "passing": exceptions.get("identified", False),
+            "passing": exc_passing,
         }
+        if not exc_passing and exceptions.get("not_collected"):
+            exc_entry["not_collected"] = True
+        sub["license_exception_handling"] = exc_entry
 
         present = metadata.get("present", [])
-        sub["fair_metadata"] = {
+        meta_passing = len(present) >= _MIN_CITATION_FIELDS
+        meta_entry: Dict[str, Any] = {
             "label": "FAIR Metadata Assessment",
             "value": f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present"
                      if metadata.get("exists") else "No CITATION.cff found",
             "detail": ", ".join(present) if present else None,
-            "passing": len(present) >= _MIN_CITATION_FIELDS,
+            "passing": meta_passing,
         }
+        if not meta_passing and metadata.get("not_collected"):
+            meta_entry["not_collected"] = True
+        sub["fair_metadata"] = meta_entry
 
-        score = sum(1 for s in sub.values() if s["passing"])
+        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        score = sum(1 for s in scorable.values() if s["passing"])
+        max_score = len(scorable)
+        if not max_score:
+            return {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "sub_scores": sub,
+            }
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": max_score,
+            "percentage": round(score / max_score * 100, 2),
             "sub_scores": sub,
         }
 

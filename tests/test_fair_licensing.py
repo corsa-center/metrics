@@ -1,9 +1,12 @@
 """Unit tests for FairLicensingCollector (CASS Section 4.2.2)."""
 
+import asyncio
 import pytest
+from unittest.mock import AsyncMock, patch
 
+from collectors.ecosystem.base import COLLECTION_GAP
 from collectors.ecosystem.fair_licensing import (
-    FairLicensingCollector, _CITATION_FIELDS,
+    FairLicensingCollector, _CITATION_FIELDS, _CODEMETA_PATHS,
 )
 
 
@@ -99,8 +102,8 @@ class TestCitationMetadata:
 class TestFairPrinciples:
     def _assess(self, collector, **kw):
         base = dict(
-            license_data={}, exceptions={"identified": True},
-            citation={}, metadata={"exists": True, "present": ["doi"]},
+            exceptions={"identified": True},
+            metadata={"exists": True, "present": ["doi"]},
             has_codemeta=False, has_zenodo=False, releases=True,
         )
         base.update(kw)
@@ -144,3 +147,190 @@ class TestScoring:
             {"count": 4, "satisfied": []},
         )
         assert not s["sub_scores"]["fair_metadata"]["passing"]
+
+
+class TestOrGapAndAndGap:
+    def test_or_any_confirmed_true_wins(self, collector):
+        assert collector._or_gap((True, False), (False, True)) == (True, False)
+
+    def test_or_no_true_but_an_uncertain_operand_is_uncertain(self, collector):
+        assert collector._or_gap((False, False), (False, True)) == (False, True)
+
+    def test_or_all_confirmed_false_is_confirmed_false(self, collector):
+        assert collector._or_gap((False, False), (False, False)) == (False, False)
+
+    def test_and_any_confirmed_false_wins_even_with_an_uncertain_operand(self, collector):
+        assert collector._and_gap((False, False), (True, True)) == (False, False)
+
+    def test_and_no_false_but_an_uncertain_operand_is_uncertain(self, collector):
+        assert collector._and_gap((True, False), (True, True)) == (False, True)
+
+    def test_and_all_confirmed_true_is_confirmed_true(self, collector):
+        assert collector._and_gap((True, False), (True, False)) == (True, False)
+
+
+class TestAssessFairGapHandling:
+    def _assess(self, collector, **kw):
+        base = dict(
+            exceptions={"identified": True},
+            metadata={"exists": True, "present": ["doi"]},
+            has_codemeta=False, has_zenodo=False, releases=True,
+        )
+        base.update(kw)
+        return collector._assess_fair(**base)
+
+    def test_findable_uncertain_when_zenodo_gapped_and_no_doi(self, collector):
+        out = self._assess(
+            collector, metadata={"exists": True, "present": []},
+            has_zenodo=False, zenodo_gap=True,
+        )
+        assert out["principles"]["Findable"] is False
+        assert out["principle_gaps"]["Findable"] is True
+
+    def test_findable_confirmed_false_survives_a_zenodo_gap_if_not_actually_gapped(self, collector):
+        # has_zenodo confirmed False (zenodo_gap=False) and no doi -- a real negative.
+        out = self._assess(collector, metadata={"exists": True, "present": []})
+        assert out["principles"]["Findable"] is False
+        assert out["principle_gaps"]["Findable"] is False
+
+    def test_accessible_uncertain_when_license_gapped(self, collector):
+        out = self._assess(
+            collector, exceptions={"identified": False, "not_collected": True},
+        )
+        assert out["principles"]["Accessible"] is False
+        assert out["principle_gaps"]["Accessible"] is True
+
+    def test_reusable_confirmed_false_when_license_confirmed_unidentified_even_if_releases_gapped(self, collector):
+        # AND with a confirmed-False operand (identified) can't become True
+        # no matter what the other (releases) turns out to be.
+        out = self._assess(
+            collector, exceptions={"identified": False},
+            releases=False, releases_gap=True,
+        )
+        assert out["principles"]["Reusable"] is False
+        assert out["principle_gaps"]["Reusable"] is False
+
+    def test_reusable_uncertain_when_releases_gapped_and_license_identified(self, collector):
+        out = self._assess(
+            collector, exceptions={"identified": True},
+            releases=False, releases_gap=True,
+        )
+        assert out["principles"]["Reusable"] is False
+        assert out["principle_gaps"]["Reusable"] is True
+
+    def test_interoperable_uncertain_when_codemeta_gapped_and_no_citation(self, collector):
+        out = self._assess(
+            collector, metadata={"exists": False, "present": [], "not_collected": True},
+            has_codemeta=False, codemeta_gap=True,
+        )
+        assert out["principles"]["Interoperable"] is False
+        assert out["principle_gaps"]["Interoperable"] is True
+
+
+class TestScoringGapHandling:
+    def test_below_threshold_fair_score_under_gap_is_not_collected(self, collector):
+        fair = {
+            "count": 1, "satisfied": ["Accessible"],
+            "principle_gaps": {"Findable": True, "Accessible": False,
+                               "Interoperable": False, "Reusable": False},
+        }
+        s = collector._calculate_score(
+            {"identified": True}, {"exists": False, "present": []}, fair,
+        )
+        entry = s["sub_scores"]["fair4rs_assessment"]
+        assert entry["passing"] is False
+        assert entry["not_collected"] is True
+
+    def test_threshold_already_met_survives_gapped_principles(self, collector):
+        fair = {
+            "count": 3, "satisfied": ["Accessible", "Interoperable", "Reusable"],
+            "principle_gaps": {"Findable": True, "Accessible": False,
+                               "Interoperable": False, "Reusable": False},
+        }
+        s = collector._calculate_score(
+            {"identified": True}, {"exists": True, "present": ["doi"]}, fair,
+        )
+        entry = s["sub_scores"]["fair4rs_assessment"]
+        assert entry["passing"] is True
+        assert "not_collected" not in entry
+
+    def test_unidentified_license_under_gap_is_not_collected(self, collector):
+        s = collector._calculate_score(
+            {"identified": False, "not_collected": True, "exception_markers": []},
+            {"exists": False, "present": []},
+            {"count": 0, "satisfied": [], "principle_gaps": {}},
+        )
+        assert s["sub_scores"]["license_exception_handling"]["not_collected"] is True
+
+    def test_metadata_below_threshold_under_gap_is_not_collected(self, collector):
+        s = collector._calculate_score(
+            {"identified": True, "api_classified": True, "api_spdx": "MIT",
+             "exception_markers": []},
+            {"exists": False, "present": [], "not_collected": True},
+            {"count": 4, "satisfied": [], "principle_gaps": {}},
+        )
+        assert s["sub_scores"]["fair_metadata"]["not_collected"] is True
+
+    def test_everything_gapped_reports_not_collected_status(self, collector):
+        s = collector._calculate_score(
+            {"identified": False, "not_collected": True, "exception_markers": []},
+            {"exists": False, "present": [], "not_collected": True},
+            {"count": 0, "satisfied": [],
+             "principle_gaps": {"Findable": True, "Accessible": True,
+                                "Interoperable": True, "Reusable": True}},
+        )
+        assert s["score"] is None
+        assert s["max_score"] == 0
+        assert s["status"] == "not_collected"
+
+
+class TestFetchGapHandling:
+    def test_get_license_gap_is_tracked(self, collector):
+        async def go():
+            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_license(None, "o", "r")
+
+        data, saw_gap = asyncio.run(go())
+        assert saw_gap is True
+
+    def test_get_citation_gap_with_no_find_is_tracked(self, collector):
+        async def go():
+            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_citation(None, "o", "r")
+
+        citation, saw_gap = asyncio.run(go())
+        assert citation == {}
+        assert saw_gap is True
+
+    def test_any_exists_gap_with_no_find_is_tracked(self, collector):
+        async def fake_exists(client, owner, repo, path):
+            return COLLECTION_GAP
+
+        async def go():
+            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
+                return await collector._any_exists(None, "o", "r", _CODEMETA_PATHS)
+
+        found, saw_gap = asyncio.run(go())
+        assert found is False
+        assert saw_gap is True
+
+    def test_any_exists_found_does_not_need_gap_flag(self, collector):
+        async def fake_exists(client, owner, repo, path):
+            return "http://x"
+
+        async def go():
+            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
+                return await collector._any_exists(None, "o", "r", _CODEMETA_PATHS)
+
+        found, saw_gap = asyncio.run(go())
+        assert found is True
+        assert saw_gap is False
+
+    def test_has_releases_gap_is_tracked(self, collector):
+        async def go():
+            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._has_releases(None, "o", "r")
+
+        has_releases, saw_gap = asyncio.run(go())
+        assert has_releases is False
+        assert saw_gap is True
