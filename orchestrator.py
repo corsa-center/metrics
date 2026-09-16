@@ -134,6 +134,7 @@ class MetricsOrchestrator:
             config_path: Path to configuration file
         """
         self.config = self._load_config(config_path)
+        self._configure_logging()
         self.dashboard_base_url = self.config.get(
             "dashboard_base_url", "https://corsa.center/dashboard"
         ).rstrip("/")
@@ -148,6 +149,37 @@ class MetricsOrchestrator:
         self.project_config_enabled = (self.config.get("project_config") or {}).get(
             "enabled", True
         )
+
+    def _configure_logging(self) -> None:
+        """Wire up config/orchestrator.yaml's `logging:` block.
+
+        It was declared (level/file/console) but never actually read --
+        the module-level logging.basicConfig() above runs at import time,
+        before any config exists, hardcoded to stdout only. So
+        `file: "orchestrator.log"` has never actually been written, and
+        answering "why did this metric come back empty for this package"
+        has meant reproducing the collector by hand locally, which is how
+        every "why" in the 2026-09-16 incident actually got diagnosed.
+        Adds a FileHandler to the *root* logger (not just this module's),
+        since every collector's `logging.getLogger(__name__)` propagates up
+        to it by default -- this one change makes every existing
+        logger.warning/logger.error call across every collector durable.
+        """
+        log_config = self.config.get("logging", {})
+        level = getattr(logging, str(log_config.get("level", "INFO")).upper(), logging.INFO)
+        root = logging.getLogger()
+        root.setLevel(level)
+
+        log_file = log_config.get("file")
+        if log_file and not any(
+            isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(log_file)
+            for h in root.handlers
+        ):
+            handler = logging.FileHandler(log_file)
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            )
+            root.addHandler(handler)
 
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file, resolving ${ENV_VAR} references"""

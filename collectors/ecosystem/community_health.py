@@ -272,7 +272,9 @@ class CommunityHealthCollector:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 response = await client.get(url, headers=self.headers, params=params)
         except Exception as e:
-            logger.debug(f"Error fetching {url}: {e}")
+            # COLLECTION-GAP: grep-able tag for "why is this metric empty"
+            # -- see the matching tag in collectors/ecosystem/base.py.
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
             return None
         if response.status_code == 200:
             return response.json()

@@ -134,7 +134,12 @@ class GitHubClient(BaseAPIClient):
                     )
                     await asyncio.sleep(delay)
                     continue
-                self.logger.error(f"Error fetching repository {repo_url}: {e}")
+                # COLLECTION-GAP: grep-able tag for "why is this metric
+                # empty" -- see the matching tag in collectors/ecosystem/base.py.
+                self.logger.error(
+                    f"COLLECTION-GAP url={repo_url} status={e.status} "
+                    f"reason={'retries_exhausted' if is_secondary_rate_limit else 'not_retried'}: {e}"
+                )
                 raise
 
     async def get_file_content(self, repo_url: str, file_path: str) -> Optional[str]:

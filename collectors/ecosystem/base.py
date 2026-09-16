@@ -101,6 +101,18 @@ class RetryingTransport(httpx.AsyncBaseTransport):
             retry_after = response.headers.get("Retry-After")
             if response.status_code == 403 and not retry_after:
                 await response.aread()
+                # COLLECTION-GAP: grep-able tag so "why is this metric
+                # empty" can be answered from orchestrator.log instead of
+                # reproducing the collector locally by hand, which is how
+                # every gap in the 2026-09-16 incident actually got
+                # diagnosed. Not a 404 (that's a trustworthy "confirmed
+                # absent", not a gap) -- this is specifically a 403 with no
+                # Retry-After, i.e. a permission error or primary quota
+                # exhaustion, neither of which retrying would have fixed.
+                logger.warning(
+                    f"COLLECTION-GAP url={request.url} status=403 "
+                    f"reason=not_retried_no_retry_after"
+                )
                 return response
 
             if attempt < _RETRY_ATTEMPTS - 1:
@@ -112,6 +124,10 @@ class RetryingTransport(httpx.AsyncBaseTransport):
                 await asyncio.sleep(delay)
             else:
                 await response.aread()
+                logger.warning(
+                    f"COLLECTION-GAP url={request.url} status={response.status_code} "
+                    f"reason=retries_exhausted attempts={_RETRY_ATTEMPTS}"
+                )
         return response
 
     async def aclose(self) -> None:
@@ -163,7 +179,13 @@ class GitHubCollectorBase:
         try:
             response = await client.get(url, headers=self.github_headers)
         except Exception as e:
-            logger.debug(f"Error checking {path}: {e}")
+            # A network-level exception never reaches RetryingTransport's own
+            # status-code-based retry/logging (it's raised from inside the
+            # wrapped transport, before there's a response to inspect), so
+            # this is the only place that sees it -- log it here rather than
+            # let it join the same silent "None" every other gap collapses
+            # into.
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
             return None
         if response.status_code == 200:
             data = response.json()
@@ -185,7 +207,7 @@ class GitHubCollectorBase:
         try:
             response = await client.get(url, headers=self.github_headers, params=params)
         except Exception as e:
-            logger.debug(f"Error fetching {url}: {e}")
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
             return None
         if response.status_code == 200:
             return response.json()

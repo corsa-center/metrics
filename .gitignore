@@ -26,6 +26,10 @@ data/cache/*
 .DS_Store
 Thumbs.db
 
+# Logs (config/orchestrator.yaml's logging.file now actually gets written)
+orchestrator.log
+*.log
+
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
