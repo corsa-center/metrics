@@ -2,17 +2,19 @@ name: Collect Metrics
 
 on:
   schedule:
-    # Hourly, ~2 packages/run (see GROUP_COUNT below) rather than the whole
-    # catalog or even a weekly half of it. A single package's GitHub request
-    # volume (~80-100 requests) is trivially under any rate limit regardless
-    # of which token is used or how many collectors get added later -- this
-    # sidesteps needing to reason precisely about the budget at all, unlike
-    # the two earlier attempts this same day that got the math wrong (once
-    # assuming 5,000/hour when the automatic token is actually 1,000/hour;
-    # once because a ~36-package group still wasn't small enough even at
+    # Hourly, ~4 packages/run (see GROUP_COUNT below) rather than the whole
+    # catalog or even a weekly half of it. Even at ~4x a single package's
+    # GitHub request volume (~80-100 requests), this stays comfortably
+    # under any rate limit regardless of which token is used or how many
+    # collectors get added later -- this sidesteps needing to reason
+    # precisely about the exact budget at all, unlike the two earlier
+    # attempts this same day that got the math wrong (once assuming
+    # 5,000/hour when the automatic token is actually 1,000/hour; once
+    # because a ~36-package group still wasn't small enough even at
     # 5,000/hour once retries were added back in). It also means every
-    # package refreshes roughly every day and a half, fresher than the
-    # weekly cadence before any of today's fixes.
+    # package refreshes roughly every 18 hours, fresher than both the
+    # weekly cadence before any of today's fixes and the ~1.5-day cycle
+    # the original 2/run split gave.
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
@@ -59,7 +61,7 @@ jobs:
           pip install pyyaml
 
       - name: Run orchestrator
-        # A scheduled run is ~2 packages (see GROUP_COUNT below); anything
+        # A scheduled run is ~4 packages (see GROUP_COUNT below); anything
         # taking anywhere near this long means something is actually stuck,
         # not just slow, so fail fast rather than block the next hourly run.
         # A manual full-catalog dispatch (group_count left blank) needs the
@@ -69,7 +71,7 @@ jobs:
         timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.group_count == '') && 240 || 30 }}
         env:
           # Small hourly batches (see GROUP_COUNT below) keep real request
-          # volume around ~200/hour -- comfortably under even the automatic
+          # volume around ~400/hour -- comfortably under even the automatic
           # token's 1,000/hour-per-repository cap (itself well below the
           # 5,000/hour a personal token gets), so routine operation doesn't
           # need an elevated credential, or the bus-factor risk of tying one
@@ -104,7 +106,7 @@ jobs:
           # A manual dispatch only splits if asked (group_count/group inputs);
           # left blank, it runs the whole catalog, same as before batching --
           # useful for validating a fix across everything at once.
-          GROUP_COUNT=36  # ~2 packages/run for a ~71-package catalog; grows
+          GROUP_COUNT=18  # ~4 packages/run for a ~71-package catalog; grows
                           # gracefully (batch size creeps up, not coverage
                           # breaking) if the catalog grows past ~72.
           if [ -n "$SOFTWARE_ARG" ]; then
