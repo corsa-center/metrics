@@ -2,7 +2,10 @@ name: Collect Metrics
 
 on:
   schedule:
-    # Run every Sunday at 00:00 UTC
+    # Run every Sunday at 00:00 UTC. Split across 2 groups (see the "Run
+    # orchestrator" step) rather than the whole catalog every time -- a full
+    # run's GitHub request volume is already close to the hourly quota
+    # before any retries, so each package refreshes every other Sunday.
     - cron: '0 0 * * 0'
   workflow_dispatch:
     inputs:
@@ -15,6 +18,14 @@ on:
         required: false
         type: boolean
         default: false
+      group_count:
+        description: 'Split the catalog into this many round-robin groups (optional; omit for a full run)'
+        required: false
+        type: string
+      group:
+        description: '0-indexed group to run (requires group_count; ignored if software_filter is set)'
+        required: false
+        type: string
 
 jobs:
   collect-metrics:
@@ -62,6 +73,21 @@ jobs:
           if [ "$DRY_RUN_ARG" = "true" ]; then
             CMD="$CMD --dry-run"
             echo "::notice::Running in dry-run mode, no artifact will be uploaded"
+          fi
+
+          # Scheduled runs always split 2 ways, picked by ISO week number so
+          # consecutive Sundays alternate groups with no state to track.
+          # A manual dispatch only splits if asked (group_count/group inputs);
+          # left blank, it runs the whole catalog, same as before batching --
+          # useful for validating a fix across everything at once.
+          if [ -n "$SOFTWARE_ARG" ]; then
+            : # targeting one package by name -- grouping would be meaningless
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            GROUP=$(( 10#$(date -u +%V) % 2 ))
+            CMD="$CMD --group-count 2 --group $GROUP"
+            echo "::notice::Scheduled run: group $GROUP/2 (ISO week $(date -u +%V))"
+          elif [ -n "${{ github.event.inputs.group_count }}" ] && [ -n "${{ github.event.inputs.group }}" ]; then
+            CMD="$CMD --group-count ${{ github.event.inputs.group_count }} --group ${{ github.event.inputs.group }}"
           fi
 
           echo "Running: $CMD"

@@ -194,12 +194,27 @@ class MetricsOrchestrator:
         return data.get("data", {})
 
     def prepare_software_list(
-        self, filter_software: Optional[str] = None
+        self,
+        filter_software: Optional[str] = None,
+        group: Optional[int] = None,
+        group_count: Optional[int] = None,
     ) -> List[Dict]:
         """Prepare list of software packages to process
 
         Args:
             filter_software: Optional name filter for specific software
+            group: Which slice to keep, 0-indexed (requires group_count)
+            group_count: Split the catalog into this many round-robin
+                slices, keeping only every Nth package starting at `group`.
+                Exists because a full-portfolio run's GitHub API request
+                volume -- already close to the hourly quota before any
+                retries -- doesn't fit in one run once throttled requests
+                get retried instead of silently dropped. See
+                config/orchestrator.yaml rate_limiting comments and
+                .github/workflows/collect-and-sync.yml for how the
+                scheduled run picks a group. Ignored when filter_software
+                is set, since targeting one package should never depend on
+                which group it happens to fall in.
 
         Returns:
             List of software packages with required metadata
@@ -225,6 +240,13 @@ class MetricsOrchestrator:
                 "primary_language": (metadata.get("primaryLanguage") or {}).get("name"),
             }
             software_list.append(package)
+
+        if group_count and group_count > 1 and not filter_software:
+            # Sort first so the slice is stable regardless of any incidental
+            # reordering of the catalog JSON between runs.
+            software_list.sort(key=lambda p: p["repository"])
+            software_list = software_list[group::group_count]
+            logger.info(f"Group {group}/{group_count}: {len(software_list)} packages")
 
         logger.info(f"Prepared {len(software_list)} software packages for processing")
         return software_list
@@ -682,18 +704,24 @@ class MetricsOrchestrator:
         return int(round(overall))
 
     async def process_all_software(
-        self, filter_software: Optional[str] = None, dry_run: bool = False
+        self,
+        filter_software: Optional[str] = None,
+        dry_run: bool = False,
+        group: Optional[int] = None,
+        group_count: Optional[int] = None,
     ) -> Dict:
         """Process all software packages
 
         Args:
             filter_software: Optional filter for specific software
             dry_run: If True, don't write output files
+            group: Which round-robin slice of the catalog to process
+            group_count: How many slices to split the catalog into
 
         Returns:
             Dictionary of all metrics keyed by repository name
         """
-        software_list = self.prepare_software_list(filter_software)
+        software_list = self.prepare_software_list(filter_software, group, group_count)
         all_metrics = {}
 
         # Packages are independent, and each one spends nearly all its time
@@ -1898,13 +1926,24 @@ async def main():
     parser.add_argument(
         "--dry-run", action="store_true", help="Perform dry run without writing outputs"
     )
+    parser.add_argument(
+        "--group", type=int, default=None,
+        help="0-indexed round-robin slice of the catalog to process (requires --group-count)",
+    )
+    parser.add_argument(
+        "--group-count", type=int, default=None,
+        help="Split the catalog into this many slices; used with --group",
+    )
 
     args = parser.parse_args()
 
     try:
         orchestrator = MetricsOrchestrator(args.config)
         metrics = await orchestrator.process_all_software(
-            filter_software=args.software, dry_run=args.dry_run
+            filter_software=args.software,
+            dry_run=args.dry_run,
+            group=args.group,
+            group_count=args.group_count,
         )
 
         logger.info(f"\n{'='*60}")
