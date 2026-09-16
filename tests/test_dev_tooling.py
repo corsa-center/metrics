@@ -1,7 +1,10 @@
 """Unit tests for DevToolingCollector (CASS Section 4.3.2)."""
 
+import asyncio
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from collectors.ecosystem.base import COLLECTION_GAP
 from collectors.quality.development_practices.dev_tooling import (
     DevToolingCollector, _TESTING_PATHS, _TOOLING_PATHS,
 )
@@ -83,3 +86,120 @@ class TestEmptyResult:
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "nope"}))
         assert r["overall_score"]["max_score"] == 3
         assert r["code_review"]["coverage_pct"] is None
+
+
+class TestScoringGapHandling:
+    def test_below_threshold_under_gap_is_not_collected_not_a_negative(self, collector):
+        testing = {"found": ["a"], "missing": [], "not_collected": ["b"], "details": {}}
+        s = collector._calculate_score(testing, _scan([]), {"sampled": 0, "reviewed": 0, "coverage_pct": None})
+        entry = s["sub_scores"]["testing_framework"]
+        assert entry["passing"] is False
+        assert entry["not_collected"] is True
+
+    def test_threshold_already_met_survives_a_gap(self, collector):
+        testing = {"found": ["a", "b"], "missing": [], "not_collected": ["c"], "details": {}}
+        s = collector._calculate_score(testing, _scan([]), {"sampled": 0, "reviewed": 0, "coverage_pct": None})
+        entry = s["sub_scores"]["testing_framework"]
+        assert entry["passing"] is True
+        assert "not_collected" not in entry
+
+    def test_review_not_collected_is_excluded_not_scored_as_failure(self, collector):
+        review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
+        testing = _scan(["a", "b"])
+        tooling = _scan(["a", "b"])
+        s = collector._calculate_score(testing, tooling, review)
+        # If not_collected silently counted as a failure this would be 2/3.
+        assert s["score"] == 2
+        assert s["max_score"] == 2
+        assert s["percentage"] == 100.0
+
+    def test_everything_gapped_reports_not_collected_status(self, collector):
+        testing = {"found": [], "missing": [], "not_collected": ["a", "b"], "details": {}}
+        tooling = {"found": [], "missing": [], "not_collected": ["a", "b"], "details": {}}
+        review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
+        s = collector._calculate_score(testing, tooling, review)
+        assert s["score"] is None
+        assert s["max_score"] == 0
+        assert s["status"] == "not_collected"
+
+
+class TestScanGapHandling:
+    def _run(self, collector, responses):
+        async def fake_exists(client, owner, repo, path):
+            return responses.get(path, None)
+
+        async def go():
+            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
+                return await collector._scan(None, "o", "r", _TESTING_PATHS)
+
+        return asyncio.run(go())
+
+    def test_gapped_group_with_no_find_is_not_collected(self, collector):
+        responses = {p: COLLECTION_GAP for paths in _TESTING_PATHS.values() for p in paths}
+        result = self._run(collector, responses)
+        assert result["found"] == []
+        assert set(result["not_collected"]) == set(_TESTING_PATHS)
+
+    def test_found_group_survives_gaps_on_other_groups(self, collector):
+        responses = {p: COLLECTION_GAP for paths in _TESTING_PATHS.values() for p in paths}
+        responses["pytest.ini"] = "http://x"
+        result = self._run(collector, responses)
+        assert "pytest configuration" in result["found"]
+
+
+class TestAnalyzeReviewCoverageGapHandling:
+    def _run(self, collector, github_get_side_effect):
+        async def go():
+            with patch.object(collector, "_github_get", side_effect=github_get_side_effect):
+                return await collector._analyze_review_coverage(None, "o", "r")
+
+        return asyncio.run(go())
+
+    def test_pr_listing_gap_is_not_collected(self, collector):
+        async def fake(client, url, params=None):
+            return COLLECTION_GAP
+
+        result = self._run(collector, fake)
+        assert result["not_collected"] is True
+        assert result["coverage_pct"] is None
+
+    def test_confirmed_no_merged_prs_is_a_real_negative(self, collector):
+        async def fake(client, url, params=None):
+            return []
+
+        result = self._run(collector, fake)
+        assert result["coverage_pct"] is None
+        assert "not_collected" not in result
+
+    def test_review_check_gap_excludes_pr_from_denominator(self, collector):
+        prs = [
+            {"number": 1, "merged_at": "2024-01-01T00:00:00Z"},
+            {"number": 2, "merged_at": "2024-01-02T00:00:00Z"},
+        ]
+
+        async def fake(client, url, params=None):
+            if "/pulls?" in url:
+                return prs
+            if "/1/reviews" in url:
+                return [{"id": 1}]
+            if "/2/reviews" in url:
+                return COLLECTION_GAP
+            return None
+
+        result = self._run(collector, fake)
+        # PR 2's review check gapped, so it's dropped from the denominator
+        # rather than silently counted as unreviewed.
+        assert result["sampled"] == 1
+        assert result["reviewed"] == 1
+        assert result["coverage_pct"] == 100.0
+
+    def test_all_review_checks_gapped_reports_not_collected(self, collector):
+        prs = [{"number": 1, "merged_at": "2024-01-01T00:00:00Z"}]
+
+        async def fake(client, url, params=None):
+            if "/pulls?" in url:
+                return prs
+            return COLLECTION_GAP
+
+        result = self._run(collector, fake)
+        assert result["not_collected"] is True

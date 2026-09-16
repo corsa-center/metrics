@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -76,16 +76,16 @@ class DevToolingCollector(GitHubCollectorBase):
                 return_exceptions=True,
             )
 
-        empty_scan = {"found": [], "missing": [], "details": {}}
+        empty_scan = {"found": [], "missing": [], "not_collected": [], "details": {}}
         if isinstance(testing, Exception):
-            logger.warning(f"Testing scan failed: {testing}")
+            logger.warning(f"COLLECTION-GAP category=testing reason=exception:{testing!r}")
             testing = empty_scan
         if isinstance(tooling, Exception):
-            logger.warning(f"Tooling scan failed: {tooling}")
+            logger.warning(f"COLLECTION-GAP category=tooling reason=exception:{tooling!r}")
             tooling = empty_scan
         if isinstance(review, Exception):
-            logger.warning(f"Review coverage failed: {review}")
-            review = {"sampled": 0, "reviewed": 0, "coverage_pct": None}
+            logger.warning(f"COLLECTION-GAP category=code_review reason=exception:{review!r}")
+            review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
 
         return {
             "package_name": repo_name,
@@ -102,23 +102,30 @@ class DevToolingCollector(GitHubCollectorBase):
     ) -> Dict[str, Any]:
         """Check each group, recording the first matching path."""
 
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str]]:
+        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
+            saw_gap = False
             for path in paths:
                 url = await self._check_file_exists(client, owner, repo, path)
+                if url is COLLECTION_GAP:
+                    saw_gap = True
+                    continue
                 if url:
-                    return label, url
-            return label, None
+                    return label, url, saw_gap
+            return label, None, saw_gap
 
         results = await asyncio.gather(*[check(l, p) for l, p in groups.items()])
-        found, missing, details = [], [], {}
-        for label, url in results:
+        found, missing, not_collected, details = [], [], [], {}
+        for label, url, saw_gap in results:
             if url:
                 found.append(label)
                 details[label] = {"exists": True, "url": url}
+            elif saw_gap:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
             else:
                 missing.append(label)
                 details[label] = {"exists": False}
-        return {"found": found, "missing": missing, "details": details}
+        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
 
     async def _analyze_review_coverage(
         self, client: httpx.AsyncClient, owner: str, repo: str
@@ -133,68 +140,95 @@ class DevToolingCollector(GitHubCollectorBase):
             f"https://api.github.com/repos/{owner}/{repo}/pulls"
             f"?state=closed&per_page={_PR_SAMPLE_SIZE}&sort=updated&direction=desc"
         )
-        resp = await client.get(url, headers=self.github_headers)
-        if resp.status_code != 200:
-            return {"sampled": 0, "reviewed": 0, "coverage_pct": None}
+        prs = await self._github_get(client, url)
+        if prs is COLLECTION_GAP:
+            return {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
 
-        merged = [pr for pr in resp.json() if pr.get("merged_at")]
+        merged = [pr for pr in (prs or []) if pr.get("merged_at")]
         if not merged:
             return {"sampled": 0, "reviewed": 0, "coverage_pct": None}
 
-        async def has_review(number: int) -> bool:
-            r = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews?per_page=1",
-                headers=self.github_headers,
+        async def has_review(number: int):
+            reviews = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews",
+                params={"per_page": 1},
             )
-            return r.status_code == 200 and bool(r.json())
+            if reviews is COLLECTION_GAP:
+                return COLLECTION_GAP
+            return bool(reviews)
 
-        flags = await asyncio.gather(
-            *[has_review(pr["number"]) for pr in merged], return_exceptions=True
-        )
+        flags = await asyncio.gather(*[has_review(pr["number"]) for pr in merged])
         reviewed = sum(1 for f in flags if f is True)
+        # A PR whose review check gapped is dropped from the denominator --
+        # it's neither confirmed reviewed nor confirmed unreviewed.
+        gapped = sum(1 for f in flags if f is COLLECTION_GAP)
+        sampled = len(merged) - gapped
+        if sampled == 0:
+            return {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
         return {
-            "sampled": len(merged),
+            "sampled": sampled,
             "reviewed": reviewed,
-            "coverage_pct": round(reviewed / len(merged) * 100, 1),
+            "coverage_pct": round(reviewed / sampled * 100, 1),
         }
 
     def _calculate_score(self, testing: Dict, tooling: Dict, review: Dict) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
 
         test_found = testing.get("found", [])
-        sub["testing_framework"] = {
+        test_passing = len(test_found) >= _MIN_TESTING_CATEGORIES
+        testing_entry: Dict[str, Any] = {
             "label": "Testing Framework Excellence",
             "value": f"{len(test_found)}/{len(_TESTING_PATHS)} indicators",
             "detail": ", ".join(test_found) if test_found else None,
-            "passing": len(test_found) >= _MIN_TESTING_CATEGORIES,
+            "passing": test_passing,
         }
+        # A below-threshold count built on a gap isn't confirmed -- one of
+        # the gapped categories could have pushed it over. A count that
+        # already clears the threshold from confirmed data stands regardless.
+        if not test_passing and testing.get("not_collected"):
+            testing_entry["not_collected"] = True
+        sub["testing_framework"] = testing_entry
 
         cov = review.get("coverage_pct")
-        sub["code_review_quality"] = {
+        review_entry: Dict[str, Any] = {
             "label": "Code Review Quality Analysis",
             "value": f"{cov}% of {review.get('sampled', 0)} merged PRs reviewed"
                      if cov is not None else "No merged PRs to sample",
             "passing": cov is not None and cov >= _REVIEW_COVERAGE_TARGET,
         }
+        if review.get("not_collected"):
+            review_entry["not_collected"] = True
+        sub["code_review_quality"] = review_entry
 
         tool_found = tooling.get("found", [])
-        sub["dev_tool_integration"] = {
+        tool_passing = len(tool_found) >= _MIN_TOOLING_CATEGORIES
+        tooling_entry: Dict[str, Any] = {
             "label": "Development Tool Integration",
             "value": f"{len(tool_found)}/{len(_TOOLING_PATHS)} tools",
             "detail": ", ".join(tool_found) if tool_found else None,
-            "passing": len(tool_found) >= _MIN_TOOLING_CATEGORIES,
+            "passing": tool_passing,
         }
+        if not tool_passing and tooling.get("not_collected"):
+            tooling_entry["not_collected"] = True
+        sub["dev_tool_integration"] = tooling_entry
 
-        score = sum(1 for s in sub.values() if s["passing"])
+        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        score = sum(1 for s in scorable.values() if s["passing"])
+        max_score = len(scorable)
+        if not max_score:
+            return {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "sub_scores": sub,
+            }
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": max_score,
+            "percentage": round(score / max_score * 100, 2),
             "sub_scores": sub,
         }
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
-        empty = {"found": [], "missing": [], "details": {}}
+        empty = {"found": [], "missing": [], "not_collected": [], "details": {}}
         return {
             "package_name": repo_name,
             "repository": "unknown",
