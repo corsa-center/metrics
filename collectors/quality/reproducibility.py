@@ -18,7 +18,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -136,20 +136,25 @@ class ReproducibilityCollector(GitHubCollectorBase):
         for category, items in _FILE_CHECKS.items():
             found: List[str] = []
             missing: List[str] = []
+            not_collected: List[str] = []
             details: Dict[str, Any] = {}
 
-            async def check_item(label: str, paths: List[str]) -> Tuple[str, str, Optional[str]]:
+            async def check_item(label: str, paths: List[str]) -> Tuple[str, str, Optional[str], bool]:
+                saw_gap = False
                 for path in paths:
                     html_url = await self._check_file_exists(client, owner, repo, path)
+                    if html_url is COLLECTION_GAP:
+                        saw_gap = True
+                        continue
                     if html_url:
-                        return label, path, html_url
-                return label, paths[0], None
+                        return label, path, html_url, saw_gap
+                return label, paths[0], None, saw_gap
 
             hits = await asyncio.gather(
                 *[check_item(label, paths) for label, paths in items.items()]
             )
 
-            for label, matched_path, html_url in hits:
+            for label, matched_path, html_url, saw_gap in hits:
                 if html_url:
                     found.append(label)
                     details[label] = {
@@ -158,18 +163,22 @@ class ReproducibilityCollector(GitHubCollectorBase):
                         "url": html_url,
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
+                elif saw_gap:
+                    not_collected.append(label)
+                    details[label] = {"not_collected": True}
                 else:
                     missing.append(label)
                     details[label] = {"exists": False}
 
-            total = len(items)
+            count_total = len(items) - len(not_collected)
             results[category] = {
                 "found": found,
                 "missing": missing,
+                "not_collected": not_collected,
                 "details": details,
                 "count_found": len(found),
-                "count_total": total,
-                "percentage": round(len(found) / total * 100, 1) if total else 0.0,
+                "count_total": count_total,
+                "percentage": round(len(found) / count_total * 100, 1) if count_total else None,
             }
 
         return results
@@ -181,21 +190,18 @@ class ReproducibilityCollector(GitHubCollectorBase):
     async def _check_semantic_versioning(
         self, client: httpx.AsyncClient, owner: str, repo: str, sample: int = 5
     ) -> Dict[str, Any]:
-        url = f"https://api.github.com/repos/{owner}/{repo}/releases"
-        try:
-            resp = await client.get(
-                url,
-                headers=self.github_headers,
-                params={"per_page": sample},
-            )
-            resp.raise_for_status()
-            releases = resp.json()
-        except Exception as e:
-            logger.warning(f"Could not fetch releases for {owner}/{repo}: {e}")
-            return {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
+        releases = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
+            params={"per_page": sample},
+        )
+        if releases is COLLECTION_GAP:
+            return {
+                "uses_semver": False, "releases_checked": 0, "semver_count": 0,
+                "example_tags": [], "not_collected": True,
+            }
 
         if not releases:
-            # Fall back to tags if no formal releases exist
+            # Confirmed no formal releases -- fall back to tags.
             return await self._check_tags(client, owner, repo, sample)
 
         tags = [r.get("tag_name", "") for r in releases]
@@ -212,20 +218,17 @@ class ReproducibilityCollector(GitHubCollectorBase):
     async def _check_tags(
         self, client: httpx.AsyncClient, owner: str, repo: str, sample: int
     ) -> Dict[str, Any]:
-        url = f"https://api.github.com/repos/{owner}/{repo}/tags"
-        try:
-            resp = await client.get(
-                url,
-                headers=self.github_headers,
-                params={"per_page": sample},
-            )
-            resp.raise_for_status()
-            tags_data = resp.json()
-        except Exception as e:
-            logger.warning(f"Could not fetch tags for {owner}/{repo}: {e}")
-            return {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
+        tags_data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/tags",
+            params={"per_page": sample},
+        )
+        if tags_data is COLLECTION_GAP:
+            return {
+                "uses_semver": False, "releases_checked": 0, "semver_count": 0,
+                "example_tags": [], "not_collected": True,
+            }
 
-        tags = [t.get("name", "") for t in tags_data]
+        tags = [t.get("name", "") for t in tags_data or []]
         semver_tags = [t for t in tags if _SEMVER_RE.match(t)]
 
         return {
@@ -240,21 +243,34 @@ class ReproducibilityCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ #
 
     def _compute_overall(self, categories: Dict[str, Any]) -> Dict[str, Any]:
+        # A category is fully gapped (percentage None for a file-check
+        # category, or not_collected for semantic_versioning) is dropped
+        # from the blend and the remaining weights re-normalized, rather
+        # than letting a gap silently count as 0% (CASS §3.5).
         weighted = 0.0
+        weight_total = 0.0
         for cat, weight in _WEIGHTS.items():
-            # A category can be absent if its scan failed; treat that as zero
-            # rather than letting a KeyError take down the whole dimension.
             data = categories.get(cat, {})
             if cat == "semantic_versioning":
+                if data.get("not_collected"):
+                    continue
                 pct = 100.0 if data.get("uses_semver") else 0.0
             else:
-                pct = data.get("percentage", 0.0)
+                pct = data.get("percentage")
+                if pct is None:
+                    continue
             weighted += pct * weight
+            weight_total += weight
 
+        if not weight_total:
+            return {"score": None, "max_score": 100.0, "percentage": None, "status": "not_collected"}
+
+        normalized = weighted / weight_total
         return {
-            "score": round(weighted, 1),
+            "score": round(normalized, 1),
             "max_score": 100.0,
-            "percentage": round(weighted, 1),
+            "percentage": round(normalized, 1),
+            "coverage": round(weight_total, 2),
         }
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
