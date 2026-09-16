@@ -1,17 +1,23 @@
-"""Unit tests for CommunityHealthCollector._github_get retry behavior.
+"""Unit tests for CommunityHealthCollector._github_get.
 
-Regression coverage for the bug where a GitHub secondary rate limit during
-_list_dir's concurrent root/.github/docs listing silently produced an empty
-index -- making kokkos/kokkos's real docs/CODE_OF_CONDUCT.md and
-docs/CONTRIBUTING.md read as "not found" even though the pattern list
-already covered that path.
+Retry policy for GitHub secondary rate limits lives in RetryingTransport now
+(tested in test_ecosystem_base.py) -- these tests just confirm this
+collector wires that transport into its httpx client and interprets a
+single response correctly, which is all _github_get is responsible for
+once retrying isn't its job anymore.
+
+Background: a secondary rate limit during _list_dir's concurrent
+root/.github/docs listing used to silently produce an empty index, making
+kokkos/kokkos's real docs/CODE_OF_CONDUCT.md and docs/CONTRIBUTING.md read
+as "not found" even though the pattern list already covered that path.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from collectors.ecosystem.base import RetryingTransport
 from collectors.ecosystem.community_health import CommunityHealthCollector
 
 
@@ -20,62 +26,61 @@ def collector():
     return CommunityHealthCollector()
 
 
-def _resp(status_code, json_body=None, headers=None):
+def _resp(status_code, json_body=None):
     r = MagicMock()
     r.status_code = status_code
     r.json.return_value = json_body
-    r.headers = headers or {}
     return r
 
 
 def _patched_client(get_mock):
     """Patch httpx.AsyncClient so `async with httpx.AsyncClient(...)` yields a
     client whose .get is get_mock -- _github_get opens a fresh client per call."""
+    from unittest.mock import patch
+
     client = AsyncMock()
     client.get = get_mock
     ctx = AsyncMock()
     ctx.__aenter__.return_value = client
-    return patch("collectors.ecosystem.community_health.httpx.AsyncClient", return_value=ctx)
+    captured = {}
+
+    def _client_factory(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return ctx
+
+    return patch(
+        "collectors.ecosystem.community_health.httpx.AsyncClient", side_effect=_client_factory
+    ), captured
 
 
 class TestGithubGet:
     def test_success_returns_json(self, collector):
         get_mock = AsyncMock(return_value=_resp(200, [{"name": "docs", "type": "dir"}]))
-        with _patched_client(get_mock):
+        patcher, _ = _patched_client(get_mock)
+        with patcher:
             result = asyncio.run(collector._github_get("https://api.github.com/repos/o/r/contents"))
         assert result == [{"name": "docs", "type": "dir"}]
 
-    def test_403_retries_then_succeeds(self, collector):
-        # Exact incident shape: docs/ listing 403s once, then succeeds.
-        get_mock = AsyncMock(
-            side_effect=[_resp(403), _resp(200, [{"name": "CODE_OF_CONDUCT.md", "type": "file"}])]
-        )
-        with _patched_client(get_mock):
-            result = asyncio.run(collector._github_get("https://api.github.com/repos/kokkos/kokkos/contents/docs"))
-        assert result == [{"name": "CODE_OF_CONDUCT.md", "type": "file"}]
-        assert get_mock.call_count == 2
-
-    def test_404_returns_none_without_retry(self, collector):
+    def test_404_returns_none(self, collector):
         get_mock = AsyncMock(return_value=_resp(404))
-        with _patched_client(get_mock):
+        patcher, _ = _patched_client(get_mock)
+        with patcher:
             result = asyncio.run(collector._github_get("https://api.github.com/repos/o/r/contents/missing"))
         assert result is None
-        assert get_mock.call_count == 1
 
-    def test_403_exhausts_retries_returns_none(self, collector):
+    def test_non_200_returns_none(self, collector):
+        # By the time this code sees the response, RetryingTransport has
+        # already retried and given up -- just needs to not crash on it.
         get_mock = AsyncMock(return_value=_resp(403))
-        with _patched_client(get_mock):
+        patcher, _ = _patched_client(get_mock)
+        with patcher:
             result = asyncio.run(collector._github_get("https://api.github.com/repos/o/r"))
         assert result is None
-        assert get_mock.call_count == 3
 
-
-class TestListDirUsesRetry:
-    def test_transient_403_does_not_hide_real_files(self, collector):
-        """_list_dir must not collapse a throttled request into "empty dir"."""
-        get_mock = AsyncMock(
-            side_effect=[_resp(403), _resp(200, [{"name": "CODE_OF_CONDUCT.md", "type": "file"}])]
-        )
-        with _patched_client(get_mock):
-            index = asyncio.run(collector._list_dir("kokkos", "kokkos", "docs"))
-        assert "docs/code_of_conduct.md" in index
+    def test_wires_in_the_retrying_transport(self, collector):
+        """The actual fix: without this, _github_get has no retry at all."""
+        get_mock = AsyncMock(return_value=_resp(200, {}))
+        patcher, captured = _patched_client(get_mock)
+        with patcher:
+            asyncio.run(collector._github_get("https://api.github.com/repos/o/r"))
+        assert isinstance(captured["kwargs"].get("transport"), RetryingTransport)

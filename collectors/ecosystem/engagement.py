@@ -21,7 +21,7 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ class EngagementCollector(GitHubCollectorBase):
 
         base = _API.format(owner=owner, repo=repo)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             issues_raw, prs_raw, repo_info = await asyncio.gather(
                 self._fetch_issues(client, base),
                 self._fetch_prs(client, base),

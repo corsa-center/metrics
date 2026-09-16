@@ -15,6 +15,8 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import re
 
+from collectors.ecosystem.base import RetryingTransport
+
 logger = logging.getLogger(__name__)
 
 
@@ -218,40 +220,25 @@ class CommunityHealthCollector:
         }
 
     async def _github_get(self, url: str, params: Optional[dict] = None) -> Optional[Any]:
-        """GET a GitHub API endpoint, retrying on secondary rate limits.
+        """GET a GitHub API endpoint.
 
         Every method below used to make this call inline with a bare
         `if status != 200: return <empty>` — which silently turned a GitHub
         secondary rate limit (403, common under this pipeline's concurrent
         per-package bursts) into "this file doesn't exist" instead of
         retrying. That's what made kokkos/kokkos's CoC/governance docs (which
-        do exist, under docs/) read as "not found" on the dashboard. Mirrors
-        the Retry-After-aware backoff collectors.ecosystem.base already uses.
+        do exist, under docs/) read as "not found" on the dashboard.
+        Retrying is now RetryingTransport's job (below), transparent to this
+        method — it only needs to interpret whatever the final response is.
         """
-        attempts = 3
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for attempt in range(attempts):
-                try:
-                    response = await client.get(url, headers=self.headers, params=params)
-                    if response.status_code == 200:
-                        return response.json()
-                    if response.status_code == 404:
-                        return None
-                    if attempt < attempts - 1 and response.status_code in (403, 429, 500, 502, 503):
-                        retry_after = response.headers.get("Retry-After")
-                        delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
-                        logger.debug(
-                            f"HTTP {response.status_code} from {url}, retrying in {delay:.0f}s"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    return None
-                except Exception as e:
-                    if attempt < attempts - 1:
-                        logger.debug(f"Error fetching {url}: {e}, retrying…")
-                        await asyncio.sleep(1 + attempt)
-                        continue
-                    return None
+        try:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                response = await client.get(url, headers=self.headers, params=params)
+        except Exception as e:
+            logger.debug(f"Error fetching {url}: {e}")
+            return None
+        if response.status_code == 200:
+            return response.json()
         return None
 
     async def _get_file_text(self, owner: str, repo: str, path: str) -> str:
@@ -417,7 +404,7 @@ class CommunityHealthCollector:
         fetch is fine here; a missing preview isn't reported as anything.
         """
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 response = await client.get(download_url)
                 if response.status_code == 200:
                     text = response.text

@@ -1,10 +1,13 @@
-"""Unit tests for GitHubCollectorBase._github_get retry behavior.
+"""Unit tests for RetryingTransport and GitHubCollectorBase's GitHub helpers.
 
-Regression coverage for the bug where a GitHub secondary rate limit (403,
-often with no Retry-After header) during a large concurrent collection run
-was silently treated as "no data" instead of retried -- this is what caused
-stars/forks/CHAOSS metrics to read as zero for the majority of tracked
-packages instead of failing loudly or actually succeeding on retry.
+RetryingTransport is the single, shared fix for the incident where a GitHub
+secondary rate limit during a large concurrent collection run was silently
+treated as "no data" instead of retried -- the root cause of stars/forks/
+CHAOSS/governance metrics reading as zero or "not found" for the majority
+of tracked packages. _check_file_exists and _github_get used to each retry
+on their own; now that's the transport's job, so these tests split
+accordingly: the transport owns the retry-policy tests, the two helpers only
+need to prove they interpret a single response correctly.
 """
 
 import asyncio
@@ -12,7 +15,7 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 
 @pytest.fixture
@@ -20,12 +23,136 @@ def collector():
     return GitHubCollectorBase()
 
 
-def _resp(status_code, json_body=None, headers=None):
-    r = MagicMock()
+def _resp(status_code, json_body=None, headers=None, text=""):
+    r = MagicMock(spec=httpx.Response)
     r.status_code = status_code
     r.json.return_value = json_body
-    r.headers = headers or {}
+    # httpx.Headers is case-insensitive on lookup/`in`; a plain dict isn't,
+    # which is what real GitHub responses (and RetryingTransport) rely on.
+    r.headers = httpx.Headers(headers or {})
+    r.text = text
+    r.aread = AsyncMock()
     return r
+
+
+def _request():
+    return httpx.Request("GET", "https://api.github.com/repos/o/r")
+
+
+class TestRetryingTransport:
+    def test_success_passes_through(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(200, {"ok": True}))
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 200
+        assert wrapped.handle_async_request.call_count == 1
+
+    def test_404_is_not_retried(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(404))
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 404
+        assert wrapped.handle_async_request.call_count == 1
+
+    def test_secondary_rate_limit_with_retry_after_header_is_retried(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(
+            side_effect=[_resp(403, headers={"Retry-After": "0"}), _resp(200, {"ok": True})]
+        )
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 200
+        assert wrapped.handle_async_request.call_count == 2
+
+    def test_secondary_rate_limit_message_is_retried(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(
+            side_effect=[
+                _resp(403, text="You have exceeded a secondary rate limit"),
+                _resp(200, {"ok": True}),
+            ]
+        )
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 200
+        assert wrapped.handle_async_request.call_count == 2
+
+    def test_plain_403_is_not_retried(self):
+        # A genuine permission error -- no Retry-After, no rate-limit wording
+        # -- shouldn't burn retries waiting on a throttle that isn't real.
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(403, text="Forbidden"))
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 403
+        assert wrapped.handle_async_request.call_count == 1
+
+    def test_429_is_retried_without_needing_a_message(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(
+            side_effect=[_resp(429), _resp(200, {"ok": True})]
+        )
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 200
+
+    def test_5xx_is_retried(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(
+            side_effect=[_resp(503), _resp(200, {"ok": True})]
+        )
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 200
+
+    def test_retries_are_bounded_then_returns_last_response(self):
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(
+            return_value=_resp(403, headers={"Retry-After": "0"})
+        )
+        transport = RetryingTransport(wrapped)
+        response = asyncio.run(transport.handle_async_request(_request()))
+        assert response.status_code == 403
+        assert wrapped.handle_async_request.call_count == 3
+
+
+class TestCheckFileExists:
+    """With retries owned by the transport, this only needs to interpret one response."""
+
+    def _client(self, status_code, json_body=None):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(status_code, json_body))
+        return client
+
+    def test_file_found(self, collector):
+        client = self._client(200, {"html_url": "https://github.com/o/r/blob/main/x"})
+        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
+        assert result == "https://github.com/o/r/blob/main/x"
+
+    def test_directory_found(self, collector):
+        client = self._client(200, [{"name": "a"}, {"name": "b"}])
+        result = asyncio.run(collector._check_file_exists(client, "o", "r", "dir"))
+        assert result == "https://github.com/o/r/tree/HEAD/dir"
+
+    def test_not_found(self, collector):
+        client = self._client(404)
+        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
+        assert result is None
+
+    def test_final_failure_after_transport_retries_returns_none(self, collector):
+        # By the time this code sees the response, the transport has already
+        # retried and given up -- this just needs to not crash on it.
+        client = self._client(403)
+        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
+        assert result is None
+
+    def test_network_exception_returns_none(self, collector):
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
+        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
+        assert result is None
 
 
 class TestGithubGet:
@@ -35,44 +162,11 @@ class TestGithubGet:
         result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
         assert result == {"stargazers_count": 42}
 
-    def test_404_returns_none_without_retry(self, collector):
+    def test_404_returns_none(self, collector):
         client = AsyncMock()
         client.get = AsyncMock(return_value=_resp(404))
         result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
         assert result is None
-        assert client.get.call_count == 1
-
-    def test_403_retries_then_succeeds(self, collector):
-        # This is the exact failure mode from the live incident: a secondary
-        # rate limit 403 on the first attempt, real data on the next.
-        client = AsyncMock()
-        client.get = AsyncMock(
-            side_effect=[_resp(403), _resp(200, {"stargazers_count": 2687})]
-        )
-        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/kokkos/kokkos"))
-        assert result == {"stargazers_count": 2687}
-        assert client.get.call_count == 2
-
-    def test_403_exhausts_retries_returns_none(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(403))
-        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
-        assert result is None
-        assert client.get.call_count == 3
-
-    def test_429_honors_retry_after_header(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(
-            side_effect=[_resp(429, headers={"Retry-After": "0"}), _resp(200, {"ok": True})]
-        )
-        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
-        assert result == {"ok": True}
-
-    def test_transient_exception_retries_then_succeeds(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(side_effect=[httpx.ConnectError("boom"), _resp(200, {"ok": True})])
-        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
-        assert result == {"ok": True}
 
     def test_params_forwarded(self, collector):
         client = AsyncMock()
@@ -84,3 +178,9 @@ class TestGithubGet:
         )
         _, kwargs = client.get.call_args
         assert kwargs["params"] == {"state": "open"}
+
+    def test_network_exception_returns_none(self, collector):
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
+        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
+        assert result is None

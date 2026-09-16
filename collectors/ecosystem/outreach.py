@@ -25,7 +25,7 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class OutreachCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting outreach metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             contributors, recent_commits, newcomer_issues, onboarding = await asyncio.gather(
                 self._get_contributors(client, owner, repo),
                 self._get_recent_commit_authors(client, owner, repo),

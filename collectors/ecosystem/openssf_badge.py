@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
 
         owner, repo = owner_repo
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             badge_data = await self._search_badge(client, owner, repo, repo_url)
             if badge_data:
                 logger.info(f"Badge found — level: {badge_data.get('badge_level')}, progress: {badge_data.get('badge_percentage_0', 0)}%")

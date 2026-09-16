@@ -20,6 +20,8 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
+from collectors.ecosystem.base import RetryingTransport
+
 logger = logging.getLogger(__name__)
 
 # Cycle-time "elite" threshold from DORA: less than one day (in hours).
@@ -54,7 +56,7 @@ class CICDMetricsCollector:
 
         logger.info(f"Beginning CI/CD metric collection for {package.get('name')}")
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(transport=RetryingTransport()) as client:
             (
                 exec_time,
                 workflow_success,

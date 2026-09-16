@@ -14,7 +14,7 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class StaticAnalysisCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Checking CodeQL / static analysis for {owner}/{repo}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             for path in _CODEQL_WORKFLOW_PATHS:
                 html_url = await self._check_file_exists(client, owner, repo, path)
                 if html_url:

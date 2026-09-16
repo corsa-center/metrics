@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class FundingCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting funding and institutional metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             funding_files, grants, affiliations, owner_type = await asyncio.gather(
                 self._find_funding_files(client, owner, repo),
                 self._find_grant_references(client, owner, repo),

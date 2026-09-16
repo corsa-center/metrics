@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class FairLicensingCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting FAIR and licensing detail for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             license_data, citation, has_codemeta, has_zenodo, releases = await asyncio.gather(
                 self._get_license(client, owner, repo),
                 self._get_citation(client, owner, repo),

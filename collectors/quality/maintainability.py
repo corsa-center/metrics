@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Set
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ class MaintainabilityCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting maintainability metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
             tree, languages, refactor = await asyncio.gather(
                 self._get_tree(client, owner, repo),
                 self._get_languages(client, owner, repo),

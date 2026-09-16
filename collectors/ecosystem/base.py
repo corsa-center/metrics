@@ -1,5 +1,6 @@
 """Shared base class for GitHub-based ecosystem collectors."""
 
+import asyncio
 import re
 import httpx
 import logging
@@ -7,6 +8,67 @@ from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Statuses worth retrying. 429/5xx are unambiguous; 403 is GitHub's shared
+# code for both a real permission error and its *secondary* (abuse-detection)
+# rate limit, so it needs the extra check below before retrying.
+_RETRYABLE_STATUSES = {403, 429, 500, 502, 503}
+_RETRY_ATTEMPTS = 3
+
+
+class RetryingTransport(httpx.AsyncBaseTransport):
+    """A single, shared retry policy for every collector's httpx client.
+
+    Wraps the default transport so 403/429/5xx from GitHub's API get retried
+    with Retry-After-aware backoff, transparently to whatever code issued the
+    request -- no caller needs its own retry loop or even to know this
+    exists. This replaced three independent, slightly different hand-rolled
+    retry loops (base.py, integrations/github_api.py's PyGithub wrapper, and
+    community_health.py) after the same bug -- a GitHub secondary rate limit
+    during this pipeline's concurrent per-package collection silently read
+    as "no data" instead of being retried -- turned up in three places.
+
+    A plain permission 403 (private repo, bad token) is NOT retried: only a
+    403 carrying a Retry-After header or a "secondary rate limit"/"abuse"
+    message is treated as the throttle it actually is. Returns the final
+    response either way (success, or the last failure once retries are
+    exhausted) so a caller's existing `if response.status_code != 200`
+    check keeps working completely unchanged.
+    """
+
+    def __init__(self, wrapped: Optional[httpx.AsyncBaseTransport] = None):
+        self._wrapped = wrapped or httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response: Optional[httpx.Response] = None
+        for attempt in range(_RETRY_ATTEMPTS):
+            response = await self._wrapped.handle_async_request(request)
+            if response.status_code not in _RETRYABLE_STATUSES:
+                return response
+
+            if response.status_code == 403:
+                await response.aread()
+                message = response.text.lower()
+                is_secondary_rate_limit = (
+                    "retry-after" in response.headers
+                    or "secondary rate limit" in message
+                    or "abuse" in message
+                )
+                if not is_secondary_rate_limit:
+                    return response
+
+            if attempt < _RETRY_ATTEMPTS - 1:
+                await response.aread()
+                retry_after = response.headers.get("Retry-After")
+                delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
+                logger.debug(
+                    f"HTTP {response.status_code} from {request.url}, retrying in {delay:.0f}s"
+                )
+                await asyncio.sleep(delay)
+        return response
+
+    async def aclose(self) -> None:
+        await self._wrapped.aclose()
 
 
 class GitHubCollectorBase:
@@ -39,12 +101,10 @@ class GitHubCollectorBase:
         """Return the file's html_url if it exists, None otherwise.
 
         Using the GitHub Contents API without a ?ref= parameter so the
-        repo's actual default branch is used (works for develop, main, master,
-        or any other default).  Retries once on transient errors.
-
-        The return value is truthy when the file exists (non-empty URL string)
-        and falsy when it does not (None), so callers using `if result:` work
-        without change.  Callers that need the URL can use the returned string.
+        repo's actual default branch is used (works for develop, main,
+        master, or any other default). Retrying a throttled request is the
+        client's job now (see RetryingTransport) -- callers just need to
+        build their httpx.AsyncClient with transport=RetryingTransport().
 
         `path` may point at a directory (e.g. ".github/workflows"), in which
         case the Contents API returns a JSON list rather than a dict — handled
@@ -52,37 +112,17 @@ class GitHubCollectorBase:
         AttributeError, which previously got swallowed and misreported as
         "not found".
         """
-        import asyncio
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        attempts = 3
-        for attempt in range(attempts):
-            try:
-                response = await client.get(url, headers=self.github_headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    if isinstance(data, list):
-                        return f"https://github.com/{owner}/{repo}/tree/HEAD/{path}"
-                    return data.get("html_url", url)
-                if response.status_code == 404:
-                    return None
-                # 403 is how GitHub signals a *secondary* rate limit — too many
-                # concurrent requests — not a permanent denial. Treating it as
-                # "file absent" turns throttling into a silent wrong answer.
-                if attempt < attempts - 1 and response.status_code in (403, 429, 500, 502, 503):
-                    retry_after = response.headers.get("Retry-After")
-                    delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
-                    logger.debug(
-                        f"HTTP {response.status_code} checking {path}, retrying in {delay:.0f}s"
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                return None
-            except Exception as e:
-                if attempt < attempts - 1:
-                    logger.debug(f"Error checking {path}: {e}, retrying…")
-                    await asyncio.sleep(1 + attempt)
-                    continue
-                return None
+        try:
+            response = await client.get(url, headers=self.github_headers)
+        except Exception as e:
+            logger.debug(f"Error checking {path}: {e}")
+            return None
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                return f"https://github.com/{owner}/{repo}/tree/HEAD/{path}"
+            return data.get("html_url", url)
         return None
 
     async def _github_get(
@@ -90,36 +130,18 @@ class GitHubCollectorBase:
     ) -> Optional[object]:
         """GET a GitHub API endpoint and return the parsed JSON body.
 
-        Retries on the same conditions _check_file_exists does (403/429/5xx,
-        Retry-After-aware backoff) rather than treating a throttled request
-        as if the resource didn't exist. Returns None for a real 404 or if
-        every attempt is exhausted; callers should treat None as "unknown",
-        not "zero" or "absent", per CASS §3.5.
+        Retrying a throttled request is the client's job now (see
+        RetryingTransport). Returns None for a real 404, or if the final
+        response after retries still isn't a 200; callers should treat None
+        as "unknown", not "zero" or "absent", per CASS §3.5.
         """
-        import asyncio
-        attempts = 3
-        for attempt in range(attempts):
-            try:
-                response = await client.get(url, headers=self.github_headers, params=params)
-                if response.status_code == 200:
-                    return response.json()
-                if response.status_code == 404:
-                    return None
-                if attempt < attempts - 1 and response.status_code in (403, 429, 500, 502, 503):
-                    retry_after = response.headers.get("Retry-After")
-                    delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
-                    logger.debug(
-                        f"HTTP {response.status_code} from {url}, retrying in {delay:.0f}s"
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                return None
-            except Exception as e:
-                if attempt < attempts - 1:
-                    logger.debug(f"Error fetching {url}: {e}, retrying…")
-                    await asyncio.sleep(1 + attempt)
-                    continue
-                return None
+        try:
+            response = await client.get(url, headers=self.github_headers, params=params)
+        except Exception as e:
+            logger.debug(f"Error fetching {url}: {e}")
+            return None
+        if response.status_code == 200:
+            return response.json()
         return None
 
     def _get_timestamp(self) -> str:

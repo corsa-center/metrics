@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class WelcomenessCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting welcomeness metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             channels, documents = await asyncio.gather(
                 self._get_public_channels(client, owner, repo),
                 self._find_decision_documents(client, owner, repo),

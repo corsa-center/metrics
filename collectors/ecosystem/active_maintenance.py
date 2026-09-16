@@ -18,6 +18,8 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
+from collectors.ecosystem.base import RetryingTransport
+
 logger = logging.getLogger(__name__)
 
 # Community channels a project might link from its README, beyond the tracker.
@@ -134,7 +136,7 @@ class ActiveMaintenanceCollector:
         """
         url = f"https://api.github.com/repos/{owner}/{repo}/stats/contributors"
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code == 202:
                     await asyncio.sleep(3)
@@ -149,7 +151,7 @@ class ActiveMaintenanceCollector:
     async def _get_readme(self, owner: str, repo: str) -> str:
         """README text, used to find community channels linked from it."""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(
                     f"https://api.github.com/repos/{owner}/{repo}/readme",
                     headers=self.headers,
@@ -213,7 +215,7 @@ class ActiveMaintenanceCollector:
         """Get basic repository info (archived status, description, pushed_at)."""
         url = f"https://api.github.com/repos/{owner}/{repo}"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code == 200:
                     return resp.json()
@@ -227,7 +229,7 @@ class ActiveMaintenanceCollector:
         url = f"https://api.github.com/repos/{owner}/{repo}/stats/participation"
         participation = {}
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code == 200:
                     participation = resp.json()
@@ -244,7 +246,7 @@ class ActiveMaintenanceCollector:
         url = f"https://api.github.com/repos/{owner}/{repo}/commits?per_page=1"
         last_commit = {}
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -259,7 +261,7 @@ class ActiveMaintenanceCollector:
         """Get recent releases."""
         url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code == 200:
                     return resp.json()
@@ -278,7 +280,7 @@ class ActiveMaintenanceCollector:
         url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page=100"
         max_pages = 5
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 for _ in range(max_pages):
                     resp = await client.get(url, headers=self.headers)
                     if resp.status_code != 200:
@@ -324,7 +326,7 @@ class ActiveMaintenanceCollector:
         """
         url = f"https://api.github.com/repos/{owner}/{repo}/commits?per_page=1"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code != 200:
                     return None

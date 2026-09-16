@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting deployment environment metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             files, doc_text = await asyncio.gather(
                 self._list_workflows(client, owner, repo),
                 self._read_platform_docs(client, owner, repo),

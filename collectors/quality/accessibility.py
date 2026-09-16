@@ -18,7 +18,7 @@ import httpx
 import logging
 from typing import Any, Dict, List
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class AccessibilityCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Checking accessibility / portability for {owner}/{repo}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             return await self._scan(client, repo_name, owner, repo)
 
     async def _scan(

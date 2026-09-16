@@ -30,7 +30,7 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,7 @@ class ReliabilityCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting reliability metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             workflows = await self._read_analysis_workflows(client, owner, repo)
             tools, hardening, trend = await asyncio.gather(
                 self._find_analysis_tools(client, owner, repo, workflows),

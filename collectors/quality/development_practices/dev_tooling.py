@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class DevToolingCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting development tooling metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             testing, tooling, review = await asyncio.gather(
                 self._scan(client, owner, repo, _TESTING_PATHS),
                 self._scan(client, owner, repo, _TOOLING_PATHS),

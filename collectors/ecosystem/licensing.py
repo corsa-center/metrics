@@ -15,6 +15,8 @@ import logging
 from typing import Dict, Any, Optional, List
 import re
 
+from collectors.ecosystem.base import RetryingTransport
+
 logger = logging.getLogger(__name__)
 
 
@@ -193,7 +195,7 @@ class LicensingCollector:
         url = f"https://api.github.com/repos/{owner}/{repo}/license"
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 response = await client.get(url, headers=self.headers)
                 if response.status_code == 200:
                     data = response.json()
@@ -252,7 +254,7 @@ class LicensingCollector:
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 response = await client.get(url, headers=self.headers)
                 if response.status_code == 200:
                     data = response.json()
@@ -271,7 +273,7 @@ class LicensingCollector:
     async def _get_file_content(self, download_url: str, max_size: int = 50000) -> str:
         """Get file content from download URL"""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 response = await client.get(download_url)
                 if response.status_code == 200:
                     text = response.text

@@ -25,7 +25,7 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class SupplyChainCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting supply chain metrics for {owner}/{repo}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             release_assets, root_sbom = await asyncio.gather(
                 self._fetch_release_assets(client, owner, repo),
                 self._check_root_sbom(client, owner, repo),

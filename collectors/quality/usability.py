@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class UsabilityCollector(GitHubCollectorBase):
         owner, repo = owner_repo
         logger.info(f"Collecting usability metrics for {repo_name}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             readme, doc_dir, site = await asyncio.gather(
                 self._analyze_readme(client, owner, repo),
                 self._find_doc_directory(client, owner, repo),
