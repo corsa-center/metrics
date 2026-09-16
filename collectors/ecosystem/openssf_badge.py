@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -155,10 +155,16 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
         security = await self._scan_files(client, owner, repo, self.SECURITY_FILES)
         quality = await self._scan_files(client, owner, repo, self.QUALITY_FILES)
 
+        # A category whose percentage is None means every one of its
+        # criteria gapped (see _scan_files) -- drop it from the blend and
+        # re-normalize the remaining weights, rather than let None * weight
+        # crash or silently treat a total gap as a 0%.
+        weighted = [(governance, 0.4), (security, 0.3), (quality, 0.3)]
+        weight_total = sum(w for cat, w in weighted if cat.get("percentage") is not None)
         overall_pct = (
-            governance.get("percentage", 0) * 0.4
-            + security.get("percentage", 0) * 0.3
-            + quality.get("percentage", 0) * 0.3
+            sum(cat["percentage"] * w for cat, w in weighted if cat.get("percentage") is not None)
+            / weight_total
+            if weight_total else None
         )
 
         return {
@@ -178,10 +184,10 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
             "security_criteria": security,
             "quality_criteria": quality,
             "overall_score": {
-                "score": round(overall_pct, 2),
+                "score": round(overall_pct, 2) if overall_pct is not None else None,
                 "max_score": 100,
-                "percentage": round(overall_pct, 2),
-                "status": "not_started",
+                "percentage": round(overall_pct, 2) if overall_pct is not None else None,
+                "status": "not_started" if overall_pct is not None else "not_collected",
                 "estimated": True,
             },
             "assessment_method": "repository_scan",
@@ -220,14 +226,28 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
         repo: str,
         file_map: Dict[str, List[str]],
     ) -> Dict[str, Any]:
-        """Check each criterion in file_map against the repository."""
+        """Check each criterion in file_map against the repository.
+
+        This whole path is already an admitted proxy ("estimated": True in
+        the caller) for when no real badge exists -- but a gap here is a
+        different kind of uncertainty than that estimate, and shouldn't be
+        silently folded into "missing". A criterion whose every pattern hit
+        a gap (rather than a confirmed absence) is reported not_collected;
+        one where at least one pattern was confirmed absent (even if others
+        gapped) still counts as a real miss.
+        """
         found: List[str] = []
         missing: List[str] = []
+        not_collected: List[str] = []
         details: Dict[str, Any] = {}
 
         for criterion, patterns in file_map.items():
+            saw_gap = False
             for pattern in patterns:
                 html_url = await self._check_file_exists(client, owner, repo, pattern)
+                if html_url is COLLECTION_GAP:
+                    saw_gap = True
+                    continue
                 if html_url:
                     found.append(criterion)
                     details[criterion] = {
@@ -238,17 +258,22 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
                     logger.info(f"  {criterion}: {pattern}")
                     break
             else:
-                missing.append(criterion)
-                details[criterion] = {"exists": False, "recommended": patterns[0]}
+                if saw_gap:
+                    not_collected.append(criterion)
+                    details[criterion] = {"not_collected": True}
+                else:
+                    missing.append(criterion)
+                    details[criterion] = {"exists": False, "recommended": patterns[0]}
 
-        count_total = len(file_map)
+        count_total = len(file_map) - len(not_collected)
         return {
             "found": found,
             "missing": missing,
+            "not_collected": not_collected,
             "details": details,
             "count_found": len(found),
             "count_total": count_total,
-            "percentage": round((len(found) / count_total) * 100, 2) if count_total else 0,
+            "percentage": round((len(found) / count_total) * 100, 2) if count_total else None,
         }
 
     # ------------------------------------------------------------------ #

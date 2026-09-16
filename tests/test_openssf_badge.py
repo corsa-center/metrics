@@ -1,6 +1,11 @@
 """Unit tests for OpenSSFBadgeCollector pure computation methods."""
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 import pytest
+
+from collectors.ecosystem.base import COLLECTION_GAP
 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
 
 
@@ -118,3 +123,74 @@ class TestCollectWithBadge:
         result = collector._collect_with_badge("Pkg", "o", "r", badge_data)
         assert result["badge_status"]["in_progress"] is True
         assert result["overall_score"]["status"] == "in_progress"
+
+
+class TestScanFilesGapHandling:
+    """The no-badge path is already an admitted proxy ("estimated": True),
+    but a gap is a different kind of uncertainty than that estimate and
+    must not be silently folded into "missing".
+    """
+
+    def _run(self, collector, file_map, responses):
+        """responses: dict[pattern] -> return value for _check_file_exists."""
+        async def fake_check(client, owner, repo, pattern):
+            return responses.get(pattern, None)
+
+        async def go():
+            with patch.object(collector, "_check_file_exists", side_effect=fake_check):
+                return await collector._scan_files(None, "o", "r", file_map)
+
+        return asyncio.run(go())
+
+    def test_gapped_criterion_is_not_collected_not_missing(self, collector):
+        file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
+        result = self._run(collector, file_map, {"CODE_OF_CONDUCT.md": COLLECTION_GAP})
+        assert result["missing"] == []
+        assert result["not_collected"] == ["code_of_conduct"]
+
+    def test_confirmed_absent_is_still_a_real_miss(self, collector):
+        file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
+        result = self._run(collector, file_map, {"CODE_OF_CONDUCT.md": None})
+        assert result["missing"] == ["code_of_conduct"]
+        assert result["not_collected"] == []
+
+    def test_all_gapped_reports_no_percentage(self, collector):
+        file_map = {"a": ["A.md"], "b": ["B.md"]}
+        result = self._run(collector, file_map, {"A.md": COLLECTION_GAP, "B.md": COLLECTION_GAP})
+        assert result["percentage"] is None
+        assert result["count_total"] == 0
+
+    def test_mixed_gap_and_confirmed_renormalizes_percentage(self, collector):
+        file_map = {"found_one": ["F.md"], "gapped": ["G.md"]}
+        result = self._run(collector, file_map, {"F.md": "http://x", "G.md": COLLECTION_GAP})
+        # gapped criterion excluded from the denominator entirely
+        assert result["count_total"] == 1
+        assert result["percentage"] == 100.0
+
+
+class TestCollectWithoutBadgeGapHandling:
+    def test_one_category_fully_gapped_renormalizes_overall(self, collector):
+        async def go():
+            async def fake_scan(client, owner, repo, file_map):
+                if file_map is collector.GOVERNANCE_FILES:
+                    return {"percentage": None}  # totally gapped
+                return {"percentage": 100.0}
+
+            with patch.object(collector, "_scan_files", side_effect=fake_scan):
+                return await collector._collect_without_badge(None, "Pkg", "o", "r")
+
+        result = asyncio.run(go())
+        # If the gap silently counted as 0%, this would be 60% (0.3+0.3 of 100).
+        assert result["overall_score"]["percentage"] == 100.0
+
+    def test_everything_gapped_reports_not_collected_status(self, collector):
+        async def go():
+            async def fake_scan(client, owner, repo, file_map):
+                return {"percentage": None}
+
+            with patch.object(collector, "_scan_files", side_effect=fake_scan):
+                return await collector._collect_without_badge(None, "Pkg", "o", "r")
+
+        result = asyncio.run(go())
+        assert result["overall_score"]["score"] is None
+        assert result["overall_score"]["status"] == "not_collected"
