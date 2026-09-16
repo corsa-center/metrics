@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -57,8 +58,70 @@ SECTION_SUBMETRICS: Dict[str, List[str]] = {
     "4.3.8": ["SBOM Detection", "Build Provenance", "Dependency Vulnerability Posture", "Dependency Freshness"],
 }
 
+# Canonical sub-collector names per group -- the authoritative set of what
+# `_sub_enabled` actually wires up (kept in sync by
+# tests/test_collector_toggles.py's TestConfigMatchesCode). Used to keep an
+# unrecognized key from a hand-edited config (typo, or a group/key swap)
+# out of `_package_excluded_keys`'s report -- such a key has zero real
+# effect on collection, so reporting it as an exclusion would be misleading.
+KNOWN_COLLECTOR_KEYS = {
+    "ecosystem": {
+        "community_health", "licensing", "active_maintenance", "chaoss_activity",
+        "openssf_badge", "engagement", "fair_licensing", "outreach",
+        "welcomeness", "collaboration", "funding", "openssf_scorecard",
+    },
+    "quality": {
+        "ci_cd", "reproducibility", "accessibility", "test_coverage",
+        "usability", "reliability", "maintainability", "deployment_environments",
+        "dev_tooling", "static_analysis", "supply_chain",
+    },
+}
+
 # Directory containing per-package config files (relative to this script)
 PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
+
+# Path, within a tracked project's own repo, of its self-declared metrics
+# config (see docs/PROJECT_CONFIG.md). Fetched fresh per collection run.
+PROJECT_CONFIG_PATH = ".corsa/metrics.yaml"
+PROJECT_CONFIG_SCHEMA_VERSION = 1
+
+
+def _sanitize_metric_config(data: Dict) -> Dict:
+    """Coerce a package_config/ or PROJECT_CONFIG_PATH file's collectors:
+    and overrides: blocks into well-shaped dicts, dropping anything that
+    isn't -- so every downstream reader can assume this shape without
+    re-checking. Both files are hand-edited YAML (one by a maintainer, one
+    by an external project) and can leave a key present with no value
+    (parses to None) or the wrong type entirely; treating that the same as
+    the key being absent keeps this feature's "fails open" guarantee intact
+    instead of raising deep in dict-chaining code that assumes it was
+    already validated.
+    """
+    if not isinstance(data, dict):
+        return {}
+    result = dict(data)
+
+    collectors = result.get("collectors")
+    if isinstance(collectors, dict):
+        result["collectors"] = {
+            group: value
+            for group, value in collectors.items()
+            if isinstance(value, dict)
+        }
+    else:
+        result.pop("collectors", None)
+
+    overrides = result.get("overrides")
+    if isinstance(overrides, dict):
+        result["overrides"] = {
+            section: labels
+            for section, labels in overrides.items()
+            if isinstance(labels, dict)
+        }
+    else:
+        result.pop("overrides", None)
+
+    return result
 
 
 class MetricsOrchestrator:
@@ -79,6 +142,12 @@ class MetricsOrchestrator:
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
         self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
         self.quality_collectors = self.config.get("quality_collectors", {})
+        # Whether to fetch each project's own PROJECT_CONFIG_PATH at all. Does
+        # not affect the maintainer-authored package_config/ files, which are
+        # operator-controlled regardless of this switch.
+        self.project_config_enabled = (self.config.get("project_config") or {}).get(
+            "enabled", True
+        )
 
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file, resolving ${ENV_VAR} references"""
@@ -110,8 +179,64 @@ class MetricsOrchestrator:
         config_file = PACKAGE_CONFIG_DIR / f"{safe_name}.yaml"
         if config_file.exists():
             with open(config_file) as f:
-                return yaml.safe_load(f) or {}
+                return _sanitize_metric_config(yaml.safe_load(f) or {})
         return {}
+
+    async def _fetch_project_config(self, package: Dict) -> Dict:
+        """Fetch a project's self-declared PROJECT_CONFIG_PATH from its own repo.
+
+        Lets a project narrow which collectors run for it and annotate
+        sub-metric overrides, same shape as package_config/ (see
+        docs/PROJECT_CONFIG.md). Any problem -- missing file, network error,
+        bad YAML, schema mismatch, a repo: field that disagrees with the
+        package being collected -- fails open and returns {}, i.e. collect
+        everything, exactly as if the project had never added the file.
+        """
+        if not self.project_config_enabled:
+            return {}
+
+        repo_name = package["repository"]
+        token = self._get_github_token()
+
+        try:
+            # repo_name comes from the live-fetched catalog's own keys
+            # (prepare_software_list), not from anything we control -- a
+            # malformed one (no "/") must fail open like every other
+            # problem here, not raise past this method.
+            owner, repo = repo_name.split("/", 1)
+            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{PROJECT_CONFIG_PATH}"
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            if token:
+                headers["Authorization"] = f"token {token}"
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                return {}
+            content = base64.b64decode(resp.json().get("content", "")).decode(
+                "utf-8", "replace"
+            )
+            data = yaml.safe_load(content) or {}
+        except Exception as e:
+            logger.warning(f"Could not fetch {PROJECT_CONFIG_PATH} for {repo_name}: {e}")
+            return {}
+
+        if not isinstance(data, dict):
+            logger.warning(f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: not a mapping")
+            return {}
+        if data.get("schema") != PROJECT_CONFIG_SCHEMA_VERSION:
+            logger.warning(
+                f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: "
+                f"unsupported schema {data.get('schema')!r}"
+            )
+            return {}
+        if str(data.get("repo", "")).lower() != repo_name.lower():
+            logger.warning(
+                f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: "
+                f"repo field {data.get('repo')!r} does not match"
+            )
+            return {}
+        return _sanitize_metric_config(data)
 
     @staticmethod
     def _apply_section_overrides(html: Optional[str], section_overrides: Dict[str, str]) -> Optional[str]:
@@ -270,14 +395,54 @@ class MetricsOrchestrator:
             logger.error(f"Impact dimension collection failed for {package['name']}: {e}")
             return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
 
-    def _sub_enabled(self, group: str, key: str) -> bool:
-        """Whether an individual sub-collector is enabled.
+    def _sub_enabled(self, group: str, key: str, package: Optional[Dict] = None) -> bool:
+        """Whether an individual sub-collector is enabled for this package.
 
-        Defaults to True when the toggle group or key is absent, so a config
-        predating these blocks keeps running every sub-collector.
+        Defaults to True when a toggle is absent at every layer. Three layers,
+        each only able to narrow the one before it -- none can re-enable a
+        collector a higher layer turned off:
+          1. Global config/orchestrator.yaml -- applies to every package.
+          2. The maintainer's central package_config/<owner>_<repo>.yaml.
+          3. The project's own PROJECT_CONFIG_PATH, fetched from its repo.
+        `package` carries (2) and (3) once collect_all_metrics has attached
+        them; omit it (as the config-matching tests do) to check only (1).
         """
         toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
-        return toggles.get(key, True)
+        if not toggles.get(key, True):
+            return False
+        if package is not None:
+            for cfg_key in ("package_config", "project_config"):
+                cfg = package.get(cfg_key) or {}
+                narrowed = cfg.get("collectors", {}).get(group, {}).get(key)
+                if narrowed is False:
+                    return False
+        return True
+
+    def _package_excluded_keys(self, group: str, package: Dict) -> List[str]:
+        """Toggle keys this package's configs turned off that the global
+        config would otherwise run -- i.e. exclusions attributable to
+        package_config/ or the project's own file, not to the operator.
+        Recorded on the dimension result so a deliberate exclusion is
+        distinguishable from a collector that simply crashed.
+        """
+        toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
+        known_keys = KNOWN_COLLECTOR_KEYS[group]
+        candidate_keys = set(toggles) & known_keys
+        for cfg_key in ("package_config", "project_config"):
+            cfg = package.get(cfg_key) or {}
+            mentioned = set(cfg.get("collectors", {}).get(group, {}))
+            unrecognized = mentioned - known_keys
+            if unrecognized:
+                logger.warning(
+                    f"{package.get('repository')}: ignoring unrecognized "
+                    f"{group} collector key(s) in {cfg_key}: {sorted(unrecognized)}"
+                )
+            candidate_keys |= mentioned & known_keys
+        return sorted(
+            key
+            for key in candidate_keys
+            if toggles.get(key, True) and not self._sub_enabled(group, key, package)
+        )
 
     def _get_github_token(self) -> Optional[str]:
         """Extract GitHub token from resolved config"""
@@ -298,7 +463,7 @@ class MetricsOrchestrator:
         sub_results = {}
 
         # 4.2.1 CoC, Governance, and Contributor Guidelines
-        if self._sub_enabled("ecosystem", "community_health"):
+        if self._sub_enabled("ecosystem", "community_health", package):
             try:
                 from collectors.ecosystem.community_health import CommunityHealthCollector
                 collector = CommunityHealthCollector(github_token=github_token)
@@ -307,7 +472,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Governance collection failed for {package['name']}: {e}")
 
         # 4.2.2 Licensing and FAIR Compliance
-        if self._sub_enabled("ecosystem", "licensing"):
+        if self._sub_enabled("ecosystem", "licensing", package):
             try:
                 from collectors.ecosystem.licensing import LicensingCollector
                 collector = LicensingCollector(github_token=github_token)
@@ -316,7 +481,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Licensing collection failed for {package['name']}: {e}")
 
         # 4.2.3 Active Maintenance
-        if self._sub_enabled("ecosystem", "active_maintenance"):
+        if self._sub_enabled("ecosystem", "active_maintenance", package):
             try:
                 from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
                 collector = ActiveMaintenanceCollector(github_token=github_token)
@@ -325,7 +490,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
 
         # 4.2.4 CHAOSS Activity Metrics
-        if self._sub_enabled("ecosystem", "chaoss_activity"):
+        if self._sub_enabled("ecosystem", "chaoss_activity", package):
             try:
                 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
                 collector = CHAOSSGovernanceCollector(github_token=github_token)
@@ -334,7 +499,7 @@ class MetricsOrchestrator:
                 logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")
 
         # 4.2.5 OpenSSF Best Practices Badge
-        if self._sub_enabled("ecosystem", "openssf_badge"):
+        if self._sub_enabled("ecosystem", "openssf_badge", package):
             try:
                 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
                 collector = OpenSSFBadgeCollector(github_token=github_token)
@@ -343,7 +508,7 @@ class MetricsOrchestrator:
                 logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
 
         # 4.2.4 Engagement — issue/PR response times, open/close ratios
-        if self._sub_enabled("ecosystem", "engagement"):
+        if self._sub_enabled("ecosystem", "engagement", package):
             try:
                 from collectors.ecosystem.engagement import EngagementCollector
                 collector = EngagementCollector(github_token=github_token)
@@ -352,7 +517,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Engagement collection failed for {package['name']}: {e}")
 
         # 4.2.2 FAIR compliance and license exceptions
-        if self._sub_enabled("ecosystem", "fair_licensing"):
+        if self._sub_enabled("ecosystem", "fair_licensing", package):
             try:
                 from collectors.ecosystem.fair_licensing import FairLicensingCollector
                 collector = FairLicensingCollector(github_token=github_token)
@@ -361,7 +526,7 @@ class MetricsOrchestrator:
                 logger.warning(f"FAIR licensing collection failed for {package['name']}: {e}")
 
         # 4.2.5 Outreach — newcomer growth, retention, onboarding infrastructure
-        if self._sub_enabled("ecosystem", "outreach"):
+        if self._sub_enabled("ecosystem", "outreach", package):
             try:
                 from collectors.ecosystem.outreach import OutreachCollector
                 collector = OutreachCollector(github_token=github_token)
@@ -370,7 +535,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Outreach collection failed for {package['name']}: {e}")
 
         # 4.2.6 Welcomeness — decision-making visibility
-        if self._sub_enabled("ecosystem", "welcomeness"):
+        if self._sub_enabled("ecosystem", "welcomeness", package):
             try:
                 from collectors.ecosystem.welcomeness import WelcomenessCollector
                 collector = WelcomenessCollector(github_token=github_token)
@@ -379,7 +544,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Welcomeness collection failed for {package['name']}: {e}")
 
         # 4.2.7 Collaboration — ecosystem reach via ecosyste.ms
-        if self._sub_enabled("ecosystem", "collaboration"):
+        if self._sub_enabled("ecosystem", "collaboration", package):
             try:
                 from collectors.ecosystem.collaboration import CollaborationCollector
                 collector = CollaborationCollector(github_token=github_token)
@@ -388,7 +553,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Collaboration collection failed for {package['name']}: {e}")
 
         # 4.2.8 + 4.2.9 Funding and institutional affiliation
-        if self._sub_enabled("ecosystem", "funding"):
+        if self._sub_enabled("ecosystem", "funding", package):
             try:
                 from collectors.ecosystem.funding import FundingCollector
                 collector = FundingCollector(github_token=github_token)
@@ -397,7 +562,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Funding collection failed for {package['name']}: {e}")
 
         # OpenSSF Scorecard
-        if self._sub_enabled("ecosystem", "openssf_scorecard"):
+        if self._sub_enabled("ecosystem", "openssf_scorecard", package):
             try:
                 from collectors.ecosystem.openssf_scorecard import OpenSSFScorecardCollector
                 collector = OpenSSFScorecardCollector(github_token=github_token)
@@ -443,6 +608,7 @@ class MetricsOrchestrator:
             "score": round(avg_score, 2),
             "max_score": 100.0,
             "sub_results": sub_results,
+            "excluded_by_config": self._package_excluded_keys("ecosystem", package),
         }
 
     async def collect_quality_dimension(self, package: Dict) -> Dict:
@@ -460,7 +626,7 @@ class MetricsOrchestrator:
         sub_results = {}
 
         # 4.3.2 Development Practices — CI/CD metrics
-        if self._sub_enabled("quality", "ci_cd"):
+        if self._sub_enabled("quality", "ci_cd", package):
             try:
                 from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
                 collector = CICDMetricsCollector(self.config)
@@ -469,7 +635,7 @@ class MetricsOrchestrator:
                 logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
 
         # 4.3.3 Reproducibility — containers, lock files, FAIR4RS metadata, semver
-        if self._sub_enabled("quality", "reproducibility"):
+        if self._sub_enabled("quality", "reproducibility", package):
             try:
                 from collectors.quality.reproducibility import ReproducibilityCollector
                 collector = ReproducibilityCollector(github_token=github_token)
@@ -478,7 +644,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Reproducibility collection failed for {package['name']}: {e}")
 
         # 4.3.5 Accessibility — portable build systems and containers
-        if self._sub_enabled("quality", "accessibility"):
+        if self._sub_enabled("quality", "accessibility", package):
             try:
                 from collectors.quality.accessibility import AccessibilityCollector
                 collector = AccessibilityCollector(github_token=github_token)
@@ -487,7 +653,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
 
         # 4.3.1 Test Coverage Excellence — via Codecov public API
-        if self._sub_enabled("quality", "test_coverage"):
+        if self._sub_enabled("quality", "test_coverage", package):
             try:
                 from collectors.quality.test_coverage import TestCoverageCollector
                 collector = TestCoverageCollector(github_token=github_token)
@@ -496,7 +662,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
 
         # 4.3.4 Usability — documentation completeness
-        if self._sub_enabled("quality", "usability"):
+        if self._sub_enabled("quality", "usability", package):
             try:
                 from collectors.quality.usability import UsabilityCollector
                 collector = UsabilityCollector(github_token=github_token)
@@ -505,7 +671,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Usability collection failed for {package['name']}: {e}")
 
         # 4.3.1 Reliability — static analysis tools, hardening, defect trend
-        if self._sub_enabled("quality", "reliability"):
+        if self._sub_enabled("quality", "reliability", package):
             try:
                 from collectors.quality.reliability import ReliabilityCollector
                 collector = ReliabilityCollector(github_token=github_token)
@@ -514,7 +680,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Reliability collection failed for {package['name']}: {e}")
 
         # 4.3.6 Maintainability — tree composition, docs, refactoring activity
-        if self._sub_enabled("quality", "maintainability"):
+        if self._sub_enabled("quality", "maintainability", package):
             try:
                 from collectors.quality.maintainability import MaintainabilityCollector
                 collector = MaintainabilityCollector(github_token=github_token)
@@ -523,7 +689,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Maintainability collection failed for {package['name']}: {e}")
 
         # 4.3.5 Deployment Environment Testing — CI runner OS families
-        if self._sub_enabled("quality", "deployment_environments"):
+        if self._sub_enabled("quality", "deployment_environments", package):
             try:
                 from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
                 collector = DeploymentEnvironmentCollector(github_token=github_token)
@@ -532,7 +698,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Deployment environment collection failed for {package['name']}: {e}")
 
         # 4.3.2 Testing frameworks, code review coverage, tooling integration
-        if self._sub_enabled("quality", "dev_tooling"):
+        if self._sub_enabled("quality", "dev_tooling", package):
             try:
                 from collectors.quality.development_practices.dev_tooling import DevToolingCollector
                 collector = DevToolingCollector(github_token=github_token)
@@ -541,7 +707,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Dev tooling collection failed for {package['name']}: {e}")
 
         # 4.3.1 Enhanced Security Analysis — CodeQL workflow presence
-        if self._sub_enabled("quality", "static_analysis"):
+        if self._sub_enabled("quality", "static_analysis", package):
             try:
                 from collectors.quality.static_analysis import StaticAnalysisCollector
                 collector = StaticAnalysisCollector(github_token=github_token)
@@ -550,7 +716,7 @@ class MetricsOrchestrator:
                 logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
 
         # 4.3.8 Software Supply Chain Integrity — SBOM and build provenance
-        if self._sub_enabled("quality", "supply_chain"):
+        if self._sub_enabled("quality", "supply_chain", package):
             try:
                 from collectors.quality.supply_chain import SupplyChainCollector
                 collector = SupplyChainCollector(github_token=github_token)
@@ -591,6 +757,7 @@ class MetricsOrchestrator:
             "score": round(avg_score, 2),
             "max_score": 100.0,
             "sub_results": sub_results,
+            "excluded_by_config": self._package_excluded_keys("quality", package),
         }
 
     async def collect_all_metrics(self, package: Dict) -> Dict:
@@ -605,6 +772,12 @@ class MetricsOrchestrator:
         logger.info(
             f"Starting metrics collection for {package['name']} ({package['repository']})"
         )
+
+        # Attach both per-package config layers before the three dimensions
+        # (which read them via _sub_enabled) run concurrently below. Each is
+        # {} if no config exists or it failed to load -- collect as normal.
+        package["package_config"] = self._load_package_config(package["repository"])
+        package["project_config"] = await self._fetch_project_config(package)
 
         # Collect all 3 CASS dimensions in parallel
         (
@@ -645,6 +818,7 @@ class MetricsOrchestrator:
                 "ecosystem": ecosystem_metrics,
                 "quality": quality_metrics,
             },
+            "project_config": package.get("project_config", {}),
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -787,9 +961,23 @@ class MetricsOrchestrator:
         """
         dims = metrics.get("dimensions", {})
 
-        # Load per-package overrides (e.g. N/A values supplied by maintainers)
+        # Merge sub-metric text overrides from both config layers: the
+        # project's own PROJECT_CONFIG_PATH (fetched during collection, so it
+        # travels on `metrics`) and the maintainer's central
+        # package_config/<owner>_<repo>.yaml (re-read fresh here since it's a
+        # cheap local file). On a conflicting label within the same section,
+        # the maintainer's central file wins -- applied second, below.
+        project_overrides: Dict[str, Dict[str, str]] = (
+            metrics.get("project_config", {}).get("overrides", {})
+        )
         pkg_config = self._load_package_config(repo_name)
-        pkg_overrides: Dict[str, Dict[str, str]] = pkg_config.get("overrides", {})
+        central_overrides: Dict[str, Dict[str, str]] = pkg_config.get("overrides", {})
+
+        pkg_overrides: Dict[str, Dict[str, str]] = {}
+        for section, labels in project_overrides.items():
+            pkg_overrides.setdefault(section, {}).update(labels)
+        for section, labels in central_overrides.items():
+            pkg_overrides.setdefault(section, {}).update(labels)
 
         def _stub(section_num: str) -> Optional[str]:
             """Return a stub HTML block if the section has any overrides, else None."""
@@ -1821,10 +2009,20 @@ class MetricsOrchestrator:
 
         github_stats = impact_sub.get("github_stats", {})
 
+        # Sub-collector keys turned off by package_config/ or the project's
+        # own file (not by the operator's global config) -- lets the
+        # dashboard show "excluded by project" rather than leaving a reader
+        # to guess whether a blank section was skipped or simply crashed.
+        config_exclusions = {
+            "ecosystem": dims.get("ecosystem", {}).get("excluded_by_config", []),
+            "quality": dims.get("quality", {}).get("excluded_by_config", []),
+        }
+
         return {
             "package": repo_name,
             "stars": github_stats.get("stars", 0),
             "forks": github_stats.get("forks", 0),
+            "config_exclusions": config_exclusions,
             "impact": {
                 "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},
                 "4.1.2": {"title": "Field Research Impact", "data": _stub("4.1.2")},

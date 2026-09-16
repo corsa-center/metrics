@@ -33,6 +33,13 @@ ecosystem_collectors:
   collaboration: true       # 4.2.7 Ecosystem reach + 4.3.4 install paths
   funding: true             # 4.2.8 Financial + 4.2.9 Institutional Support
 
+# Per-project self-service metric control (docs/PROJECT_CONFIG.md). When
+# enabled, each package's own .corsa/metrics.yaml is fetched from its repo and
+# may narrow (never widen) the toggles above for that package only. Disabling
+# this only stops the fetch -- package_config/ overrides still apply.
+project_config:
+  enabled: true
+
 quality_collectors:
   test_coverage: true       # 4.3.1 Test Coverage Excellence (Codecov)
   static_analysis: true     # 4.3.1 Enhanced Security Analysis (CodeQL)
