@@ -2,6 +2,7 @@
 
 import pytest
 
+from collectors.ecosystem.base import COLLECTION_GAP
 from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
 
 
@@ -46,7 +47,36 @@ class TestScoring:
     def test_three_submetrics_uncollected(self, collector):
         sub = self._score(collector)["sub_scores"]
         assert sum(1 for v in sub.values() if v.get("not_collected")) == 3
-        assert self._score(collector)["max_score"] == 4
+        # The 3 permanently-uncollected submetrics must not inflate the
+        # denominator -- only documentation_completeness is ever scorable.
+        assert self._score(collector)["max_score"] == 1
+
+    def test_gapped_negative_is_not_collected_not_a_confirmed_fail(self, collector):
+        readme = {"exists": False, "sections": [], "missing": list(_README_SECTIONS),
+                   "not_collected": True}
+        s = collector._calculate_score(readme, None, None, has_gap=False)
+        entry = s["sub_scores"]["documentation_completeness"]
+        assert entry["passing"] is False
+        assert entry["not_collected"] is True
+        assert s["max_score"] == 0
+        assert s["status"] == "not_collected"
+
+    def test_doc_dir_or_site_gap_taints_a_negative_result(self, collector):
+        readme = {"exists": True, "sections": ["Usage"], "missing": []}
+        s = collector._calculate_score(readme, None, None, has_gap=True)
+        entry = s["sub_scores"]["documentation_completeness"]
+        assert entry["passing"] is False
+        assert entry["not_collected"] is True
+
+    def test_positive_result_survives_a_gap(self, collector):
+        # 3+ sections alone is enough to pass, regardless of whether the
+        # doc-dir/site lookups gapped.
+        readme = {"exists": True, "sections": ["Installation", "Usage", "Examples"],
+                   "missing": []}
+        s = collector._calculate_score(readme, None, None, has_gap=True)
+        entry = s["sub_scores"]["documentation_completeness"]
+        assert entry["passing"] is True
+        assert "not_collected" not in entry
 
 
 class TestHeadingDetection:
@@ -80,3 +110,69 @@ class TestEmptyResult:
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "nope"}))
         assert r["readme"]["exists"] is False
         assert r["overall_score"]["score"] == 0
+
+
+class TestAnalyzeReadmeGapHandling:
+    def _run(self, collector, client):
+        import asyncio
+        return asyncio.run(collector._analyze_readme(client, "o", "r"))
+
+    def test_gap_is_not_collected_not_a_confirmed_missing_readme(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+            result = self._run(collector, None)
+        assert result["exists"] is False
+        assert result["not_collected"] is True
+
+    def test_confirmed_404_is_a_real_negative(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_github_get", new=AsyncMock(return_value=None)):
+            result = self._run(collector, None)
+        assert result["exists"] is False
+        assert "not_collected" not in result
+
+
+class TestFindDocDirectoryGapHandling:
+    def _run(self, collector, responses):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        async def fake_exists(client, owner, repo, path):
+            return responses.get(path, None)
+
+        async def go():
+            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
+                return await collector._find_doc_directory(None, "o", "r")
+
+        return asyncio.run(go())
+
+    def test_gap_on_all_candidates_is_tracked(self, collector):
+        path, saw_gap = self._run(collector, {"docs": COLLECTION_GAP, "doc": COLLECTION_GAP,
+                                                "documentation": COLLECTION_GAP, "Documentation": COLLECTION_GAP})
+        assert path is None
+        assert saw_gap is True
+
+    def test_found_directory_reports_no_gap(self, collector):
+        path, saw_gap = self._run(collector, {"docs": "http://x"})
+        assert path == "docs"
+        assert saw_gap is False
+
+
+class TestFindDocumentationSiteGapHandling:
+    def _run(self, collector):
+        import asyncio
+        return asyncio.run(collector._find_documentation_site(None, "o", "r"))
+
+    def test_gap_is_tracked_separately_from_confirmed_absence(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+            site, saw_gap = self._run(collector)
+        assert site is None
+        assert saw_gap is True
+
+    def test_confirmed_repo_with_no_homepage_or_pages_is_not_a_gap(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_github_get", new=AsyncMock(return_value={"homepage": "", "has_pages": False})):
+            site, saw_gap = self._run(collector)
+        assert site is None
+        assert saw_gap is False

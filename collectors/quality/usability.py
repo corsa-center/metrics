@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -59,22 +59,12 @@ class UsabilityCollector(GitHubCollectorBase):
         logger.info(f"Collecting usability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            readme, doc_dir, site = await asyncio.gather(
+            readme, (doc_dir, doc_dir_gap), (site, site_gap) = await asyncio.gather(
                 self._analyze_readme(client, owner, repo),
                 self._find_doc_directory(client, owner, repo),
                 self._find_documentation_site(client, owner, repo),
-                return_exceptions=True,
+                return_exceptions=False,
             )
-
-        if isinstance(readme, Exception):
-            logger.warning(f"README analysis failed: {readme}")
-            readme = {"exists": False, "sections": [], "missing": list(_README_SECTIONS)}
-        if isinstance(doc_dir, Exception):
-            logger.warning(f"Doc directory scan failed: {doc_dir}")
-            doc_dir = None
-        if isinstance(site, Exception):
-            logger.warning(f"Documentation site lookup failed: {site}")
-            site = None
 
         return {
             "package_name": repo_name,
@@ -83,21 +73,27 @@ class UsabilityCollector(GitHubCollectorBase):
             "readme": readme,
             "doc_directory": doc_dir,
             "documentation_site": site,
-            "overall_score": self._calculate_score(readme, doc_dir, site),
+            "overall_score": self._calculate_score(
+                readme, doc_dir, site, doc_dir_gap or site_gap
+            ),
         }
 
     async def _analyze_readme(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
         """Which of the core user questions the README's headings answer."""
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}/readme",
-            headers=self.github_headers,
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/readme"
         )
-        if resp.status_code != 200:
+        if data is COLLECTION_GAP:
+            return {
+                "exists": False, "sections": [], "missing": list(_README_SECTIONS),
+                "not_collected": True,
+            }
+        if data is None:
             return {"exists": False, "sections": [], "missing": list(_README_SECTIONS)}
 
-        text = base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
+        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
         headings = _ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)
 
         found = [
@@ -115,33 +111,40 @@ class UsabilityCollector(GitHubCollectorBase):
 
     async def _find_doc_directory(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Optional[str]:
-        """First documentation directory present in the repository."""
+    ) -> tuple:
+        """First documentation directory present in the repository, and
+        whether any candidate along the way gapped rather than confirming
+        absence.
+        """
+        saw_gap = False
         for path in _DOC_DIRECTORIES:
             url = await self._check_file_exists(client, owner, repo, path)
+            if url is COLLECTION_GAP:
+                saw_gap = True
+                continue
             if url:
-                return path
-        return None
+                return path, saw_gap
+        return None, saw_gap
 
     async def _find_documentation_site(
         self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Optional[Dict[str, str]]:
+    ) -> tuple:
         """A published documentation site, from GitHub Pages or the homepage."""
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}", headers=self.github_headers
-        )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        if data is COLLECTION_GAP:
+            return None, True
+        if data is None:
+            return None, False
         homepage = (data.get("homepage") or "").strip()
         if homepage:
-            return {"url": homepage, "source": "repository homepage"}
+            return {"url": homepage, "source": "repository homepage"}, False
         if data.get("has_pages"):
-            return {"url": f"https://{owner}.github.io/{repo}/", "source": "GitHub Pages"}
-        return None
+            return {"url": f"https://{owner}.github.io/{repo}/", "source": "GitHub Pages"}, False
+        return None, False
 
     def _calculate_score(
-        self, readme: Dict, doc_dir: Optional[str], site: Optional[Dict]
+        self, readme: Dict, doc_dir: Optional[str], site: Optional[Dict],
+        has_gap: bool = False,
     ) -> Dict[str, Any]:
         sections = readme.get("sections", [])
         parts = [f"README covers {len(sections)}/{len(_README_SECTIONS)} core sections"]
@@ -156,14 +159,22 @@ class UsabilityCollector(GitHubCollectorBase):
             bool(sections) and bool(doc_dir) and bool(site)
         )
 
-        sub: Dict[str, Dict[str, Any]] = {
-            "documentation_completeness": {
-                "label": "Documentation Completeness Analysis",
-                "value": "; ".join(parts),
-                "detail": ", ".join(sections) if sections else None,
-                "passing": complete,
-            }
+        doc_entry: Dict[str, Any] = {
+            "label": "Documentation Completeness Analysis",
+            "value": "; ".join(parts),
+            "detail": ", ".join(sections) if sections else None,
+            "passing": complete,
         }
+        # A negative result built on a gap (README fetch failed, or the doc
+        # directory/site lookup that the fallback path needs didn't come
+        # back) isn't a confirmed absence -- the gap could be hiding the
+        # section, directory, or site that would have made this pass. A
+        # positive result stands regardless: it was reached using data that
+        # did come back.
+        if not complete and (has_gap or readme.get("not_collected")):
+            doc_entry["not_collected"] = True
+
+        sub: Dict[str, Dict[str, Any]] = {"documentation_completeness": doc_entry}
         for key, label in [
             ("user_experience", "User Experience Assessment"),
             ("accessibility_features", "Accessibility Feature Detection"),
@@ -171,11 +182,18 @@ class UsabilityCollector(GitHubCollectorBase):
         ]:
             sub[key] = {"label": label, "value": None, "passing": False, "not_collected": True}
 
-        score = sum(1 for s in sub.values() if s.get("passing"))
+        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        score = sum(1 for s in scorable.values() if s.get("passing"))
+        max_score = len(scorable)
+        if not max_score:
+            return {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "sub_scores": sub,
+            }
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": max_score,
+            "percentage": round(score / max_score * 100, 2),
             "sub_scores": sub,
         }
 
