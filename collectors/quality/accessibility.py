@@ -18,7 +18,7 @@ import httpx
 import logging
 from typing import Any, Dict, List
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -86,27 +86,32 @@ class AccessibilityCollector(GitHubCollectorBase):
         category_results: Dict[str, Any] = {}
         all_found: List[str] = []
         all_missing: List[str] = []
+        all_not_collected: List[str] = []
 
         for category, items in _CHECKS.items():
             found: List[str] = []
             missing: List[str] = []
+            not_collected: List[str] = []
             details: Dict[str, Any] = {}
 
             # Check each item in the category concurrently.
             async def check_item(label: str, paths: List[str]) -> tuple:
+                saw_gap = False
                 for path in paths:
                     html_url = await self._check_file_exists(client, owner, repo, path)
+                    if html_url is COLLECTION_GAP:
+                        saw_gap = True
+                        continue
                     if html_url:
-                        return label, path, html_url
-                return label, paths[0], None
+                        return label, path, html_url, saw_gap
+                return label, paths[0], None, saw_gap
 
             results = await asyncio.gather(
                 *[check_item(label, paths) for label, paths in items.items()]
             )
 
-            for label, matched_path, html_url in results:
-                exists = bool(html_url)
-                if exists:
+            for label, matched_path, html_url, saw_gap in results:
+                if html_url:
                     found.append(label)
                     details[label] = {
                         "exists": True,
@@ -114,24 +119,29 @@ class AccessibilityCollector(GitHubCollectorBase):
                         "url": html_url,
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
+                elif saw_gap:
+                    not_collected.append(label)
+                    details[label] = {"not_collected": True}
                 else:
                     missing.append(label)
                     details[label] = {"exists": False}
 
             all_found.extend(found)
             all_missing.extend(missing)
-            total = len(items)
+            all_not_collected.extend(not_collected)
+            count_total = len(items) - len(not_collected)
             category_results[category] = {
                 "found": found,
                 "missing": missing,
+                "not_collected": not_collected,
                 "details": details,
                 "count_found": len(found),
-                "count_total": total,
-                "percentage": round(len(found) / total * 100, 1) if total else 0.0,
+                "count_total": count_total,
+                "percentage": round(len(found) / count_total * 100, 1) if count_total else None,
             }
 
         total_checks = len(all_found) + len(all_missing)
-        overall_pct = round(len(all_found) / total_checks * 100, 1) if total_checks else 0.0
+        overall_pct = round(len(all_found) / total_checks * 100, 1) if total_checks else None
 
         has_container = bool(category_results["containers"]["found"])
         has_portable_build = bool(category_results["build_systems"]["found"])
@@ -144,9 +154,10 @@ class AccessibilityCollector(GitHubCollectorBase):
             "has_portable_build_system": has_portable_build,
             "categories": category_results,
             "overall_score": {
-                "score": len(all_found),
+                "score": len(all_found) if total_checks else None,
                 "max_score": total_checks,
                 "percentage": overall_pct,
+                **({"status": "not_collected"} if not total_checks else {}),
             },
         }
 
