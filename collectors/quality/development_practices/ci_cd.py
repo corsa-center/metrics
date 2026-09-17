@@ -20,12 +20,10 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import RetryingTransport
+from collectors.ecosystem.base import RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
-# Cycle-time "elite" threshold from DORA: less than one day (in hours).
-_CYCLE_TIME_ELITE_HOURS = 24
 # DORA "elite" deployment frequency: at least once per day → ≥1 per year window.
 _MIN_DEPLOYMENTS_PER_YEAR = 1
 _MIN_RELEASES_PER_YEAR = 1
@@ -137,9 +135,12 @@ class CICDMetricsCollector:
         if time_to_failure is not None and time_to_failure > 0 and (time_to_failure / 3600) < 1:
             score += 1
 
-        # Average cycle time < 1 week (168 hours)
+        # Average cycle time under the configured cap (168h / 1 week by default --
+        # see config/thresholds.yaml for why that's the default and not DORA's
+        # 24h "elite" tier).
         cycle_time = results.get("average_cycle_time")
-        if cycle_time is not None and cycle_time > 0 and (cycle_time / 3600) < (7 * 24):
+        max_cycle_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_cycle_time_hours")
+        if cycle_time is not None and cycle_time > 0 and (cycle_time / 3600) < max_cycle_hours:
             score += 1
 
         safe_max = max(max_score, 1)

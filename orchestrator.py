@@ -27,6 +27,8 @@ import httpx
 import re
 import yaml
 
+from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -135,6 +137,12 @@ class MetricsOrchestrator:
         """
         self.config = self._load_config(config_path)
         self._configure_logging()
+        # Overrides for config/thresholds.yaml's defaults (see that file).
+        # Installed before any collector's collect() can run, so every
+        # get_threshold() call during this process sees the final value.
+        # An override referencing a threshold thresholds.yaml doesn't define
+        # raises here, at startup, rather than being silently ignored.
+        configure_threshold_overrides(self.config.get("thresholds"))
         self.dashboard_base_url = self.config.get(
             "dashboard_base_url", "https://corsa.center/dashboard"
         ).rstrip("/")
@@ -1416,14 +1424,14 @@ class MetricsOrchestrator:
 
             # 3. Activity Trend Monitoring
             trend = commits.get("recent_trend", "unknown")
-            trend_ok = trend in ("stable", "increasing")
+            trend_ok = trend in get_threshold("4.2.3", "Activity Trend Monitoring")
             maint_pts += 1 if trend_ok else 0
             maint_lines.append(f'<p><strong>Activity Trend Monitoring:</strong> '
                                 f'{trend.capitalize()} {"✓" if trend_ok else "✗"}</p>')
 
             # 4. Release Pattern Assessment
             rel_count = releases.get("releases_last_year", 0)
-            rel_ok = rel_count >= 1
+            rel_ok = rel_count >= get_threshold("4.2.3", "Release Pattern Assessment")
             maint_pts += 1 if rel_ok else 0
             rel_detail = (f'{releases["latest_release"]} ({releases.get("days_since_latest_release", "?")} days ago)'
                           if releases.get("latest_release") else "No releases")
@@ -1440,7 +1448,7 @@ class MetricsOrchestrator:
             # 5. Multi-Channel Communication Activity
             channels = maintenance.get("channels", {})
             ch_found = channels.get("found", [])
-            ch_ok = len(ch_found) >= 2
+            ch_ok = len(ch_found) >= get_threshold("4.2.3", "Multi-Channel Communication Activity")
             maint_pts += 1 if ch_ok else 0
             maint_lines.append(
                 f'<p><strong>Multi-Channel Communication Activity:</strong> '
@@ -1455,7 +1463,7 @@ class MetricsOrchestrator:
             ab = maintenance.get("abandonment", {})
             if ab.get("measurable"):
                 rate = ab.get("departure_rate", 0)
-                ab_ok = rate <= 0.5
+                ab_ok = rate <= get_threshold("4.2.3", "Contributor Abandonment Forecasting")
                 maint_pts += 1 if ab_ok else 0
                 maint_lines.append(
                     f'<p><strong>Contributor Abandonment Forecasting:</strong> '

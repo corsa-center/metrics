@@ -1,0 +1,65 @@
+# Threshold registry for CASS sub-metric pass/fail decisions.
+#
+# This is the single source of truth for every configurable threshold in the
+# framework -- the values that used to be scattered as magic numbers across
+# collectors and orchestrator.py's dashboard-rendering code, in two
+# disconnected layers with no cross-check between them. Three of those
+# numbers (a departure-rate cap, a channel count, a cycle-time cap) turned
+# out to be *defined* in a collector but never actually *read* -- the
+# rendering layer had its own duplicate literal doing the real work, and the
+# named "constant" was pure decoration. This file exists so that can't
+# happen again: every value here is read by exactly the code that decides
+# pass/fail, nothing is duplicated, and an unused or misspelled entry fails
+# a test (tests/test_thresholds.py) rather than silently doing nothing.
+#
+# Keyed by CASS report section number, then the exact sub-metric label from
+# METRICS_CATALOG.md / SECTION_SUBMETRICS in orchestrator.py -- not by
+# Python constant name, since the constant name means nothing to a project
+# maintainer deciding what to configure. A sub-metric with nothing
+# configurable (a pure presence/structural check, like "a license was
+# identified") has no entry here at all -- absence means "not
+# configurable," not "use some hidden default."
+#
+# Three value shapes:
+#   - a bare number: a single >=/<=/</> comparison
+#   - a list of strings: the value must be one of these (set membership)
+#   - a mapping: several independently-named parameters for one sub-metric
+#
+# A sub-metric that can't be measured at all (see collectors/ecosystem/base.py
+# COLLECTION_GAP, and CASS §3.5) is excluded from scoring regardless of what's
+# configured here -- these thresholds only ever apply to data that was
+# actually collected.
+#
+# Overrides: config/orchestrator.yaml can carry its own top-level
+# `thresholds:` block in this same shape to override any value below at
+# startup. An override key that doesn't match an existing default here fails
+# fast when the orchestrator starts, rather than being silently ignored.
+# Per-project and per-package threshold overrides (narrowing what a project
+# is measured against, not just its text) are not wired up yet -- see
+# GREG_FEEDBACK_pass_fail_thresholds.md item 4.
+#
+# Only the sub-metrics actually migrated to read from this file are listed
+# below; the rest still use their original inline value until they're
+# converted in a later pass (see the PR that introduced this file for the
+# first section done end-to-end).
+
+"4.2.3":
+  Activity Trend Monitoring:
+    # 52-week commit trend must be one of these to meet the threshold.
+    - stable
+    - increasing
+  Release Pattern Assessment: 1              # releases in the last year, minimum
+  Multi-Channel Communication Activity: 2     # distinct channels found, minimum
+  Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
+
+"4.3.2":
+  CI/CD Effectiveness Assessment:
+    # Average PR cycle time, in hours, maximum. The collector used to carry
+    # a `_CYCLE_TIME_ELITE_HOURS = 24` constant citing DORA's "elite" tier
+    # (<24h) in its own comment, but the code actually compared against a
+    # hardcoded 168 (one week) a few lines below it -- the constant was
+    # never read. 168 is today's real, shipped behavior; kept as the
+    # default rather than silently tightening it to what the stale comment
+    # claimed, since that would be a scoring behavior change hiding inside
+    # what's meant to be a config-plumbing refactor.
+    max_cycle_time_hours: 168
