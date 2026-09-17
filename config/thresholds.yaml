@@ -38,10 +38,15 @@
 # is measured against, not just its text) are not wired up yet -- see
 # GREG_FEEDBACK_pass_fail_thresholds.md item 4.
 #
-# Only the sub-metrics actually migrated to read from this file are listed
-# below; the rest still use their original inline value until they're
-# converted (see the PR that introduced this file for the pilot section, and
-# later commits on the same branch for the full mass-conversion).
+# Only the sub-metrics with something genuinely configurable are listed
+# below. Every numeric/set-membership pass-fail decision found across
+# collectors/ and orchestrator.py's dashboard rendering was migrated here in
+# one pass; what's left uncovered is deliberate -- pure presence/structural
+# checks (no entry needed), graduated scoring rubrics like CHAOSS's weighted
+# brackets (a different mechanism than binary pass/fail, out of scope until
+# GREG_FEEDBACK_pass_fail_thresholds.md item 5), sampling/pagination caps
+# (not a scoring decision at all), and a couple of values that only feed
+# descriptive/detail text rather than any pass/fail outcome.
 
 "4.2.1":
   Enhanced Document Detection: 2       # of {CoC, Governance, Contributing}, minimum found
