@@ -365,6 +365,5 @@ ls -lh ../dashboard/explore/github-data/ecosystemMetrics.json
 ## Support
 
 For issues or questions:
-- **Metrics Repo:** https://github.com/brtnfld/metrics/issues
-- **Dashboard Repo:** https://github.com/brtnfld/dashboard/issues
-- **Documentation:** See `CORSA_INTEGRATION_PLAN.md`
+- **Metrics Repo:** https://github.com/corsa-center/metrics/issues
+- **Dashboard Repo:** https://github.com/corsa-center/dashboard/issues
