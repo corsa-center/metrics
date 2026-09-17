@@ -70,7 +70,6 @@ _PLATFORM_DOC_TERMS = {
 _MAX_WORKFLOW_FILES = 25
 
 
-
 class DeploymentEnvironmentCollector(GitHubCollectorBase):
     """Detects the OS families a project's CI exercises (Section 4.3.5)."""
 

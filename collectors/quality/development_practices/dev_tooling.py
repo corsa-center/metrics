@@ -49,7 +49,6 @@ _TOOLING_PATHS = {
 _PR_SAMPLE_SIZE = 50
 
 
-
 class DevToolingCollector(GitHubCollectorBase):
     """Collects testing, review and tooling practices (Section 4.3.2)."""
 

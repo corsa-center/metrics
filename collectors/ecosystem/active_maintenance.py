@@ -33,10 +33,7 @@ _CHANNEL_PATTERNS = {
 # The pass/fail thresholds for this collector's data (departure rate,
 # channel count, release cadence, etc.) live in config/thresholds.yaml under
 # section "4.2.3" and are applied in orchestrator.py's dashboard rendering,
-# not here -- this collector only gathers the underlying numbers. Two
-# constants used to sit here duplicating that intent (a departure-rate cap
-# and a channel-count minimum) without either ever being read; removed
-# rather than wired in, since the real decision site was already elsewhere.
+# not here -- this collector only gathers the underlying numbers.
 
 
 class ActiveMaintenanceCollector:

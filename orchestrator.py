@@ -1238,6 +1238,10 @@ class MetricsOrchestrator:
                 sc_val = scorecard.get("score")
                 sc_url = scorecard.get("scorecard_url", "")
                 checks = f'{scorecard.get("checks_passed", 0)}/{scorecard.get("checks_total", 0)} checks passed'
+                # Reused below for the per-check breakdown too, deliberately:
+                # a check listed as "failing" should always be one that's
+                # actually below the same bar the overall pass/fail uses,
+                # not an independent number that could drift from it.
                 min_score = get_threshold("4.2.1", "OpenSSF Badge Integration", "min_score")
                 passing = sc_val is not None and sc_val >= min_score
                 gov_pts += 1 if passing else 0
@@ -1584,8 +1588,8 @@ class MetricsOrchestrator:
                 warnings.append("repository archived")
             if indicators.get("maintenance_signals"):
                 warnings.extend(indicators["maintenance_signals"])
-            max_days_since_push = get_threshold("4.2.10", "Maintenance Mode Detection", "max_days_since_push")
-            if days_since_push is not None and days_since_push > max_days_since_push:
+            if (days_since_push is not None
+                    and days_since_push > get_threshold("4.2.10", "Maintenance Mode Detection", "max_days_since_push")):
                 warnings.append(f"no push in {days_since_push} days")
             no_warnings = not warnings
             long_pts += 1 if no_warnings else 0
@@ -1905,8 +1909,7 @@ class MetricsOrchestrator:
             if ci_cd:
                 cicd_score = ci_cd.get("score", 0)
                 cicd_max   = ci_cd.get("max_score", 6)
-                min_score  = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_score")
-                passing    = cicd_score > min_score
+                passing    = cicd_score > get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_score")
                 dp_pts    += 1 if passing else 0
                 mark       = "✓" if passing else "✗"
                 section_432_lines.append(

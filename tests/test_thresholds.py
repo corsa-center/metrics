@@ -84,9 +84,6 @@ class TestOverridePrecedence:
 
     def test_override_does_not_leak_to_other_labels(self, registry):
         registry.set_overrides({"4.2.3": {"Release Pattern Assessment": 2}})
-        assert registry.get("4.2.3", "Multi-Channel Communication Activity") == 2 or True
-        # (the "or True" above is just documenting that 2 happens to be both
-        # values today -- the real assertion is the independent one below)
         assert registry.get("4.2.3", "Contributor Abandonment Forecasting") == 0.5
 
     def test_partial_dict_override_leaves_other_params_at_default(self, registry):
@@ -94,6 +91,9 @@ class TestOverridePrecedence:
             "4.3.2": {"CI/CD Effectiveness Assessment": {"max_cycle_time_hours": 48}}
         })
         assert registry.get("4.3.2", "CI/CD Effectiveness Assessment", "max_cycle_time_hours") == 48
+        # The sibling param wasn't touched by the override -- confirm it's
+        # still at its own default, not dragged along or cleared.
+        assert registry.get("4.3.2", "CI/CD Effectiveness Assessment", "min_success_rate_pct") == 60
 
     def test_unrecognized_section_override_raises(self, registry):
         with pytest.raises(ValueError):
@@ -112,6 +112,22 @@ class TestOverridePrecedence:
     def test_dict_override_for_a_scalar_default_raises(self, registry):
         with pytest.raises(ValueError):
             registry.set_overrides({"4.2.3": {"Release Pattern Assessment": {"x": 1}}})
+
+    def test_scalar_override_for_a_dict_default_raises(self, registry):
+        # The reverse of the case above: a sub-metric with named parameters
+        # can't be overridden with a bare value -- silently accepting one
+        # would mean get(section, label, param=...) just ignores it, since
+        # only a dict override is ever consulted for a specific param.
+        with pytest.raises(ValueError):
+            registry.set_overrides({"4.3.2": {"CI/CD Effectiveness Assessment": 999}})
+
+    def test_null_override_raises(self, registry):
+        with pytest.raises(ValueError):
+            registry.set_overrides({"4.2.3": {"Release Pattern Assessment": None}})
+
+    def test_bare_lookup_of_a_dict_default_without_param_raises(self, registry):
+        with pytest.raises(KeyError):
+            registry.get("4.3.2", "CI/CD Effectiveness Assessment")
 
     def test_empty_overrides_is_a_noop(self, registry):
         registry.set_overrides({})

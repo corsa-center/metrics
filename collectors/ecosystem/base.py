@@ -331,11 +331,18 @@ class ThresholdRegistry:
                         f"which has no default -- not a recognized threshold"
                     )
                 default_value = default_labels[label]
-                if isinstance(value, dict):
-                    if not isinstance(default_value, dict):
+                if value is None:
+                    raise ValueError(
+                        f"thresholds override for {section!r} / {label!r} is null "
+                        f"-- omit the key entirely instead of overriding to no value"
+                    )
+                if isinstance(default_value, dict):
+                    if not isinstance(value, dict):
                         raise ValueError(
-                            f"thresholds override for {section!r} / {label!r} is a "
-                            f"mapping, but the default is a single value"
+                            f"thresholds override for {section!r} / {label!r} must "
+                            f"be a mapping of parameter name -> value, since the "
+                            f"default has named parameters -- got "
+                            f"{type(value).__name__}"
                         )
                     unknown = set(value) - set(default_value)
                     if unknown:
@@ -343,6 +350,11 @@ class ThresholdRegistry:
                             f"thresholds override for {section!r} / {label!r} sets "
                             f"unrecognized parameter(s) {sorted(unknown)}"
                         )
+                elif isinstance(value, dict):
+                    raise ValueError(
+                        f"thresholds override for {section!r} / {label!r} is a "
+                        f"mapping, but the default is a single value"
+                    )
         self._overrides = overrides
 
     def get(self, section: str, label: str, param: Optional[str] = None) -> _ThresholdValue:
@@ -364,11 +376,11 @@ class ThresholdRegistry:
 
         override_value = self._overrides.get(section, {}).get(label)
 
-        if param is not None:
-            if not isinstance(default_value, dict):
+        if isinstance(default_value, dict):
+            if param is None:
                 raise KeyError(
-                    f"threshold {section!r} / {label!r} has no parameters "
-                    f"(it's a single value) -- called with param={param!r}"
+                    f"threshold {section!r} / {label!r} has named parameters -- "
+                    f"call with param=<name>, not a bare lookup"
                 )
             if param not in default_value:
                 raise KeyError(
@@ -378,6 +390,11 @@ class ThresholdRegistry:
                 return override_value[param]
             return default_value[param]
 
+        if param is not None:
+            raise KeyError(
+                f"threshold {section!r} / {label!r} has no parameters "
+                f"(it's a single value) -- called with param={param!r}"
+            )
         if override_value is not None:
             return override_value
         return default_value

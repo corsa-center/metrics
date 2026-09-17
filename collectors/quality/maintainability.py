@@ -220,8 +220,9 @@ class MaintainabilityCollector(GitHubCollectorBase):
             ):
                 docs.append(f)
 
+        large_file_bytes = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
         sizes = [f["size"] for f in source]
-        large = [s for s in sizes if s > get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")]
+        large = [s for s in sizes if s > large_file_bytes]
         return {
             "source_files": len(source),
             "test_files": len(tests),

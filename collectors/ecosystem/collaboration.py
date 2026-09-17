@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 
 _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
 
-
 # ecosyste.ms publishes a low per-second rate limit; one retry with a pause
 # covers the throttling seen when several lookups run back to back.
 _RATE_LIMIT_PAUSE_SECONDS = 2

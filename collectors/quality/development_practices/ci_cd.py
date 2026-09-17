@@ -113,6 +113,10 @@ class CICDMetricsCollector:
                 max_score -= 1
             else:
                 num_days = int(re.findall(r"\d+", num_deployments_key)[0])
+                # The max(1, ...) floor predates the threshold registry and
+                # is intentionally not overridable: a short observation
+                # window scaling min_deployments_per_year down to 0 still
+                # requires at least one deployment to pass.
                 if count >= max(1, int((num_days / 365) * min_deployments_per_year)):
                     score += 1
 
@@ -127,6 +131,7 @@ class CICDMetricsCollector:
                 max_score -= 1
             else:
                 num_days = int(re.findall(r"\d+", num_releases_key)[0])
+                # Same floor as deployment frequency above.
                 if count >= max(1, int((num_days / 365) * min_releases_per_year)):
                     score += 1
 

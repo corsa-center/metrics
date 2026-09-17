@@ -351,8 +351,7 @@ class ReliabilityCollector(GitHubCollectorBase):
             return {"measurable": False, "recent": recent, "previous": previous,
                     "direction": None, "source": source, "not_collected": True}
 
-        min_trend_volume = get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume")
-        if recent + previous < min_trend_volume:
+        if recent + previous < get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume"):
             return {"measurable": False, "recent": recent, "previous": previous,
                     "direction": None, "source": source}
 
@@ -360,8 +359,7 @@ class ReliabilityCollector(GitHubCollectorBase):
             direction = "increasing"
         else:
             ratio = recent / previous
-            trend_tolerance = get_threshold("4.3.1", "Reliability Trend Analysis", "trend_tolerance")
-            direction = ("stable" if ratio <= trend_tolerance
+            direction = ("stable" if ratio <= get_threshold("4.3.1", "Reliability Trend Analysis", "trend_tolerance")
                          else "increasing")
             if ratio < 0.75:
                 direction = "improving"

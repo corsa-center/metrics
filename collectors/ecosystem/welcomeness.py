@@ -49,7 +49,6 @@ _PUBLIC_CHANNELS = {
 }
 
 
-
 class WelcomenessCollector(GitHubCollectorBase):
     """Collects decision-making visibility signals (Section 4.2.6)."""
 

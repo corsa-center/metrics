@@ -1,9 +1,12 @@
 # Threshold registry for CASS sub-metric pass/fail decisions.
 #
 # Single source of truth for every configurable threshold in the framework.
-# Every value here is read by exactly the code that decides pass/fail --
-# nothing is duplicated -- and an unused or misspelled entry fails a test
-# (tests/test_thresholds.py) instead of silently doing nothing.
+# Every value here is read by exactly the code that decides pass/fail for it
+# -- a couple of entries intentionally repeat the same number under separate
+# keys (noted where that happens), but nothing here is decoration for a
+# value some other code path actually uses instead. An unused or misspelled
+# entry fails a test (tests/test_thresholds.py) instead of silently doing
+# nothing.
 #
 # Keyed by CASS report section number, then the exact sub-metric label from
 # METRICS_CATALOG.md / SECTION_SUBMETRICS in orchestrator.py. A sub-metric
@@ -62,10 +65,10 @@
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
 "4.2.4":
-  Response Time Tracking: 168           # median hours to first response, maximum (one week)
-  Issue Resolution Analysis: 720        # median hours to close, maximum (30 days)
-  Pull Request Flow Assessment: 50      # PR merge rate %, minimum
-  Support Request Closure Analysis: 2.0 # open/closed issue ratio, maximum
+  Response Time Tracking: 168           # median hours to first response, maximum (one week, strictly under)
+  Issue Resolution Analysis: 720        # median hours to close, maximum (30 days, strictly under)
+  Pull Request Flow Assessment: 50      # PR merge rate %, minimum (strictly over)
+  Support Request Closure Analysis: 2.0 # open/closed issue ratio, maximum (strictly under)
   Engagement Quality Metrics: 2         # median comments per issue, minimum
   Communication Pattern Analysis:
     response_window_hours: 168          # "timely" response window (one week)
@@ -130,21 +133,17 @@
 
 "4.3.2":
   CI/CD Effectiveness Assessment:
-    # Average PR cycle time, in hours, maximum. The collector used to carry
-    # a `_CYCLE_TIME_ELITE_HOURS = 24` constant citing DORA's "elite" tier
-    # (<24h) in its own comment, but the code actually compared against a
-    # hardcoded 168 (one week) a few lines below it -- the constant was
-    # never read. 168 is today's real, shipped behavior; kept as the
-    # default rather than silently tightening it to what the stale comment
-    # claimed, since that would be a scoring behavior change hiding inside
-    # what's meant to be a config-plumbing refactor.
+    # Average PR cycle time, in hours, maximum. 168 (one week) is today's
+    # real, shipped behavior -- not DORA's 24h "elite" tier -- so it's kept
+    # as the default rather than silently tightened, which would be a
+    # scoring change, not a config-plumbing one.
     max_cycle_time_hours: 168
-    max_execution_time_hours: 1         # average workflow run time, maximum
-    min_success_rate_pct: 60            # overall workflow success rate, minimum
+    max_execution_time_hours: 1         # average workflow run time, maximum (strictly under)
+    min_success_rate_pct: 60            # overall workflow success rate, minimum (strictly over)
     min_deployments_per_year: 1         # DORA "elite" deployment frequency floor
     min_releases_per_year: 1            # GitHub releases per year, minimum
-    max_time_to_failure_hours: 1        # average failed-run duration, maximum
-    min_score: 0                        # orchestrator's own gate: score must exceed this (score/max_score shown alongside)
+    max_time_to_failure_hours: 1        # average failed-run duration, maximum (strictly under)
+    min_score: 0                        # orchestrator's own gate, strictly over this (score/max_score shown alongside)
   Testing Framework Excellence: 2       # of 4 testing indicators, minimum found
   Code Review Quality Analysis: 70.0    # merged PRs reviewed %, minimum (leaves room for trivial/automated merges)
   Development Tool Integration: 2       # of 4 dev tooling indicators, minimum found
