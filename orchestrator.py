@@ -1547,10 +1547,10 @@ class MetricsOrchestrator:
             rel_last_year = releases.get("releases_last_year", 0)
             dims_active = sum([
                 commits_52w > 0,
-                rel_last_year >= 1,
-                active_weeks >= 26,   # committed in at least half the weeks of the year
+                rel_last_year >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_releases_last_year"),
+                active_weeks >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_active_weeks"),
             ])
-            activity_ok = dims_active >= 2
+            activity_ok = dims_active >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_dimensions")
             long_pts += 1 if activity_ok else 0
             section_4210_lines.append(
                 f'<p><strong>Comprehensive Activity Analysis:</strong> '
@@ -1561,12 +1561,10 @@ class MetricsOrchestrator:
                 f'release(s) in the last year; active in {active_weeks}/52 weeks</p>'
             )
 
-            # 2. Contributor Viability Assessment — bus factor. Threshold (>= 3) matches
-            #    active_maintenance.py and 4.3.6 so the same number can't read healthy
-            #    in one section and at-risk in another.
+            # 2. Contributor Viability Assessment — bus factor.
             bus_factor = contribs.get("bus_factor", 0)
             total_contribs = contribs.get("total_contributors", 0)
-            viable = bus_factor >= 3
+            viable = bus_factor >= get_threshold("4.2.10", "Contributor Viability Assessment")
             long_pts += 1 if viable else 0
             section_4210_lines.append(
                 f'<p><strong>Contributor Viability Assessment:</strong> '
@@ -1585,7 +1583,8 @@ class MetricsOrchestrator:
                 warnings.append("repository archived")
             if indicators.get("maintenance_signals"):
                 warnings.extend(indicators["maintenance_signals"])
-            if days_since_push is not None and days_since_push > 365:
+            max_days_since_push = get_threshold("4.2.10", "Maintenance Mode Detection", "max_days_since_push")
+            if days_since_push is not None and days_since_push > max_days_since_push:
                 warnings.append(f"no push in {days_since_push} days")
             no_warnings = not warnings
             long_pts += 1 if no_warnings else 0
@@ -1597,7 +1596,7 @@ class MetricsOrchestrator:
 
             # 4. Community Health Trends — 52-week commit trend from /stats/participation.
             trend = commits.get("recent_trend", "unknown")
-            trend_ok = trend in ("stable", "increasing")
+            trend_ok = trend in get_threshold("4.2.10", "Community Health Trends")
             long_pts += 1 if trend_ok else 0
             section_4210_lines.append(
                 f'<p><strong>Community Health Trends:</strong> '
@@ -1624,7 +1623,7 @@ class MetricsOrchestrator:
                 stage = "Mature"
             else:
                 stage = "Legacy"
-            lifecycle_ok = stage in ("Growing", "Mature")
+            lifecycle_ok = stage in get_threshold("4.2.10", "Project Lifecycle Assessment")
             long_pts += 1 if lifecycle_ok else 0
             section_4210_lines.append(
                 f'<p><strong>Project Lifecycle Assessment:</strong> '
@@ -1809,7 +1808,7 @@ class MetricsOrchestrator:
             if test_coverage.get("coverage_exists"):
                 pct = test_coverage["coverage_percentage"]
                 url = test_coverage.get("coverage_url", "")
-                passing = pct >= 80
+                passing = pct >= get_threshold("4.3.1", "Test Coverage Excellence")
                 rel_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
                 link = f'<a href="{url}">{pct}%</a>' if url else f'{pct}%'
@@ -1905,7 +1904,8 @@ class MetricsOrchestrator:
             if ci_cd:
                 cicd_score = ci_cd.get("score", 0)
                 cicd_max   = ci_cd.get("max_score", 6)
-                passing    = cicd_score > 0
+                min_score  = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_score")
+                passing    = cicd_score > min_score
                 dp_pts    += 1 if passing else 0
                 mark       = "✓" if passing else "✗"
                 section_432_lines.append(
@@ -1937,7 +1937,7 @@ class MetricsOrchestrator:
                     level = badge_status.get("level", "").capitalize()
                     badge_url = badge_status.get("url", "")
                     pct = badge_status.get("progress_percentage", 0)
-                    passing = pct >= 100
+                    passing = pct >= get_threshold("4.3.2", "Community Contribution Facilitation")
                     dp_pts += 1 if passing else 0
                     mark = "✓" if passing else "✗"
                     link = f'<a href="{badge_url}">{level}</a>' if badge_url else level
@@ -2074,12 +2074,9 @@ class MetricsOrchestrator:
                     section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
 
             # 4. Knowledge Distribution Analysis — bus factor (reuses 4.2.3 data)
-            # Threshold matches active_maintenance.py's own "healthy bus factor"
-            # definition (>= 3), so a project isn't healthy in one section and
-            # at-risk in another for the same underlying number.
             bus_factor = contributor_activity.get("bus_factor", 0)
             top_pct = contributor_activity.get("top_contributor_pct", 0)
-            healthy = bus_factor >= 3
+            healthy = bus_factor >= get_threshold("4.3.6", "Knowledge Distribution Analysis")
             maint436_pts += 1 if healthy else 0
             mark = "✓" if healthy else "✗"
             section_436_lines.append(

@@ -24,10 +24,6 @@ from collectors.ecosystem.base import RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
-# DORA "elite" deployment frequency: at least once per day → ≥1 per year window.
-_MIN_DEPLOYMENTS_PER_YEAR = 1
-_MIN_RELEASES_PER_YEAR = 1
-
 
 class CICDMetricsCollector:
     """Collects CI/CD development-practice metrics from GitHub (Section 4.3.2)."""
@@ -94,16 +90,19 @@ class CICDMetricsCollector:
         score = 0
         max_score = 6
 
-        # Workflow execution time < 1 hour (0 means no runs collected — skip)
+        # Workflow execution time under the cap (0 means no runs collected — skip)
+        max_exec_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_execution_time_hours")
         exec_time = results.get("average_workflow_execution_time")
-        if exec_time is not None and exec_time > 0 and (exec_time / 3600) < 1:
+        if exec_time is not None and exec_time > 0 and (exec_time / 3600) < max_exec_hours:
             score += 1
 
-        # Overall workflow success > 60%
-        if results.get("total_workflow_success_percentage", 0) > 60:
+        # Overall workflow success above the configured rate
+        min_success_pct = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_success_rate_pct")
+        if results.get("total_workflow_success_percentage", 0) > min_success_pct:
             score += 1
 
-        # Deployment frequency: at least 1 per year
+        # Deployment frequency: at least the configured minimum per year
+        min_deployments_per_year = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_deployments_per_year")
         num_deployments_key = next(
             (k for k in results if "num_of_deployments" in k), None
         )
@@ -114,10 +113,11 @@ class CICDMetricsCollector:
                 max_score -= 1
             else:
                 num_days = int(re.findall(r"\d+", num_deployments_key)[0])
-                if count >= max(1, int((num_days / 365) * _MIN_DEPLOYMENTS_PER_YEAR)):
+                if count >= max(1, int((num_days / 365) * min_deployments_per_year)):
                     score += 1
 
-        # Release frequency: at least 1 per year
+        # Release frequency: at least the configured minimum per year
+        min_releases_per_year = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_releases_per_year")
         num_releases_key = next(
             (k for k in results if "num_of_releases" in k), None
         )
@@ -127,12 +127,13 @@ class CICDMetricsCollector:
                 max_score -= 1
             else:
                 num_days = int(re.findall(r"\d+", num_releases_key)[0])
-                if count >= max(1, int((num_days / 365) * _MIN_RELEASES_PER_YEAR)):
+                if count >= max(1, int((num_days / 365) * min_releases_per_year)):
                     score += 1
 
-        # Average time to failure < 1 hour (0 means no failed runs — skip)
+        # Average time to failure under the cap (0 means no failed runs — skip)
+        max_time_to_failure_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_time_to_failure_hours")
         time_to_failure = results.get("average_time_to_failure")
-        if time_to_failure is not None and time_to_failure > 0 and (time_to_failure / 3600) < 1:
+        if time_to_failure is not None and time_to_failure > 0 and (time_to_failure / 3600) < max_time_to_failure_hours:
             score += 1
 
         # Average cycle time under the configured cap (168h / 1 week by default --

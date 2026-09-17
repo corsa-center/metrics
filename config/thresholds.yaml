@@ -66,6 +66,28 @@
   Multi-Channel Communication Activity: 2     # distinct channels found, minimum
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
+"4.2.10":
+  Comprehensive Activity Analysis:
+    min_dimensions: 2                  # of 3 dimensions active, minimum
+    min_active_weeks: 26               # of 52 weeks with a commit, minimum
+    min_releases_last_year: 1          # releases in the last year, minimum
+  Contributor Viability Assessment: 3  # bus factor, minimum
+  Maintenance Mode Detection:
+    max_days_since_push: 365           # days since last push before it's a warning sign
+  Community Health Trends:
+    # Same values as 4.2.3's Activity Trend Monitoring, kept as a separate
+    # key rather than shared: they measure the same underlying trend for two
+    # different CASS sections, and each section's threshold should be free
+    # to move independently even though they happen to agree today.
+    - stable
+    - increasing
+  Project Lifecycle Assessment:
+    - Growing
+    - Mature
+
+"4.3.1":
+  Test Coverage Excellence: 80          # Codecov line coverage %, minimum
+
 "4.3.2":
   CI/CD Effectiveness Assessment:
     # Average PR cycle time, in hours, maximum. The collector used to carry
@@ -77,3 +99,16 @@
     # claimed, since that would be a scoring behavior change hiding inside
     # what's meant to be a config-plumbing refactor.
     max_cycle_time_hours: 168
+    max_execution_time_hours: 1         # average workflow run time, maximum
+    min_success_rate_pct: 60            # overall workflow success rate, minimum
+    min_deployments_per_year: 1         # DORA "elite" deployment frequency floor
+    min_releases_per_year: 1            # GitHub releases per year, minimum
+    max_time_to_failure_hours: 1        # average failed-run duration, maximum
+    min_score: 0                        # orchestrator's own gate: score must exceed this (score/max_score shown alongside)
+  Community Contribution Facilitation: 100  # OpenSSF badge progress %, minimum (must be 100 -- fully registered)
+
+"4.3.6":
+  Knowledge Distribution Analysis: 3    # bus factor, minimum -- same value as 4.2.10's
+                                         # Contributor Viability Assessment, kept as its own
+                                         # key for the same reason as 4.2.10's Community
+                                         # Health Trends above
