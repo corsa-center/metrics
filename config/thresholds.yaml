@@ -66,6 +66,10 @@
   Multi-Channel Communication Activity: 2     # distinct channels found, minimum
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
+"4.2.6":
+  Decision-Making Visibility: 2   # public decision-making channels/documents found, minimum
+                                   # (one alone -- e.g. a wiki nobody writes in -- says little)
+
 "4.2.10":
   Comprehensive Activity Analysis:
     min_dimensions: 2                  # of 3 dimensions active, minimum
@@ -106,6 +110,11 @@
     max_time_to_failure_hours: 1        # average failed-run duration, maximum
     min_score: 0                        # orchestrator's own gate: score must exceed this (score/max_score shown alongside)
   Community Contribution Facilitation: 100  # OpenSSF badge progress %, minimum (must be 100 -- fully registered)
+
+"4.3.5":
+  Deployment Environment Testing: 2      # distinct CI runner OS families, minimum
+  Architecture Compatibility Analysis: 1 # non-x86 architectures explicitly tested, minimum
+  Platform Documentation Evaluation: 2   # supported platforms named in the README, minimum
 
 "4.3.6":
   Knowledge Distribution Analysis: 3    # bus factor, minimum -- same value as 4.2.10's

@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +69,6 @@ _PLATFORM_DOC_TERMS = {
 # carry dozens of them (HDF5 has ~40).
 _MAX_WORKFLOW_FILES = 25
 
-# Building on more than one OS family is what this sub-metric is asking about.
-_MIN_OS_FAMILIES = 2
-# Any explicitly-tested non-x86 architecture means the project is portable
-# beyond the default; x86-64 plus one other is the bar.
-_MIN_EXTRA_ARCHITECTURES = 1
-# Naming at least two supported platforms counts as documenting portability.
-_MIN_DOCUMENTED_PLATFORMS = 2
 
 
 class DeploymentEnvironmentCollector(GitHubCollectorBase):
@@ -199,7 +192,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         wall of text that says nothing the family list doesn't already say.
         """
         names = sorted(detected)
-        passing = len(names) >= _MIN_OS_FAMILIES
+        passing = len(names) >= get_threshold("4.3.5", "Deployment Environment Testing")
         if names:
             value = f"{len(names)} environment{'s' if len(names) != 1 else ''}: " + ", ".join(names)
         else:
@@ -207,13 +200,13 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         architectures = architectures or []
         documented = documented or []
 
-        arch_ok = len(architectures) >= _MIN_EXTRA_ARCHITECTURES
+        arch_ok = len(architectures) >= get_threshold("4.3.5", "Architecture Compatibility Analysis")
         arch_value = (
             "x86-64 plus " + ", ".join(architectures) if architectures
             else "x86-64 only"
         ) if detected else "No CI architectures detected"
 
-        docs_ok = len(documented) >= _MIN_DOCUMENTED_PLATFORMS
+        docs_ok = len(documented) >= get_threshold("4.3.5", "Platform Documentation Evaluation")
         docs_value = (
             f"{len(documented)} platform{'s' if len(documented) != 1 else ''} named: "
             + ", ".join(documented)
