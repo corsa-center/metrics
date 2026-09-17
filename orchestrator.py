@@ -1208,7 +1208,8 @@ class MetricsOrchestrator:
                         doc_sub_lines.append(f'<p class="sub-detail">{label}: Not found</p>')
                 gov_score = governance.get("overall_score", {})
                 doc_total = gov_score.get("max_score", 3)
-                passing = doc_found >= 2  # CoC + Contributing is sufficient; Governance is optional
+                # CoC + Contributing is sufficient; Governance is optional.
+                passing = doc_found >= get_threshold("4.2.1", "Enhanced Document Detection")
                 gov_pts += 1 if passing else 0
                 gov_lines.append(
                     f'<p><strong>Enhanced Document Detection:</strong> {doc_found}/{doc_total} {"✓" if passing else "✗"}</p>'
@@ -1222,7 +1223,7 @@ class MetricsOrchestrator:
             #    decision process, or merely exist?
             kw = governance.get("keyword_analysis", {})
             groups = kw.get("groups_found", [])
-            kw_ok = len(groups) >= 2
+            kw_ok = len(groups) >= get_threshold("4.2.1", "Governance Keyword Analysis")
             gov_pts += 1 if kw_ok else 0
             gov_lines.append(
                 f'<p><strong>Governance Keyword Analysis:</strong> '
@@ -1231,12 +1232,13 @@ class MetricsOrchestrator:
             if groups:
                 gov_lines.append(f'<p class="sub-detail">{", ".join(groups)}</p>')
 
-            # 3. OpenSSF Badge Integration — use Scorecard as proxy (passes if score ≥ 7.0)
+            # 3. OpenSSF Badge Integration — use Scorecard as proxy
             if scorecard and scorecard.get("scorecard_exists"):
                 sc_val = scorecard.get("score")
                 sc_url = scorecard.get("scorecard_url", "")
                 checks = f'{scorecard.get("checks_passed", 0)}/{scorecard.get("checks_total", 0)} checks passed'
-                passing = sc_val is not None and sc_val >= 7.0
+                min_score = get_threshold("4.2.1", "OpenSSF Badge Integration", "min_score")
+                passing = sc_val is not None and sc_val >= min_score
                 gov_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
                 link = f'<a href="{sc_url}">{sc_val}/10</a>' if sc_url else f'{sc_val}/10'
@@ -1245,7 +1247,7 @@ class MetricsOrchestrator:
                 # aren't real failures, just checks that don't apply here.
                 failing_checks = {
                     name: info for name, info in scorecard.get("checks", {}).items()
-                    if 0 <= info.get("score", 0) < 7
+                    if 0 <= info.get("score", 0) < min_score
                 }
                 for name, info in sorted(failing_checks.items(), key=lambda kv: kv[1].get("score", 0)):
                     doc_url = info.get("documentation_url", "")
@@ -1260,13 +1262,12 @@ class MetricsOrchestrator:
 
             # 4. CHAOSS Governance Metrics — weighted CHAOSS health score.
             # CHAOSSGovernanceCollector was already being run for the dimension
-            # score; this surfaces it in the section it belongs to. "Good" (>= 60)
-            # is the collector's own threshold for a passing project.
+            # score; this surfaces it in the section it belongs to.
             if chaoss:
                 chaoss_score = chaoss.get("overall_score", {})
                 score_val = chaoss_score.get("score", 0)
                 status = chaoss_score.get("status", "unknown")
-                chaoss_ok = score_val >= 60
+                chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
                 gov_pts += 1 if chaoss_ok else 0
                 gov_lines.append(
                     f'<p><strong>CHAOSS Governance Metrics:</strong> '

@@ -40,8 +40,22 @@
 #
 # Only the sub-metrics actually migrated to read from this file are listed
 # below; the rest still use their original inline value until they're
-# converted in a later pass (see the PR that introduced this file for the
-# first section done end-to-end).
+# converted (see the PR that introduced this file for the pilot section, and
+# later commits on the same branch for the full mass-conversion).
+
+"4.2.1":
+  Enhanced Document Detection: 2       # of {CoC, Governance, Contributing}, minimum found
+  Governance Keyword Analysis: 2       # of 4 governance concept groups, minimum documented
+  OpenSSF Badge Integration:
+    min_score: 7.0                     # OpenSSF Scorecard score /10, minimum
+  CHAOSS Governance Metrics: 60        # weighted CHAOSS health score /100, minimum
+  Governance Effectiveness Assessment:
+    # A governance document untouched for this long has stopped describing
+    # how the project actually runs. Was a class attribute
+    # (GOVERNANCE_STALE_DAYS) on CommunityHealthCollector; moved here so it's
+    # resolved at call time rather than frozen at import, which is what
+    # actually makes it configurable via overrides.
+    stale_days: 1095                   # three years
 
 "4.2.3":
   Activity Trend Monitoring:

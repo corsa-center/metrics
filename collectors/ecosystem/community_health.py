@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import re
 
-from collectors.ecosystem.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +98,6 @@ class CommunityHealthCollector:
     # A project with a differently-named governance repo still has the
     # existing package_config/.corsa overrides as an escape hatch.
     FALLBACK_REPO_NAMES = ["governance", ".github"]
-
-    # A governance document untouched for this long has stopped describing how
-    # the project actually runs.
-    GOVERNANCE_STALE_DAYS = 1095  # three years
 
     # Keyword groups needed before the documented process counts as substantive.
     MIN_KEYWORD_GROUPS = 2
@@ -246,9 +242,10 @@ class CommunityHealthCollector:
             if valid:
                 last_updated_days = min(valid)
 
+        stale_days = get_threshold("4.2.1", "Governance Effectiveness Assessment", "stale_days")
         maintained = (
             last_updated_days is not None
-            and last_updated_days <= self.GOVERNANCE_STALE_DAYS
+            and last_updated_days <= stale_days
         )
         return {
             "has_codeowners": has_codeowners,
