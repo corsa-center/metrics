@@ -1,0 +1,179 @@
+# Threshold registry for CASS sub-metric pass/fail decisions.
+#
+# Single source of truth for every configurable threshold in the framework.
+# Every value here is read by exactly the code that decides pass/fail for it
+# -- a couple of entries intentionally repeat the same number under separate
+# keys (noted where that happens), but nothing here is decoration for a
+# value some other code path actually uses instead. An unused or misspelled
+# entry fails a test (tests/test_thresholds.py) instead of silently doing
+# nothing.
+#
+# Keyed by CASS report section number, then the exact sub-metric label from
+# METRICS_CATALOG.md / SECTION_SUBMETRICS in orchestrator.py. A sub-metric
+# with nothing configurable (a pure presence/structural check, like "a
+# license was identified") has no entry here -- absence means "not
+# configurable," not "use some hidden default."
+#
+# Each value is one of three types:
+#   - a number: a single >=/<=/</> comparison
+#   - a list of strings: the value must be one of these (set membership)
+#   - a mapping: several independently-named parameters for one sub-metric
+#
+# A sub-metric that can't be measured at all (see collectors/ecosystem/base.py
+# COLLECTION_GAP, and CASS §3.5) is excluded from scoring regardless of what's
+# configured here -- these thresholds only ever apply to data that was
+# actually collected.
+#
+# Overrides: config/orchestrator.yaml can carry a top-level `thresholds:`
+# block, keyed the same way as this file, to override any value below at
+# startup. An override key that doesn't match an existing default here fails
+# fast when the orchestrator starts, instead of being silently ignored.
+# Per-project and per-package threshold overrides -- letting one project opt
+# into a different value than everyone else, not just a different indicator
+# set -- are not wired up yet.
+#
+# Sub-metrics without an entry here have nothing to configure: pure
+# presence/structural checks, graduated scoring rubrics (e.g. CHAOSS's
+# weighted brackets -- item 5 of the same feedback thread), sampling/
+# pagination caps, and values that only feed descriptive text rather than
+# a pass/fail outcome.
+
+"4.2.1":
+  Enhanced Document Detection: 2       # of {CoC, Governance, Contributing}, minimum found
+  Governance Keyword Analysis: 2       # of 4 governance concept groups, minimum documented
+  OpenSSF Badge Integration:
+    min_score: 7.0                     # OpenSSF Scorecard score /10, minimum
+  CHAOSS Governance Metrics: 60        # weighted CHAOSS health score /100, minimum
+  Governance Effectiveness Assessment:
+    # A governance document untouched for this long has stopped describing
+    # how the project actually runs. Was a class attribute
+    # (GOVERNANCE_STALE_DAYS) on CommunityHealthCollector; moved here so it's
+    # resolved at call time rather than frozen at import, which is what
+    # actually makes it configurable via overrides.
+    stale_days: 1095                   # three years
+
+"4.2.2":
+  Automated FAIR4RS Assessment: 3    # of 4 FAIR principles satisfied, minimum
+  FAIR Metadata Assessment: 4        # of 6 CITATION.cff fields present, minimum
+
+"4.2.3":
+  Activity Trend Monitoring:
+    # 52-week commit trend must be one of these to meet the threshold.
+    - stable
+    - increasing
+  Release Pattern Assessment: 1              # releases in the last year, minimum
+  Multi-Channel Communication Activity: 2     # distinct channels found, minimum
+  Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
+
+"4.2.4":
+  Response Time Tracking: 168           # median hours to first response, maximum (one week, strictly under)
+  Issue Resolution Analysis: 720        # median hours to close, maximum (30 days, strictly under)
+  Pull Request Flow Assessment: 50      # PR merge rate %, minimum (strictly over)
+  Support Request Closure Analysis: 2.0 # open/closed issue ratio, maximum (strictly under)
+  Engagement Quality Metrics: 2         # median comments per issue, minimum
+  Communication Pattern Analysis:
+    response_window_hours: 168          # "timely" response window (one week)
+    min_timely_response_share: 0.70     # share of issues answered within the window, minimum
+  Community Participation Assessment: 0.15  # share of issues/PRs from outside the maintainer group, minimum
+
+"4.2.5":
+  Contributor Retention Analysis:
+    retained_min_commits: 2       # commits within the recent window to count as "retained"
+    min_retention_rate_pct: 50    # share of new contributors who return, minimum
+  Contributor Lifecycle Mapping:
+    casual_max_commits: 4         # commits at or below this bucket as "casual" rather than "repeat"
+    min_repeat_contributors: 3    # repeat contributors, minimum
+  Onboarding Infrastructure Assessment: 3  # of 4 onboarding resources, minimum found
+
+"4.2.6":
+  Decision-Making Visibility: 2   # public decision-making channels/documents found, minimum
+                                   # (one alone -- e.g. a wiki nobody writes in -- says little)
+
+"4.2.7":
+  Advanced Dependency Analysis: 2   # distinct packaging ecosystems, minimum
+  Collaboration Network Analysis:
+    # Either signal alone is enough: a library can be depended on by many
+    # packages (HDF5: 176 conda packages) or by many repositories (zfp: 111),
+    # and both are real evidence of ecosystem integration.
+    min_dependent_packages: 10
+    min_dependent_repos: 50
+
+"4.2.8":
+  Institutional Affiliation Tracking: 3  # distinct organizations among top contributors, minimum
+  Funding Portfolio Analysis: 2          # distinct funding sources, minimum
+
+"4.2.10":
+  Comprehensive Activity Analysis:
+    min_dimensions: 2                  # of 3 dimensions active, minimum
+    min_active_weeks: 26               # of 52 weeks with a commit, minimum
+    min_releases_last_year: 1          # releases in the last year, minimum
+  Contributor Viability Assessment: 3  # bus factor, minimum
+  Maintenance Mode Detection:
+    max_days_since_push: 365           # days since last push before it's a warning sign
+  Community Health Trends:
+    # Same values as 4.2.3's Activity Trend Monitoring, kept as a separate
+    # key rather than shared: they measure the same underlying trend for two
+    # different CASS sections, and each section's threshold should be free
+    # to move independently even though they happen to agree today.
+    - stable
+    - increasing
+  Project Lifecycle Assessment:
+    - Growing
+    - Mature
+
+"4.3.1":
+  Test Coverage Excellence: 80          # Codecov line coverage %, minimum
+  Advanced Static Analysis: 1           # defect-analysis tools found beyond CodeQL, minimum
+  CERT Guidelines Compliance: 1         # secure-coding hardening indicators found, minimum
+  Reliability Trend Analysis:
+    min_trend_volume: 5        # combined recent+previous defect reports, minimum (below this the comparison is noise)
+    trend_tolerance: 1.25      # recent:previous ratio at or under which the trend still counts as stable
+    passing_directions:        # trend direction must be one of these to meet the threshold
+      - stable
+      - improving
+
+"4.3.2":
+  CI/CD Effectiveness Assessment:
+    # Average PR cycle time, in hours, maximum. 168 (one week) is today's
+    # real, shipped behavior -- not DORA's 24h "elite" tier -- so it's kept
+    # as the default rather than silently tightened, which would be a
+    # scoring change, not a config-plumbing one.
+    max_cycle_time_hours: 168
+    max_execution_time_hours: 1         # average workflow run time, maximum (strictly under)
+    min_success_rate_pct: 60            # overall workflow success rate, minimum (strictly over)
+    min_deployments_per_year: 1         # DORA "elite" deployment frequency floor
+    min_releases_per_year: 1            # GitHub releases per year, minimum
+    max_time_to_failure_hours: 1        # average failed-run duration, maximum (strictly under)
+    min_score: 0                        # orchestrator's own gate, strictly over this (score/max_score shown alongside)
+  Testing Framework Excellence: 2       # of 4 testing indicators, minimum found
+  Code Review Quality Analysis: 70.0    # merged PRs reviewed %, minimum (leaves room for trivial/automated merges)
+  Development Tool Integration: 2       # of 4 dev tooling indicators, minimum found
+  Community Contribution Facilitation: 100  # OpenSSF badge progress %, minimum (must be 100 -- fully registered)
+
+"4.3.4":
+  Documentation Completeness Analysis: 3  # of 4 core README sections, minimum
+                                           # (waived if a thinner README is backed by a doc
+                                           # directory and a published documentation site)
+
+"4.3.5":
+  Deployment Environment Testing: 2      # distinct CI runner OS families, minimum
+  Architecture Compatibility Analysis: 1 # non-x86 architectures explicitly tested, minimum
+  Platform Documentation Evaluation: 2   # supported platforms named in the README, minimum
+
+"4.3.6":
+  Knowledge Distribution Analysis: 3    # bus factor, minimum -- same value as 4.2.10's
+                                         # Contributor Viability Assessment, kept as its own
+                                         # key for the same reason as 4.2.10's Community
+                                         # Health Trends above
+  Advanced Complexity Analysis:
+    large_file_bytes: 100000     # a source file past this size is hard to reason about in one sitting
+    max_large_file_share: 0.05   # share of source files that may be oversized, maximum
+                                  # (HDF5 sits at 5.1%, ADIOS2 at 2.2%, zfp at 0.0% -- separates
+                                  # the portfolio roughly where it naturally splits)
+    max_tree_depth: 10           # directory nesting depth, maximum
+  Code Quality Assessment: 0.20     # test files per source file, minimum ratio
+  Documentation Quality Evaluation: 0.05  # doc files per source file, minimum ratio (waived if a doc generator is configured)
+  Refactoring and Evolution Tracking: 0.02  # share of recent commits showing refactoring intent, minimum
+                                             # (calibrated against the portfolio: HDF5 2.7%, ADIOS2 2.0%,
+                                             # zfp 3.0% over 300 commits -- asks whether sustained
+                                             # structural work happens at all, not whether it's common)

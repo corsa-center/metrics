@@ -108,3 +108,19 @@ logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR
   file: "orchestrator.log"
   console: true
+
+# Threshold overrides. Open config/thresholds.yaml for the full, current
+# list of every changeable threshold and its default -- this block only
+# needs an entry for a value you want to change from what's there. Same
+# shape as thresholds.yaml: section -> sub-metric label -> value (or ->
+# parameter -> value, for a sub-metric with several). An entry here for a
+# threshold thresholds.yaml doesn't define fails at startup rather than
+# being silently ignored. Left empty; uncomment to override, e.g.:
+#
+# thresholds:
+#   "4.2.3":
+#     Release Pattern Assessment: 2          # require 2 releases/year, not 1
+#   "4.3.2":
+#     CI/CD Effectiveness Assessment:
+#       max_cycle_time_hours: 48             # tighten from the 168h default
+thresholds: {}

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from collectors.ecosystem.base import get_threshold
 from collectors.ecosystem.community_health import CommunityHealthCollector
 
 
@@ -99,7 +100,7 @@ class TestKeywordGroups:
 
 class TestStaleness:
     def test_three_year_boundary(self, collector):
-        assert collector.GOVERNANCE_STALE_DAYS == 1095
+        assert get_threshold("4.2.1", "Governance Effectiveness Assessment", "stale_days") == 1095
 
 
 def _found(path):

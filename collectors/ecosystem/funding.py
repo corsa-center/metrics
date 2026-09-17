@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +54,6 @@ _AFFILIATION_SAMPLE = 25
 
 # Company strings that say nothing about institutional backing.
 _NOISE_AFFILIATIONS = {"", "-", "none", "n/a", "freelance", "independent", "self", "self-employed"}
-
-_MIN_FUNDING_SOURCES = 2
-_MIN_DISTINCT_ORGS = 3
 
 
 class FundingCollector(GitHubCollectorBase):
@@ -313,7 +310,7 @@ class FundingCollector(GitHubCollectorBase):
         sub["funding_documentation"] = doc_entry
 
         orgs = affiliations.get("organizations", [])
-        affil_passing = len(orgs) >= _MIN_DISTINCT_ORGS
+        affil_passing = len(orgs) >= get_threshold("4.2.8", "Institutional Affiliation Tracking")
         affil_entry: Dict[str, Any] = {
             "label": "Institutional Affiliation Tracking",
             "value": f"{len(orgs)} organizations across "
@@ -344,7 +341,7 @@ class FundingCollector(GitHubCollectorBase):
 
         # Distinct sources: each declared platform, plus each award reference.
         source_count = len(platforms) + len(grants)
-        portfolio_passing = source_count >= _MIN_FUNDING_SOURCES
+        portfolio_passing = source_count >= get_threshold("4.2.8", "Funding Portfolio Analysis")
         portfolio_entry: Dict[str, Any] = {
             "label": "Funding Portfolio Analysis",
             "value": f"{source_count} distinct funding source(s)",

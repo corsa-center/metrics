@@ -30,10 +30,10 @@ _CHANNEL_PATTERNS = {
     "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
 }
 
-# Over half the recently-active contributors going quiet is a real warning.
-_MAX_DEPARTURE_RATE = 0.5
-# At least two channels beyond the issue tracker.
-_MIN_CHANNELS = 2
+# The pass/fail thresholds for this collector's data (departure rate,
+# channel count, release cadence, etc.) live in config/thresholds.yaml under
+# section "4.2.3" and are applied in orchestrator.py's dashboard rendering,
+# not here -- this collector only gathers the underlying numbers.
 
 
 class ActiveMaintenanceCollector:

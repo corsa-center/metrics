@@ -184,6 +184,56 @@ metric_weights:
   licensing: 0.2   # 20% of overall score
 ```
 
+### Configurable Pass/Fail Thresholds
+
+Every sub-metric's pass/fail decision (the ✓/✗ shown on the dashboard) is
+governed by a value in [`config/thresholds.yaml`](config/thresholds.yaml) --
+that file **is** the full, current list of every changeable threshold and
+its default, organized by CASS report section number and the exact
+sub-metric label, with an inline comment explaining each one.
+([METRICS_CATALOG.md](METRICS_CATALOG.md)'s "Meets threshold when" column
+shows the same values in prose, for cross-reference against the report's
+own language.)
+
+To change a default without editing collector code, copy the relevant
+section/label(/param) structure from `config/thresholds.yaml` into a
+`thresholds:` block in `config/orchestrator.yaml`, e.g.:
+
+```yaml
+thresholds:
+  "4.3.1":
+    Test Coverage Excellence: 70       # was 80 -- override a plain number
+  "4.3.2":
+    CI/CD Effectiveness Assessment:
+      max_cycle_time_hours: 72         # override one param, others keep their default
+  "4.2.10":
+    Community Health Trends:
+      - stable                         # override a set-membership list
+      - increasing
+      - improving
+```
+
+A few things worth knowing before overriding one:
+
+- **Fail-fast, not silent.** An override for a section, label, or param that
+  `config/thresholds.yaml` doesn't already declare a default for raises an
+  error when the orchestrator starts, rather than being quietly ignored.
+- **Partial overrides merge.** For a sub-metric with several named params
+  (like `CI/CD Effectiveness Assessment` above), overriding one param
+  leaves its siblings at their default -- no need to repeat values you're
+  not changing.
+- **Not every sub-metric is configurable.** A pure presence/structural
+  check (e.g. "a license was identified at all") has no entry in
+  `config/thresholds.yaml` and can't be overridden here -- see that file's
+  header comment for what's deliberately excluded and why.
+- **Thresholds never override a collection gap.** If a sub-metric's data
+  couldn't be collected at all (rate limit, API error, etc.), it's excluded
+  from scoring regardless of what any threshold says -- an override can
+  change where the bar is, not turn "we don't know" into "it passed."
+- **Per-project overrides aren't wired up yet.** This `thresholds:` block
+  is global, applying to every project the orchestrator scores. Overriding
+  a threshold for one project only is planned but not yet built.
+
 ### Rate Limiting
 
 ```yaml

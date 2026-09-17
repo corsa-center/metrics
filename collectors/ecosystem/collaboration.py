@@ -33,21 +33,11 @@ from urllib.parse import quote
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from collectors.ecosystem.base import GitHubCollectorBase, get_threshold
 
 logger = logging.getLogger(__name__)
 
 _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
-
-# Being packaged for more than one ecosystem is what "multi-platform ecosystem
-# mapping" is asking about.
-_MIN_ECOSYSTEMS = 2
-
-# Downstream reach. Either signal alone is enough: a library can be depended on
-# by many packages (HDF5: 176 conda packages) or by many repositories
-# (zfp: 111), and both are real evidence of ecosystem integration.
-_MIN_DEPENDENT_PACKAGES = 10
-_MIN_DEPENDENT_REPOS = 50
 
 # ecosyste.ms publishes a low per-second rate limit; one retry with a pause
 # covers the throttling seen when several lookups run back to back.
@@ -207,11 +197,12 @@ class CollaborationCollector(GitHubCollectorBase):
             "value": f"{len(ecosystems)} ecosystem{'s' if len(ecosystems) != 1 else ''}: "
                      + ", ".join(ecosystems)
                      if ecosystems else "Not packaged in any indexed ecosystem",
-            "passing": len(ecosystems) >= _MIN_ECOSYSTEMS,
+            "passing": len(ecosystems) >= get_threshold("4.2.7", "Advanced Dependency Analysis"),
         }
 
         reach = (
-            max_packages >= _MIN_DEPENDENT_PACKAGES or max_repos >= _MIN_DEPENDENT_REPOS
+            max_packages >= get_threshold("4.2.7", "Collaboration Network Analysis", "min_dependent_packages")
+            or max_repos >= get_threshold("4.2.7", "Collaboration Network Analysis", "min_dependent_repos")
         )
         sub["collaboration_network"] = {
             "label": "Collaboration Network Analysis",

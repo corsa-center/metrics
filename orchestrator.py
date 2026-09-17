@@ -27,6 +27,8 @@ import httpx
 import re
 import yaml
 
+from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -135,6 +137,13 @@ class MetricsOrchestrator:
         """
         self.config = self._load_config(config_path)
         self._configure_logging()
+        # Overrides for config/thresholds.yaml's defaults (see that file).
+        # Installed before any collector's collect() can run, so every
+        # get_threshold() call during this process sees the final value.
+        # An override referencing a threshold that isn't declared in
+        # thresholds.yaml raises here, at startup, instead of being
+        # silently ignored.
+        configure_threshold_overrides(self.config.get("thresholds"))
         self.dashboard_base_url = self.config.get(
             "dashboard_base_url", "https://corsa.center/dashboard"
         ).rstrip("/")
@@ -1200,7 +1209,8 @@ class MetricsOrchestrator:
                         doc_sub_lines.append(f'<p class="sub-detail">{label}: Not found</p>')
                 gov_score = governance.get("overall_score", {})
                 doc_total = gov_score.get("max_score", 3)
-                passing = doc_found >= 2  # CoC + Contributing is sufficient; Governance is optional
+                # CoC + Contributing is sufficient; Governance is optional.
+                passing = doc_found >= get_threshold("4.2.1", "Enhanced Document Detection")
                 gov_pts += 1 if passing else 0
                 gov_lines.append(
                     f'<p><strong>Enhanced Document Detection:</strong> {doc_found}/{doc_total} {"✓" if passing else "✗"}</p>'
@@ -1214,7 +1224,7 @@ class MetricsOrchestrator:
             #    decision process, or merely exist?
             kw = governance.get("keyword_analysis", {})
             groups = kw.get("groups_found", [])
-            kw_ok = len(groups) >= 2
+            kw_ok = len(groups) >= get_threshold("4.2.1", "Governance Keyword Analysis")
             gov_pts += 1 if kw_ok else 0
             gov_lines.append(
                 f'<p><strong>Governance Keyword Analysis:</strong> '
@@ -1223,12 +1233,17 @@ class MetricsOrchestrator:
             if groups:
                 gov_lines.append(f'<p class="sub-detail">{", ".join(groups)}</p>')
 
-            # 3. OpenSSF Badge Integration — use Scorecard as proxy (passes if score ≥ 7.0)
+            # 3. OpenSSF Badge Integration — use Scorecard as proxy
             if scorecard and scorecard.get("scorecard_exists"):
                 sc_val = scorecard.get("score")
                 sc_url = scorecard.get("scorecard_url", "")
                 checks = f'{scorecard.get("checks_passed", 0)}/{scorecard.get("checks_total", 0)} checks passed'
-                passing = sc_val is not None and sc_val >= 7.0
+                # Reused below for the per-check breakdown too, deliberately:
+                # a check listed as "failing" should always be one that's
+                # actually below the same bar the overall pass/fail uses,
+                # not an independent number that could drift from it.
+                min_score = get_threshold("4.2.1", "OpenSSF Badge Integration", "min_score")
+                passing = sc_val is not None and sc_val >= min_score
                 gov_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
                 link = f'<a href="{sc_url}">{sc_val}/10</a>' if sc_url else f'{sc_val}/10'
@@ -1237,7 +1252,7 @@ class MetricsOrchestrator:
                 # aren't real failures, just checks that don't apply here.
                 failing_checks = {
                     name: info for name, info in scorecard.get("checks", {}).items()
-                    if 0 <= info.get("score", 0) < 7
+                    if 0 <= info.get("score", 0) < min_score
                 }
                 for name, info in sorted(failing_checks.items(), key=lambda kv: kv[1].get("score", 0)):
                     doc_url = info.get("documentation_url", "")
@@ -1252,13 +1267,12 @@ class MetricsOrchestrator:
 
             # 4. CHAOSS Governance Metrics — weighted CHAOSS health score.
             # CHAOSSGovernanceCollector was already being run for the dimension
-            # score; this surfaces it in the section it belongs to. "Good" (>= 60)
-            # is the collector's own threshold for a passing project.
+            # score; this surfaces it in the section it belongs to.
             if chaoss:
                 chaoss_score = chaoss.get("overall_score", {})
                 score_val = chaoss_score.get("score", 0)
                 status = chaoss_score.get("status", "unknown")
-                chaoss_ok = score_val >= 60
+                chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
                 gov_pts += 1 if chaoss_ok else 0
                 gov_lines.append(
                     f'<p><strong>CHAOSS Governance Metrics:</strong> '
@@ -1416,14 +1430,14 @@ class MetricsOrchestrator:
 
             # 3. Activity Trend Monitoring
             trend = commits.get("recent_trend", "unknown")
-            trend_ok = trend in ("stable", "increasing")
+            trend_ok = trend in get_threshold("4.2.3", "Activity Trend Monitoring")
             maint_pts += 1 if trend_ok else 0
             maint_lines.append(f'<p><strong>Activity Trend Monitoring:</strong> '
                                 f'{trend.capitalize()} {"✓" if trend_ok else "✗"}</p>')
 
             # 4. Release Pattern Assessment
             rel_count = releases.get("releases_last_year", 0)
-            rel_ok = rel_count >= 1
+            rel_ok = rel_count >= get_threshold("4.2.3", "Release Pattern Assessment")
             maint_pts += 1 if rel_ok else 0
             rel_detail = (f'{releases["latest_release"]} ({releases.get("days_since_latest_release", "?")} days ago)'
                           if releases.get("latest_release") else "No releases")
@@ -1440,7 +1454,7 @@ class MetricsOrchestrator:
             # 5. Multi-Channel Communication Activity
             channels = maintenance.get("channels", {})
             ch_found = channels.get("found", [])
-            ch_ok = len(ch_found) >= 2
+            ch_ok = len(ch_found) >= get_threshold("4.2.3", "Multi-Channel Communication Activity")
             maint_pts += 1 if ch_ok else 0
             maint_lines.append(
                 f'<p><strong>Multi-Channel Communication Activity:</strong> '
@@ -1455,7 +1469,7 @@ class MetricsOrchestrator:
             ab = maintenance.get("abandonment", {})
             if ab.get("measurable"):
                 rate = ab.get("departure_rate", 0)
-                ab_ok = rate <= 0.5
+                ab_ok = rate <= get_threshold("4.2.3", "Contributor Abandonment Forecasting")
                 maint_pts += 1 if ab_ok else 0
                 maint_lines.append(
                     f'<p><strong>Contributor Abandonment Forecasting:</strong> '
@@ -1538,10 +1552,10 @@ class MetricsOrchestrator:
             rel_last_year = releases.get("releases_last_year", 0)
             dims_active = sum([
                 commits_52w > 0,
-                rel_last_year >= 1,
-                active_weeks >= 26,   # committed in at least half the weeks of the year
+                rel_last_year >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_releases_last_year"),
+                active_weeks >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_active_weeks"),
             ])
-            activity_ok = dims_active >= 2
+            activity_ok = dims_active >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_dimensions")
             long_pts += 1 if activity_ok else 0
             section_4210_lines.append(
                 f'<p><strong>Comprehensive Activity Analysis:</strong> '
@@ -1552,12 +1566,10 @@ class MetricsOrchestrator:
                 f'release(s) in the last year; active in {active_weeks}/52 weeks</p>'
             )
 
-            # 2. Contributor Viability Assessment — bus factor. Threshold (>= 3) matches
-            #    active_maintenance.py and 4.3.6 so the same number can't read healthy
-            #    in one section and at-risk in another.
+            # 2. Contributor Viability Assessment — bus factor.
             bus_factor = contribs.get("bus_factor", 0)
             total_contribs = contribs.get("total_contributors", 0)
-            viable = bus_factor >= 3
+            viable = bus_factor >= get_threshold("4.2.10", "Contributor Viability Assessment")
             long_pts += 1 if viable else 0
             section_4210_lines.append(
                 f'<p><strong>Contributor Viability Assessment:</strong> '
@@ -1576,7 +1588,8 @@ class MetricsOrchestrator:
                 warnings.append("repository archived")
             if indicators.get("maintenance_signals"):
                 warnings.extend(indicators["maintenance_signals"])
-            if days_since_push is not None and days_since_push > 365:
+            if (days_since_push is not None
+                    and days_since_push > get_threshold("4.2.10", "Maintenance Mode Detection", "max_days_since_push")):
                 warnings.append(f"no push in {days_since_push} days")
             no_warnings = not warnings
             long_pts += 1 if no_warnings else 0
@@ -1588,7 +1601,7 @@ class MetricsOrchestrator:
 
             # 4. Community Health Trends — 52-week commit trend from /stats/participation.
             trend = commits.get("recent_trend", "unknown")
-            trend_ok = trend in ("stable", "increasing")
+            trend_ok = trend in get_threshold("4.2.10", "Community Health Trends")
             long_pts += 1 if trend_ok else 0
             section_4210_lines.append(
                 f'<p><strong>Community Health Trends:</strong> '
@@ -1615,7 +1628,7 @@ class MetricsOrchestrator:
                 stage = "Mature"
             else:
                 stage = "Legacy"
-            lifecycle_ok = stage in ("Growing", "Mature")
+            lifecycle_ok = stage in get_threshold("4.2.10", "Project Lifecycle Assessment")
             long_pts += 1 if lifecycle_ok else 0
             section_4210_lines.append(
                 f'<p><strong>Project Lifecycle Assessment:</strong> '
@@ -1800,7 +1813,7 @@ class MetricsOrchestrator:
             if test_coverage.get("coverage_exists"):
                 pct = test_coverage["coverage_percentage"]
                 url = test_coverage.get("coverage_url", "")
-                passing = pct >= 80
+                passing = pct >= get_threshold("4.3.1", "Test Coverage Excellence")
                 rel_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
                 link = f'<a href="{url}">{pct}%</a>' if url else f'{pct}%'
@@ -1896,7 +1909,7 @@ class MetricsOrchestrator:
             if ci_cd:
                 cicd_score = ci_cd.get("score", 0)
                 cicd_max   = ci_cd.get("max_score", 6)
-                passing    = cicd_score > 0
+                passing    = cicd_score > get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_score")
                 dp_pts    += 1 if passing else 0
                 mark       = "✓" if passing else "✗"
                 section_432_lines.append(
@@ -1928,7 +1941,7 @@ class MetricsOrchestrator:
                     level = badge_status.get("level", "").capitalize()
                     badge_url = badge_status.get("url", "")
                     pct = badge_status.get("progress_percentage", 0)
-                    passing = pct >= 100
+                    passing = pct >= get_threshold("4.3.2", "Community Contribution Facilitation")
                     dp_pts += 1 if passing else 0
                     mark = "✓" if passing else "✗"
                     link = f'<a href="{badge_url}">{level}</a>' if badge_url else level
@@ -2065,12 +2078,9 @@ class MetricsOrchestrator:
                     section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
 
             # 4. Knowledge Distribution Analysis — bus factor (reuses 4.2.3 data)
-            # Threshold matches active_maintenance.py's own "healthy bus factor"
-            # definition (>= 3), so a project isn't healthy in one section and
-            # at-risk in another for the same underlying number.
             bus_factor = contributor_activity.get("bus_factor", 0)
             top_pct = contributor_activity.get("top_contributor_pct", 0)
-            healthy = bus_factor >= 3
+            healthy = bus_factor >= get_threshold("4.3.6", "Knowledge Distribution Analysis")
             maint436_pts += 1 if healthy else 0
             mark = "✓" if healthy else "✗"
             section_436_lines.append(

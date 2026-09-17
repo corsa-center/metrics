@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,6 @@ _PUBLIC_CHANNELS = {
     "has_wiki": "Wiki",
     "has_pages": "GitHub Pages",
 }
-
-# Two independent signals of open decision-making is a meaningful bar: one
-# alone (a wiki nobody writes in, say) says very little.
-_MIN_VISIBILITY_SIGNALS = 2
 
 
 class WelcomenessCollector(GitHubCollectorBase):
@@ -143,7 +139,7 @@ class WelcomenessCollector(GitHubCollectorBase):
         self, channels: List[str], documents: Dict, channels_gap: bool = False
     ) -> Dict[str, Any]:
         signals = list(channels) + list(documents.get("found", []))
-        passing = len(signals) >= _MIN_VISIBILITY_SIGNALS
+        passing = len(signals) >= get_threshold("4.2.6", "Decision-Making Visibility")
 
         # A below-threshold count built on a gap isn't confirmed -- a gapped
         # channel lookup or decision-document candidate could have supplied

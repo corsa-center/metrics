@@ -16,12 +16,19 @@ files and by `SECTION_SUBMETRICS` in [`orchestrator.py`](orchestrator.py).
 is a stub
 
 Each collected sub-metric below now lists a **Meets threshold when** column —
-the exact value it's checked against today. Framed as a threshold rather than
+the value it's checked against today. Framed as a threshold rather than
 "pass"/"fail": a sub-metric below its threshold isn't a defect, and the report
 itself (§3.5) treats an unmeasured indicator as excluded from scoring, not as a
-failure. Thresholds are currently fixed in each collector's own code; per
-[Greg Watson's feedback](GREG_FEEDBACK_pass_fail_thresholds.md) this is the
-first step toward making them configurable per project.
+failure.
+
+The values shown are current defaults, not fixed constants —
+[`config/thresholds.yaml`](config/thresholds.yaml) is the authoritative,
+configurable source (see [`ORCHESTRATOR_GUIDE.md`](ORCHESTRATOR_GUIDE.md#configurable-passfail-thresholds)
+for how to override one). If a deployment has overridden a value, what
+actually runs may differ from what's written here; this table isn't
+regenerated from that file automatically. Per-project/per-package overrides
+(letting one project use a different value than everyone else) aren't wired
+up yet.
 
 ---
 

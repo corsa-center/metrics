@@ -21,7 +21,7 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -52,23 +52,16 @@ def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
     return None
 
 
-# Interaction depth: an issue that draws a couple of replies has been engaged
-# with, not just filed and closed.
-_MIN_MEDIAN_COMMENTS = 2
-
-# Response consistency, measured as the share of issues answered inside a week
-# rather than as a p90/median ratio. The ratio is scale-sensitive: a project
-# that usually replies within minutes scores thousands-to-one the moment a
-# single issue waits a fortnight, which says more about the arithmetic than
-# about the project. The absolute question — does everyone get an answer, or
-# only some people — is what the report is actually asking.
-_RESPONSE_WINDOW_HOURS = 168
-_MIN_TIMELY_RESPONSE_SHARE = 0.70
+# Response consistency is measured as the share of issues answered inside a
+# window rather than as a p90/median ratio. The ratio is scale-sensitive: a
+# project that usually replies within minutes scores thousands-to-one the
+# moment a single issue waits a fortnight, which says more about the
+# arithmetic than about the project. The absolute question — does everyone
+# get an answer, or only some people — is what the report is actually asking.
 
 # Share of issues and PRs opened by people outside the maintainer group.
 # GitHub's author_association marks OWNER / MEMBER / COLLABORATOR as inside.
 _INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
-_MIN_OUTSIDE_SHARE = 0.15
 
 
 class EngagementCollector(GitHubCollectorBase):
@@ -237,7 +230,8 @@ class EngagementCollector(GitHubCollectorBase):
         # inconsistent engagement.
         timely_share = None
         if issues:
-            timely = sum(1 for t in valid_responses if t <= _RESPONSE_WINDOW_HOURS)
+            response_window_hours = get_threshold("4.2.4", "Communication Pattern Analysis", "response_window_hours")
+            timely = sum(1 for t in valid_responses if t <= response_window_hours)
             timely_share = round(timely / len(issues), 3)
 
         outside = sum(
@@ -316,9 +310,9 @@ class EngagementCollector(GitHubCollectorBase):
         sub = {}
         pts = 0
 
-        # 1. Response Time Tracking — passing if median first response < 168 h (1 week)
+        # 1. Response Time Tracking — passing if median first response is under the cap
         frt = issue_stats.get("median_first_response_hours")
-        passing = frt is not None and frt < 168
+        passing = frt is not None and frt < get_threshold("4.2.4", "Response Time Tracking")
         sub["response_time_tracking"] = {
             "label": "Response Time Tracking",
             "value": f"{frt:.0f} hours" if frt is not None else None,
@@ -327,9 +321,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["response_time_tracking"]["pts"]
 
-        # 2. Issue Resolution Analysis — passing if median close time < 720 h (30 days)
+        # 2. Issue Resolution Analysis — passing if median close time is under the cap
         mct = issue_stats.get("median_close_time_hours")
-        passing = mct is not None and mct < 720
+        passing = mct is not None and mct < get_threshold("4.2.4", "Issue Resolution Analysis")
         sub["issue_resolution"] = {
             "label": "Issue Resolution Analysis",
             "value": f"{mct:.0f} hours" if mct is not None else None,
@@ -338,9 +332,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["issue_resolution"]["pts"]
 
-        # 3. Pull Request Flow Assessment — passing if merge rate > 50 %
+        # 3. Pull Request Flow Assessment — passing if merge rate is above the floor
         mrp = pr_stats.get("merge_rate_pct")
-        passing = mrp is not None and mrp > 50
+        passing = mrp is not None and mrp > get_threshold("4.2.4", "Pull Request Flow Assessment")
         sub["pr_flow"] = {
             "label": "Pull Request Flow Assessment",
             "value": f"{mrp:.0f}%" if mrp is not None else None,
@@ -349,9 +343,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["pr_flow"]["pts"]
 
-        # 4. Support Request Closure Analysis — passing if open/closed ratio < 2.0
+        # 4. Support Request Closure Analysis — passing if open/closed ratio is under the cap
         ratio = backlog.get("sample_open_to_closed_ratio")
-        passing = ratio is not None and ratio < 2.0
+        passing = ratio is not None and ratio < get_threshold("4.2.4", "Support Request Closure Analysis")
         sub["support_closure"] = {
             "label": "Support Request Closure Analysis",
             "value": f"{ratio:.2f}" if ratio is not None else None,
@@ -362,7 +356,7 @@ class EngagementCollector(GitHubCollectorBase):
 
         # 5. Engagement Quality Metrics — depth of discussion per issue
         mc = issue_stats.get("median_comments")
-        passing = mc is not None and mc >= _MIN_MEDIAN_COMMENTS
+        passing = mc is not None and mc >= get_threshold("4.2.4", "Engagement Quality Metrics")
         sub["engagement_quality"] = {
             "label": "Engagement Quality Metrics",
             "value": f"{mc:g} comments per issue (median)" if mc is not None else None,
@@ -374,7 +368,7 @@ class EngagementCollector(GitHubCollectorBase):
         # 6. Communication Pattern Analysis — whether everyone gets an answer,
         # not just the typical reporter.
         timely = issue_stats.get("timely_response_share")
-        passing = timely is not None and timely >= _MIN_TIMELY_RESPONSE_SHARE
+        passing = timely is not None and timely >= get_threshold("4.2.4", "Communication Pattern Analysis", "min_timely_response_share")
         sub["communication_patterns"] = {
             "label": "Communication Pattern Analysis",
             "value": f"{timely * 100:.0f}% of issues answered within a week"
@@ -393,7 +387,7 @@ class EngagementCollector(GitHubCollectorBase):
             issue_stats.get("outside_authors", 0) + pr_stats.get("outside_authors", 0)
         )
         share = outside_n / total_n if total_n else None
-        passing = share is not None and share >= _MIN_OUTSIDE_SHARE
+        passing = share is not None and share >= get_threshold("4.2.4", "Community Participation Assessment")
         sub["community_participation"] = {
             "label": "Community Participation Assessment",
             "value": f"{share * 100:.0f}% of {total_n} issues and PRs opened from "

@@ -2,9 +2,8 @@
 
 import pytest
 
-from collectors.quality.maintainability import (
-    MaintainabilityCollector, _REFACTOR_INTENT, _LARGE_FILE_BYTES,
-)
+from collectors.ecosystem.base import get_threshold
+from collectors.quality.maintainability import MaintainabilityCollector, _REFACTOR_INTENT
 
 
 @pytest.fixture
@@ -58,12 +57,13 @@ class TestTreeClassification:
         assert collector._analyze_tree([_f("mkdocs.yml")])["doc_generators"] == ["MkDocs"]
 
     def test_depth_and_size_stats(self, collector):
+        large_file_bytes = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
         c = collector._analyze_tree([
-            _f("a/b/c/d.c", size=10), _f("e.c", size=_LARGE_FILE_BYTES + 1),
+            _f("a/b/c/d.c", size=10), _f("e.c", size=large_file_bytes + 1),
         ])
         assert c["max_depth"] == 4
         assert c["large_file_share"] == 0.5
-        assert c["largest_source_bytes"] == _LARGE_FILE_BYTES + 1
+        assert c["largest_source_bytes"] == large_file_bytes + 1
 
     def test_empty_tree(self, collector):
         c = collector._analyze_tree([])
