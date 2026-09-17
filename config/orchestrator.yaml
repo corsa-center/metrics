@@ -109,12 +109,13 @@ logging:
   file: "orchestrator.log"
   console: true
 
-# Threshold overrides. The actual defaults live in config/thresholds.yaml --
-# this block only needs an entry for a value you want to change from that
-# default. Same shape as thresholds.yaml: section -> sub-metric label ->
-# value (or -> parameter -> value, for a sub-metric with several). An entry
-# here for a threshold thresholds.yaml doesn't define fails at startup
-# rather than being silently ignored. Left empty; uncomment to override, e.g.:
+# Threshold overrides. Open config/thresholds.yaml for the full, current
+# list of every changeable threshold and its default -- this block only
+# needs an entry for a value you want to change from what's there. Same
+# shape as thresholds.yaml: section -> sub-metric label -> value (or ->
+# parameter -> value, for a sub-metric with several). An entry here for a
+# threshold thresholds.yaml doesn't define fails at startup rather than
+# being silently ignored. Left empty; uncomment to override, e.g.:
 #
 # thresholds:
 #   "4.2.3":
