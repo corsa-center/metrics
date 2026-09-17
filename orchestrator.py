@@ -512,6 +512,28 @@ class MetricsOrchestrator:
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
         return token if token else None
 
+    @staticmethod
+    def _is_known_non_github_repo(repo_url: str) -> bool:
+        """Whether repo_url is known to point somewhere other than github.com.
+
+        Every collector's actual network calls go through api.github.com /
+        raw.githubusercontent.com regardless of what host repo_url names --
+        integrations/github_api.py's own URL parser correctly rejects a
+        non-GitHub URL, but several sub-collectors (e.g.
+        CommunityHealthCollector._extract_owner_repo) parse owner/repo
+        generically without checking the host, so they don't raise and
+        silently query the wrong (GitHub) URL for a GitLab-hosted repo --
+        every "does this file exist" check 404s and reports as a genuine
+        "not found", not as a skipped/pending check. Until there's a real
+        GitLab client, gate collection on this instead of trusting each
+        collector to fail loudly.
+
+        A missing/empty repo_url is *not* treated as non-GitHub -- callers
+        that don't pass one (prepare_package_list's own fallback, some
+        tests) get the same "assume GitHub" behavior collection already had.
+        """
+        return bool(repo_url) and "github.com/" not in repo_url
+
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
 
@@ -876,17 +898,30 @@ class MetricsOrchestrator:
         package["package_config"] = self._load_package_config(package["repository"])
         package["project_config"] = await self._fetch_project_config(package)
 
-        # Collect all 3 CASS dimensions in parallel
-        (
-            impact_metrics,
-            ecosystem_metrics,
-            quality_metrics,
-        ) = await asyncio.gather(
-            self.collect_impact_dimension(package),
-            self.collect_ecosystem_dimension(package),
-            self.collect_quality_dimension(package),
-            return_exceptions=True,
-        )
+        if not self._is_known_non_github_repo(package.get("repo_url", "")):
+            # Collect all 3 CASS dimensions in parallel
+            (
+                impact_metrics,
+                ecosystem_metrics,
+                quality_metrics,
+            ) = await asyncio.gather(
+                self.collect_impact_dimension(package),
+                self.collect_ecosystem_dimension(package),
+                self.collect_quality_dimension(package),
+                return_exceptions=True,
+            )
+        else:
+            # Every collector assumes GitHub; see _is_known_non_github_repo.
+            # Leave all sub-metrics unset ("not yet collected" downstream)
+            # rather than let each one silently 404 against the wrong host
+            # and report a false "not found"/"failing" result.
+            logger.info(
+                f"Skipping collection for {package['name']}: "
+                f"{package.get('repo_url')} is not a GitHub repo, not yet supported"
+            )
+            impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
+            ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
+            quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
 
         # Handle exceptions
         if isinstance(impact_metrics, Exception):
