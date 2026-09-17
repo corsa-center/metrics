@@ -310,9 +310,9 @@ class EngagementCollector(GitHubCollectorBase):
         sub = {}
         pts = 0
 
-        # 1. Response Time Tracking — passing if median first response < 168 h (1 week)
+        # 1. Response Time Tracking — passing if median first response is under the cap
         frt = issue_stats.get("median_first_response_hours")
-        passing = frt is not None and frt < 168
+        passing = frt is not None and frt < get_threshold("4.2.4", "Response Time Tracking")
         sub["response_time_tracking"] = {
             "label": "Response Time Tracking",
             "value": f"{frt:.0f} hours" if frt is not None else None,
@@ -321,9 +321,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["response_time_tracking"]["pts"]
 
-        # 2. Issue Resolution Analysis — passing if median close time < 720 h (30 days)
+        # 2. Issue Resolution Analysis — passing if median close time is under the cap
         mct = issue_stats.get("median_close_time_hours")
-        passing = mct is not None and mct < 720
+        passing = mct is not None and mct < get_threshold("4.2.4", "Issue Resolution Analysis")
         sub["issue_resolution"] = {
             "label": "Issue Resolution Analysis",
             "value": f"{mct:.0f} hours" if mct is not None else None,
@@ -332,9 +332,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["issue_resolution"]["pts"]
 
-        # 3. Pull Request Flow Assessment — passing if merge rate > 50 %
+        # 3. Pull Request Flow Assessment — passing if merge rate is above the floor
         mrp = pr_stats.get("merge_rate_pct")
-        passing = mrp is not None and mrp > 50
+        passing = mrp is not None and mrp > get_threshold("4.2.4", "Pull Request Flow Assessment")
         sub["pr_flow"] = {
             "label": "Pull Request Flow Assessment",
             "value": f"{mrp:.0f}%" if mrp is not None else None,
@@ -343,9 +343,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["pr_flow"]["pts"]
 
-        # 4. Support Request Closure Analysis — passing if open/closed ratio < 2.0
+        # 4. Support Request Closure Analysis — passing if open/closed ratio is under the cap
         ratio = backlog.get("sample_open_to_closed_ratio")
-        passing = ratio is not None and ratio < 2.0
+        passing = ratio is not None and ratio < get_threshold("4.2.4", "Support Request Closure Analysis")
         sub["support_closure"] = {
             "label": "Support Request Closure Analysis",
             "value": f"{ratio:.2f}" if ratio is not None else None,

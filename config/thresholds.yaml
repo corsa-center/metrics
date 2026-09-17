@@ -71,7 +71,11 @@
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
 "4.2.4":
-  Engagement Quality Metrics: 2   # median comments per issue, minimum
+  Response Time Tracking: 168           # median hours to first response, maximum (one week)
+  Issue Resolution Analysis: 720        # median hours to close, maximum (30 days)
+  Pull Request Flow Assessment: 50      # PR merge rate %, minimum
+  Support Request Closure Analysis: 2.0 # open/closed issue ratio, maximum
+  Engagement Quality Metrics: 2         # median comments per issue, minimum
   Communication Pattern Analysis:
     response_window_hours: 168          # "timely" response window (one week)
     min_timely_response_share: 0.70     # share of issues answered within the window, minimum
