@@ -30,7 +30,7 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -97,15 +97,6 @@ _DEFECT_LABELS = ["bug", "defect", "crash", "regression", "type: bug", "kind/bug
 _DEFECT_ISSUE_TYPES = ["Bug", "Defect"]
 
 _TREND_WINDOW_DAYS = 365
-_MIN_TREND_VOLUME = 5          # below this the comparison is noise
-_TREND_TOLERANCE = 1.25        # up to 25% growth still counts as stable
-
-_MIN_ANALYSIS_TOOLS = 1
-# Calibrated against the portfolio, not picked a priori: HDF5 shows one
-# indicator (sanitizers), ADIOS2 and zfp none. These projects simply do not
-# carry much hardening configuration, so the question worth asking is whether
-# any secure-coding practice is in evidence at all.
-_MIN_HARDENING_MARKERS = 1
 
 
 class ReliabilityCollector(GitHubCollectorBase):
@@ -360,7 +351,8 @@ class ReliabilityCollector(GitHubCollectorBase):
             return {"measurable": False, "recent": recent, "previous": previous,
                     "direction": None, "source": source, "not_collected": True}
 
-        if recent + previous < _MIN_TREND_VOLUME:
+        min_trend_volume = get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume")
+        if recent + previous < min_trend_volume:
             return {"measurable": False, "recent": recent, "previous": previous,
                     "direction": None, "source": source}
 
@@ -368,7 +360,8 @@ class ReliabilityCollector(GitHubCollectorBase):
             direction = "increasing"
         else:
             ratio = recent / previous
-            direction = ("stable" if ratio <= _TREND_TOLERANCE
+            trend_tolerance = get_threshold("4.3.1", "Reliability Trend Analysis", "trend_tolerance")
+            direction = ("stable" if ratio <= trend_tolerance
                          else "increasing")
             if ratio < 0.75:
                 direction = "improving"
@@ -387,7 +380,7 @@ class ReliabilityCollector(GitHubCollectorBase):
             "label": "Advanced Static Analysis",
             "value": ", ".join(tools) if tools
                      else "No defect-analysis tooling found beyond CodeQL",
-            "passing": len(tools) >= _MIN_ANALYSIS_TOOLS,
+            "passing": len(tools) >= get_threshold("4.3.1", "Advanced Static Analysis"),
         }
         # An empty result built on a gap isn't a confirmed "no tooling" --
         # a found tool stands regardless, since it came from data that did
@@ -402,7 +395,7 @@ class ReliabilityCollector(GitHubCollectorBase):
                      f"{'s' if len(hardening) != 1 else ''}: " + ", ".join(hardening)
                      if hardening else "No hardening settings found in the build files or CI",
             "detail": "Practice indicators, not audited conformance",
-            "passing": len(hardening) >= _MIN_HARDENING_MARKERS,
+            "passing": len(hardening) >= get_threshold("4.3.1", "CERT Guidelines Compliance"),
         }
         if not hardening and hardening_gap:
             cert_entry["not_collected"] = True
@@ -418,7 +411,7 @@ class ReliabilityCollector(GitHubCollectorBase):
             value = (f"{trend['recent']} defect reports in the last year vs "
                      f"{trend['previous']} the year before ({trend['direction']}, "
                      f"by {trend.get('source', 'label')})")
-            passing = trend["direction"] in ("stable", "improving")
+            passing = trend["direction"] in get_threshold("4.3.1", "Reliability Trend Analysis", "passing_directions")
         trend_entry: Dict[str, Any] = {
             "label": "Reliability Trend Analysis",
             "value": value,

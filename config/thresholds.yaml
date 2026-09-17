@@ -57,6 +57,10 @@
     # actually makes it configurable via overrides.
     stale_days: 1095                   # three years
 
+"4.2.2":
+  Automated FAIR4RS Assessment: 3    # of 4 FAIR principles satisfied, minimum
+  FAIR Metadata Assessment: 4        # of 6 CITATION.cff fields present, minimum
+
 "4.2.3":
   Activity Trend Monitoring:
     # 52-week commit trend must be one of these to meet the threshold.
@@ -86,6 +90,15 @@
   Decision-Making Visibility: 2   # public decision-making channels/documents found, minimum
                                    # (one alone -- e.g. a wiki nobody writes in -- says little)
 
+"4.2.7":
+  Advanced Dependency Analysis: 2   # distinct packaging ecosystems, minimum
+  Collaboration Network Analysis:
+    # Either signal alone is enough: a library can be depended on by many
+    # packages (HDF5: 176 conda packages) or by many repositories (zfp: 111),
+    # and both are real evidence of ecosystem integration.
+    min_dependent_packages: 10
+    min_dependent_repos: 50
+
 "4.2.8":
   Institutional Affiliation Tracking: 3  # distinct organizations among top contributors, minimum
   Funding Portfolio Analysis: 2          # distinct funding sources, minimum
@@ -111,6 +124,14 @@
 
 "4.3.1":
   Test Coverage Excellence: 80          # Codecov line coverage %, minimum
+  Advanced Static Analysis: 1           # defect-analysis tools found beyond CodeQL, minimum
+  CERT Guidelines Compliance: 1         # secure-coding hardening indicators found, minimum
+  Reliability Trend Analysis:
+    min_trend_volume: 5        # combined recent+previous defect reports, minimum (below this the comparison is noise)
+    trend_tolerance: 1.25      # recent:previous ratio at or under which the trend still counts as stable
+    passing_directions:        # trend direction must be one of these to meet the threshold
+      - stable
+      - improving
 
 "4.3.2":
   CI/CD Effectiveness Assessment:
@@ -133,6 +154,11 @@
   Code Review Quality Analysis: 70.0    # merged PRs reviewed %, minimum (leaves room for trivial/automated merges)
   Development Tool Integration: 2       # of 4 dev tooling indicators, minimum found
   Community Contribution Facilitation: 100  # OpenSSF badge progress %, minimum (must be 100 -- fully registered)
+
+"4.3.4":
+  Documentation Completeness Analysis: 3  # of 4 core README sections, minimum
+                                           # (waived if a thinner README is backed by a doc
+                                           # directory and a published documentation site)
 
 "4.3.5":
   Deployment Environment Testing: 2      # distinct CI runner OS families, minimum

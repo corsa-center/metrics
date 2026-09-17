@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,6 @@ _DOC_DIRECTORIES = ["docs", "doc", "documentation", "Documentation"]
 # Markdown ATX headings and Setext underlines both appear in real READMEs.
 _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _SETEXT_HEADING = re.compile(r"^\s{0,3}(\S.*)\n\s{0,3}[=-]{3,}\s*$", re.MULTILINE)
-
-# Most of the four questions answered is a complete-enough README.
-_MIN_README_SECTIONS = 3
 
 
 class UsabilityCollector(GitHubCollectorBase):
@@ -155,7 +152,7 @@ class UsabilityCollector(GitHubCollectorBase):
 
         # A complete README, or a thinner one backed by real documentation
         # elsewhere, both count as documented.
-        complete = len(sections) >= _MIN_README_SECTIONS or (
+        complete = len(sections) >= get_threshold("4.3.4", "Documentation Completeness Analysis") or (
             bool(sections) and bool(doc_dir) and bool(site)
         )
 

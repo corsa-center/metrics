@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +63,6 @@ _ZENODO_PATHS = [".zenodo.json", "zenodo.json"]
 
 # Fields a citation record needs before it is genuinely reusable metadata.
 _CITATION_FIELDS = ["title", "authors", "version", "license", "repository-code", "doi"]
-_MIN_CITATION_FIELDS = 4
-
-# FAIR principles satisfied before the assessment passes.
-_MIN_FAIR_PRINCIPLES = 3
 
 
 class FairLicensingCollector(GitHubCollectorBase):
@@ -357,7 +353,7 @@ class FairLicensingCollector(GitHubCollectorBase):
         sub: Dict[str, Dict[str, Any]] = {}
 
         satisfied = fair.get("satisfied", [])
-        fair_passing = fair.get("count", 0) >= _MIN_FAIR_PRINCIPLES
+        fair_passing = fair.get("count", 0) >= get_threshold("4.2.2", "Automated FAIR4RS Assessment")
         fair_entry: Dict[str, Any] = {
             "label": "Automated FAIR4RS Assessment",
             "value": f"{fair.get('count', 0)}/4 principles satisfied",
@@ -389,7 +385,7 @@ class FairLicensingCollector(GitHubCollectorBase):
         sub["license_exception_handling"] = exc_entry
 
         present = metadata.get("present", [])
-        meta_passing = len(present) >= _MIN_CITATION_FIELDS
+        meta_passing = len(present) >= get_threshold("4.2.2", "FAIR Metadata Assessment")
         meta_entry: Dict[str, Any] = {
             "label": "FAIR Metadata Assessment",
             "value": f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present"
