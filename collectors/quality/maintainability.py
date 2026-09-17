@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Set
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -66,26 +66,6 @@ _REFACTOR_INTENT = re.compile(
     r"|remove (?:unused|dead|obsolete|redundant|noop|no-op|legacy|stale))\b",
     re.IGNORECASE,
 )
-
-# A source file past this size is hard to reason about in one sitting.
-_LARGE_FILE_BYTES = 100_000
-# Codebases where more than this share of source files are oversized read as
-# structurally heavy. A line on a continuum: HDF5 sits at 5.1%, ADIOS2 at 2.2%,
-# zfp at 0.0%, so this separates the portfolio roughly where it naturally splits.
-_MAX_LARGE_FILE_SHARE = 0.05
-# Deep trees are harder to navigate; 10 levels is already generous.
-_MAX_TREE_DEPTH = 10
-
-# One test file per five source files.
-_MIN_TEST_RATIO = 0.20
-# Documentation files as a share of source files.
-_MIN_DOC_RATIO = 0.05
-# Share of recent commits showing refactoring intent. Calibrated against the
-# portfolio rather than picked a priori: measured over 300 commits, HDF5 runs
-# 2.7%, ADIOS2 2.0% and zfp 3.0%. A 3% bar would fail two of the three for
-# what is ordinary, healthy maintenance, so the question this asks is whether
-# sustained structural work happens at all, not whether it is unusually common.
-_MIN_REFACTOR_SHARE = 0.02
 
 # Sampled across three pages. At 100 commits each commit is worth a full
 # percentage point, which makes a 3% threshold indistinguishable from noise.
@@ -240,8 +220,9 @@ class MaintainabilityCollector(GitHubCollectorBase):
             ):
                 docs.append(f)
 
+        large_file_bytes = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
         sizes = [f["size"] for f in source]
-        large = [s for s in sizes if s > _LARGE_FILE_BYTES]
+        large = [s for s in sizes if s > large_file_bytes]
         return {
             "source_files": len(source),
             "test_files": len(tests),
@@ -262,8 +243,8 @@ class MaintainabilityCollector(GitHubCollectorBase):
         depth = comp.get("max_depth", 0)
         manageable = (
             source_files > 0
-            and large_share <= _MAX_LARGE_FILE_SHARE
-            and depth <= _MAX_TREE_DEPTH
+            and large_share <= get_threshold("4.3.6", "Advanced Complexity Analysis", "max_large_file_share")
+            and depth <= get_threshold("4.3.6", "Advanced Complexity Analysis", "max_tree_depth")
         )
         sub["complexity_analysis"] = {
             "label": "Advanced Complexity Analysis",
@@ -285,7 +266,7 @@ class MaintainabilityCollector(GitHubCollectorBase):
             "value": f"{comp.get('test_files', 0):,} test files for "
                      f"{source_files:,} source files ({test_ratio:.2f} ratio){approx}"
                      if source_files else "No source files identified",
-            "passing": test_ratio >= _MIN_TEST_RATIO,
+            "passing": test_ratio >= get_threshold("4.3.6", "Code Quality Assessment"),
         }
 
         doc_ratio = comp.get("doc_files", 0) / source_files if source_files else 0.0
@@ -295,7 +276,7 @@ class MaintainabilityCollector(GitHubCollectorBase):
             "value": f"{comp.get('doc_files', 0):,} documentation files "
                      f"({doc_ratio:.2f} ratio)"
                      + (f"; {', '.join(generators)}" if generators else ""),
-            "passing": bool(generators) or doc_ratio >= _MIN_DOC_RATIO,
+            "passing": bool(generators) or doc_ratio >= get_threshold("4.3.6", "Documentation Quality Evaluation"),
         }
 
         share = refactor.get("share")
@@ -305,7 +286,7 @@ class MaintainabilityCollector(GitHubCollectorBase):
                      f"{refactor.get('sampled', 0)} recent commits"
                      if refactor.get("sampled") else "No commits sampled",
             "detail": "; ".join(refactor.get("examples", [])) or None,
-            "passing": share is not None and share >= _MIN_REFACTOR_SHARE,
+            "passing": share is not None and share >= get_threshold("4.3.6", "Refactoring and Evolution Tracking"),
         }
 
         score = sum(1 for s in sub.values() if s["passing"])

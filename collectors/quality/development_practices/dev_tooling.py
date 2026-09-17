@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +48,6 @@ _TOOLING_PATHS = {
 # How many recently-closed PRs to sample for review coverage.
 _PR_SAMPLE_SIZE = 50
 
-# Thresholds. Reviewing most merged work is the practice the report is after;
-# 70% leaves room for trivial and automated merges.
-_REVIEW_COVERAGE_TARGET = 70.0
-_MIN_TESTING_CATEGORIES = 2
-_MIN_TOOLING_CATEGORIES = 2
 
 
 class DevToolingCollector(GitHubCollectorBase):
@@ -175,7 +170,7 @@ class DevToolingCollector(GitHubCollectorBase):
         sub: Dict[str, Dict[str, Any]] = {}
 
         test_found = testing.get("found", [])
-        test_passing = len(test_found) >= _MIN_TESTING_CATEGORIES
+        test_passing = len(test_found) >= get_threshold("4.3.2", "Testing Framework Excellence")
         testing_entry: Dict[str, Any] = {
             "label": "Testing Framework Excellence",
             "value": f"{len(test_found)}/{len(_TESTING_PATHS)} indicators",
@@ -194,14 +189,14 @@ class DevToolingCollector(GitHubCollectorBase):
             "label": "Code Review Quality Analysis",
             "value": f"{cov}% of {review.get('sampled', 0)} merged PRs reviewed"
                      if cov is not None else "No merged PRs to sample",
-            "passing": cov is not None and cov >= _REVIEW_COVERAGE_TARGET,
+            "passing": cov is not None and cov >= get_threshold("4.3.2", "Code Review Quality Analysis"),
         }
         if review.get("not_collected"):
             review_entry["not_collected"] = True
         sub["code_review_quality"] = review_entry
 
         tool_found = tooling.get("found", [])
-        tool_passing = len(tool_found) >= _MIN_TOOLING_CATEGORIES
+        tool_passing = len(tool_found) >= get_threshold("4.3.2", "Development Tool Integration")
         tooling_entry: Dict[str, Any] = {
             "label": "Development Tool Integration",
             "value": f"{len(tool_found)}/{len(_TOOLING_PATHS)} tools",

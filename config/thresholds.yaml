@@ -129,6 +129,9 @@
     min_releases_per_year: 1            # GitHub releases per year, minimum
     max_time_to_failure_hours: 1        # average failed-run duration, maximum
     min_score: 0                        # orchestrator's own gate: score must exceed this (score/max_score shown alongside)
+  Testing Framework Excellence: 2       # of 4 testing indicators, minimum found
+  Code Review Quality Analysis: 70.0    # merged PRs reviewed %, minimum (leaves room for trivial/automated merges)
+  Development Tool Integration: 2       # of 4 dev tooling indicators, minimum found
   Community Contribution Facilitation: 100  # OpenSSF badge progress %, minimum (must be 100 -- fully registered)
 
 "4.3.5":
@@ -141,3 +144,15 @@
                                          # Contributor Viability Assessment, kept as its own
                                          # key for the same reason as 4.2.10's Community
                                          # Health Trends above
+  Advanced Complexity Analysis:
+    large_file_bytes: 100000     # a source file past this size is hard to reason about in one sitting
+    max_large_file_share: 0.05   # share of source files that may be oversized, maximum
+                                  # (HDF5 sits at 5.1%, ADIOS2 at 2.2%, zfp at 0.0% -- separates
+                                  # the portfolio roughly where it naturally splits)
+    max_tree_depth: 10           # directory nesting depth, maximum
+  Code Quality Assessment: 0.20     # test files per source file, minimum ratio
+  Documentation Quality Evaluation: 0.05  # doc files per source file, minimum ratio (waived if a doc generator is configured)
+  Refactoring and Evolution Tracking: 0.02  # share of recent commits showing refactoring intent, minimum
+                                             # (calibrated against the portfolio: HDF5 2.7%, ADIOS2 2.0%,
+                                             # zfp 3.0% over 300 commits -- asks whether sustained
+                                             # structural work happens at all, not whether it's common)
