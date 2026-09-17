@@ -16,16 +16,20 @@ on:
     # weekly cadence before any of today's fixes and the ~1.5-day cycle
     # the original 2/run split gave.
     #
-    # Minute 7, not 0: GitHub explicitly documents that scheduled workflows
-    # are best-effort and can be delayed or dropped under high load, and
-    # recommends avoiding the top of the hour specifically because that's
-    # when every other repo's hourly cron also fires. Confirmed live: after
-    # switching to hourly at minute 0, only 1 of the 8 expected firings
-    # between 2026-09-16T21:00Z and 2026-09-17T05:00Z actually ran. GROUP is
-    # computed from `date -u +%s / 3600`, which only depends on which UTC
-    # hour the job runs in, not which minute -- so this doesn't change the
-    # round-robin group a given firing gets.
-    - cron: '7 * * * *'
+    # Minute 23, not 0 or 7: GitHub explicitly documents that scheduled
+    # workflows are best-effort and can be delayed or dropped under high
+    # load, and recommends avoiding the top of the hour specifically
+    # because that's when every other repo's hourly cron also fires.
+    # Minute 0 measurably failed to deliver most firings (only 1 of 8
+    # expected between 2026-09-16T21:00Z and 2026-09-17T05:00Z actually
+    # ran), and minute 7 -- itself a common choice, and close enough to 0/5
+    # to still be in the tail of the top-of-hour surge -- also missed its
+    # first opportunity (2026-09-17T06:07Z). Minute 23 sits deep in the
+    # back half of the hour, away from the :00/:05/:10/:15 marks most
+    # tools default to. GROUP is computed from `date -u +%s / 3600`, which
+    # only depends on which UTC hour the job runs in, not which minute --
+    # so this doesn't change the round-robin group a given firing gets.
+    - cron: '23 * * * *'
   workflow_dispatch:
     inputs:
       software_filter:
