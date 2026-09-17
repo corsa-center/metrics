@@ -624,36 +624,55 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")
 
-        # Calculate combined ecosystem score from available sub-collectors
+        # Calculate combined ecosystem score from available sub-collectors.
+        # A collector's percentage/score can be None when everything it
+        # measures gapped (see the not_collected work across
+        # collectors/ecosystem/ and collectors/quality/) -- dict.get(key, 0)
+        # only substitutes the default when the key is *missing*, not when
+        # its value is None, so appending it unguarded either crashes
+        # sum()/len() on a NoneType or (with an `or 0` guard) silently
+        # scores a gap as a confident 0. Excluded from the average entirely
+        # instead, same as each collector already excludes it from its own
+        # internal score.
         scores = []
+
+        def _append_pct(container: Dict, *keys):
+            value = container
+            for key in keys:
+                value = value.get(key, {}) if isinstance(value, dict) else {}
+            if isinstance(value, (int, float)):
+                scores.append(value)
+
         if "governance" in sub_results:
-            scores.append(sub_results["governance"].get("overall_score", {}).get("percentage", 0))
+            _append_pct(sub_results["governance"], "overall_score", "percentage")
         if "licensing" in sub_results:
-            scores.append(sub_results["licensing"].get("compliance_score", {}).get("percentage", 0))
+            _append_pct(sub_results["licensing"], "compliance_score", "percentage")
         if "maintenance" in sub_results:
-            scores.append(sub_results["maintenance"].get("score", {}).get("percentage", 0))
+            _append_pct(sub_results["maintenance"], "score", "percentage")
         if "chaoss_activity" in sub_results:
-            scores.append(sub_results["chaoss_activity"].get("overall_score", {}).get("score", 0))
+            _append_pct(sub_results["chaoss_activity"], "overall_score", "score")
         if "openssf_badge" in sub_results:
-            scores.append(sub_results["openssf_badge"].get("overall_score", {}).get("score", 0))
+            _append_pct(sub_results["openssf_badge"], "overall_score", "score")
         if "engagement" in sub_results:
             eng_s = sub_results["engagement"].get("overall_score", {})
             mx = eng_s.get("max_score", 7)
-            scores.append(round(eng_s.get("score", 0) / mx * 100) if mx else 0)
+            eng_score = eng_s.get("score")
+            if mx and isinstance(eng_score, (int, float)):
+                scores.append(round(eng_score / mx * 100))
         if "openssf_scorecard" in sub_results:
             pct = sub_results["openssf_scorecard"].get("percentage")
             if pct is not None:
                 scores.append(pct)
         if "outreach" in sub_results:
-            scores.append(sub_results["outreach"].get("overall_score", {}).get("percentage", 0))
+            _append_pct(sub_results["outreach"], "overall_score", "percentage")
         if "funding" in sub_results:
-            scores.append(sub_results["funding"].get("overall_score", {}).get("percentage", 0))
+            _append_pct(sub_results["funding"], "overall_score", "percentage")
         if "welcomeness" in sub_results:
-            scores.append(sub_results["welcomeness"].get("overall_score", {}).get("percentage", 0))
+            _append_pct(sub_results["welcomeness"], "overall_score", "percentage")
         if "collaboration" in sub_results:
-            scores.append(sub_results["collaboration"].get("overall_score", {}).get("percentage", 0))
+            _append_pct(sub_results["collaboration"], "overall_score", "percentage")
         if "fair_licensing" in sub_results:
-            scores.append(sub_results["fair_licensing"].get("overall_score", {}).get("percentage", 0))
+            _append_pct(sub_results["fair_licensing"], "overall_score", "percentage")
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -778,31 +797,46 @@ class MetricsOrchestrator:
             except Exception as e:
                 logger.warning(f"Supply chain collection failed for {package['name']}: {e}")
 
+        # Same None-guard as the ecosystem dimension's score list below:
+        # dict.get(key, 0) only substitutes the default when the key is
+        # missing, not when a collector's own percentage is None because
+        # everything it measures gapped. Excluded from the average rather
+        # than crashing sum()/len() or silently scoring a gap as 0.
         scores = []
+
+        def _append_quality_pct(container: Dict, *keys):
+            value = container
+            for key in keys:
+                value = value.get(key, {}) if isinstance(value, dict) else {}
+            if isinstance(value, (int, float)):
+                scores.append(value)
+
         if "ci_cd" in sub_results:
-            scores.append(sub_results["ci_cd"].get("percentage", 0))
+            _append_quality_pct(sub_results["ci_cd"], "percentage")
         if "reproducibility" in sub_results:
-            scores.append(sub_results["reproducibility"].get("overall_score", {}).get("percentage", 0))
+            _append_quality_pct(sub_results["reproducibility"], "overall_score", "percentage")
         if "accessibility" in sub_results:
-            scores.append(sub_results["accessibility"].get("overall_score", {}).get("percentage", 0))
+            _append_quality_pct(sub_results["accessibility"], "overall_score", "percentage")
         if sub_results.get("test_coverage", {}).get("coverage_exists"):
-            scores.append(sub_results["test_coverage"].get("coverage_percentage", 0))
+            _append_quality_pct(sub_results["test_coverage"], "coverage_percentage")
         if "static_analysis" in sub_results:
-            scores.append(100 if sub_results["static_analysis"].get("has_codeql") else 0)
+            sa = sub_results["static_analysis"]
+            if sa.get("has_codeql"):
+                scores.append(100)
+            elif not sa.get("not_collected"):
+                scores.append(0)
         if "dev_tooling" in sub_results:
-            scores.append(sub_results["dev_tooling"].get("overall_score", {}).get("percentage", 0))
+            _append_quality_pct(sub_results["dev_tooling"], "overall_score", "percentage")
         if "deployment_environments" in sub_results:
-            scores.append(
-                sub_results["deployment_environments"].get("overall_score", {}).get("percentage", 0)
-            )
+            _append_quality_pct(sub_results["deployment_environments"], "overall_score", "percentage")
         if "usability" in sub_results:
-            scores.append(sub_results["usability"].get("overall_score", {}).get("percentage", 0))
+            _append_quality_pct(sub_results["usability"], "overall_score", "percentage")
         if "maintainability" in sub_results:
-            scores.append(sub_results["maintainability"].get("overall_score", {}).get("percentage", 0))
+            _append_quality_pct(sub_results["maintainability"], "overall_score", "percentage")
         if "reliability" in sub_results:
-            scores.append(sub_results["reliability"].get("overall_score", {}).get("percentage", 0))
+            _append_quality_pct(sub_results["reliability"], "overall_score", "percentage")
         if "supply_chain" in sub_results:
-            scores.append(sub_results["supply_chain"].get("overall_score", {}).get("percentage", 0))
+            _append_quality_pct(sub_results["supply_chain"], "overall_score", "percentage")
 
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -1057,6 +1091,21 @@ class MetricsOrchestrator:
                 row += f'\n<p class="sub-detail">{info["detail"]}</p>'
             return row
 
+        def _score_line(overall: Dict) -> str:
+            """Render a collector's own overall_score as a 'Score: X/Y' row.
+
+            Uses the collector's own max_score rather than a hardcoded
+            constant, since a permanently-uncollected submetric (see the
+            not_collected work across collectors/ecosystem/) is excluded
+            from it and it can be smaller than the section's full submetric
+            count. A None score (everything gapped) renders as text instead
+            of "None/N".
+            """
+            score = overall.get("score")
+            max_score = overall.get("max_score", 0)
+            shown = score if score is not None else "Not collected"
+            return f'<p><strong>Score:</strong> {shown}/{max_score}</p>'
+
         eco = dims.get("ecosystem", {}).get("sub_results", {})
 
         # --- 4.1.1 Software Citation and Adoption ---
@@ -1217,10 +1266,20 @@ class MetricsOrchestrator:
                 )
                 # Per-category breakdown, weakest first, so the failing areas
                 # are what a maintainer sees rather than just the headline score.
+                # A category can be {"not_collected": True} instead of a
+                # number when its own fetch gapped (see chaoss_governance.py
+                # _calculate_overall_score) — those aren't comparable to a
+                # score and are listed last rather than sorted by it.
                 cats = chaoss_score.get("category_scores", {})
-                for name, val in sorted(cats.items(), key=lambda kv: kv[1]):
+                scored_cats = {k: v for k, v in cats.items() if isinstance(v, (int, float))}
+                gapped_cats = [k for k, v in cats.items() if not isinstance(v, (int, float))]
+                for name, val in sorted(scored_cats.items(), key=lambda kv: kv[1]):
                     gov_lines.append(
                         f'<p class="sub-detail">{name.replace("_", " ").title()}: {round(val)}/100</p>'
+                    )
+                for name in gapped_cats:
+                    gov_lines.append(
+                        f'<p class="sub-detail">{name.replace("_", " ").title()}: Not collected</p>'
                     )
             else:
                 gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
@@ -1599,9 +1658,7 @@ class MetricsOrchestrator:
                     "onboarding_infrastructure",
                 ]
             ]
-            out_lines.append(
-                f'<p><strong>Score:</strong> {outreach.get("overall_score", {}).get("score", 0)}/8</p>'
-            )
+            out_lines.append(_score_line(outreach.get("overall_score", {})))
             section_425_data = "\n".join(out_lines)
         else:
             section_425_data = None
@@ -1623,9 +1680,7 @@ class MetricsOrchestrator:
                     "decision_making_visibility",
                 ]
             ]
-            wel_lines.append(
-                f'<p><strong>Score:</strong> {welcomeness.get("overall_score", {}).get("score", 0)}/7</p>'
-            )
+            wel_lines.append(_score_line(welcomeness.get("overall_score", {})))
             section_426_data = "\n".join(wel_lines)
         else:
             section_426_data = None
@@ -1665,16 +1720,19 @@ class MetricsOrchestrator:
                     "funding_portfolio",
                 ]
             ]
-            fin_lines.append(
-                f'<p><strong>Score:</strong> {funding.get("overall_score", {}).get("score", 0)}/5</p>'
-            )
+            fin_lines.append(_score_line(funding.get("overall_score", {})))
             section_428_data = "\n".join(fin_lines)
 
             # 4.2.9 — only Institutional Support Tracking is derivable from the
             # repository. RSE titles, career development and institutional policy
             # need directory data the report itself flags as unautomatable.
+            inst_info = fsub.get("institutional_support", {})
             inst_row = _sub_row(fsub, "institutional_support")
-            inst_pts = 1 if fsub.get("institutional_support", {}).get("passing") else 0
+            # A gap here isn't a confirmed miss -- don't let it silently
+            # count as 0/5 alongside the genuinely-unimplemented rows below.
+            inst_pts = "N/A" if inst_info.get("not_collected") else (
+                1 if inst_info.get("passing") else 0
+            )
             section_429_data = "\n".join([
                 '<p><strong>RSE Position Detection:</strong> Not yet collected</p>',
                 inst_row,
@@ -1716,6 +1774,12 @@ class MetricsOrchestrator:
                     url = static_analysis.get("workflow_url", "")
                     link = f'<a href="{url}">CodeQL enabled</a>' if url else "CodeQL enabled"
                     section_431_lines.append(f'<p><strong>Enhanced Security Analysis:</strong> {link} ✓</p>')
+                elif static_analysis.get("not_collected"):
+                    # A gap here isn't a confirmed "no CodeQL" -- don't
+                    # report it as a failure alongside real ✗ results.
+                    section_431_lines.append(
+                        '<p><strong>Enhanced Security Analysis:</strong> Not yet collected</p>'
+                    )
                 else:
                     section_431_lines.append(
                         '<p><strong>Enhanced Security Analysis:</strong> No CodeQL workflow found ✗</p>'
@@ -1772,8 +1836,14 @@ class MetricsOrchestrator:
             cats = reproducibility.get("categories", {})
             repr_pts = 0
 
-            def _repr_row(label, passing, detail=None):
+            def _repr_row(label, passing, detail=None, not_collected=False):
                 nonlocal repr_pts
+                # A False built on a gap (at least one candidate in this
+                # category gapped and nothing was confirmed found/absent)
+                # isn't a confirmed miss -- don't count it against repr_pts
+                # or show it as a confident ✗ alongside real fails.
+                if not passing and not_collected:
+                    return f'<p><strong>{label}:</strong> Not yet collected</p>'
                 repr_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
                 row = f'<p><strong>{label}:</strong> {mark}</p>'
@@ -1789,20 +1859,25 @@ class MetricsOrchestrator:
             repr_lines = [
                 _repr_row("FAIR4RS Compliance Assessment",
                           reproducibility.get("has_fair4rs_metadata"),
-                          ", ".join(fair4rs_found) if fair4rs_found else None),
+                          ", ".join(fair4rs_found) if fair4rs_found else None,
+                          bool(cats.get("fair4rs_metadata", {}).get("not_collected"))),
                 _repr_row("Containerization Excellence",
                           reproducibility.get("has_container"),
-                          ", ".join(container_found) if container_found else None),
+                          ", ".join(container_found) if container_found else None,
+                          bool(cats.get("containers", {}).get("not_collected"))),
                 _repr_row("Version Control Best Practices",
                           reproducibility.get("uses_semantic_versioning"),
-                          ", ".join(semver.get("example_tags", [])[:2]) if semver.get("example_tags") else None),
+                          ", ".join(semver.get("example_tags", [])[:2]) if semver.get("example_tags") else None,
+                          bool(semver.get("not_collected"))),
                 _repr_row("Environment Management",
                           reproducibility.get("has_dependency_pinning"),
-                          ", ".join(dep_found) if dep_found else None),
+                          ", ".join(dep_found) if dep_found else None,
+                          bool(cats.get("dependency_pinning", {}).get("not_collected"))),
                 _repr_row("Reproducibility Documentation",
                           reproducibility.get("has_reproducibility_docs"),
                           ", ".join(cats.get("reproducibility_docs", {}).get("found", []))
-                          or None),
+                          or None,
+                          bool(cats.get("reproducibility_docs", {}).get("not_collected"))),
                 f'<p><strong>Score:</strong> {repr_pts}/5</p>',
             ]
             section_433_data = "\n".join(repr_lines)
@@ -1921,8 +1996,11 @@ class MetricsOrchestrator:
             cats = accessibility.get("categories", {})
             acc_pts = 0
 
-            def _acc_row(label, passing, detail=None):
+            def _acc_row(label, passing, detail=None, not_collected=False):
                 nonlocal acc_pts
+                # Same "gap isn't a confirmed miss" rule as _repr_row above.
+                if not passing and not_collected:
+                    return f'<p><strong>{label}:</strong> Not yet collected</p>'
                 acc_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
                 row = f'<p><strong>{label}:</strong> {mark}</p>'
@@ -1941,10 +2019,12 @@ class MetricsOrchestrator:
             acc_lines = [
                 _acc_row("Portable Build System Detection",
                          accessibility.get("has_portable_build_system"),
-                         ", ".join(build_found) if build_found else None),
+                         ", ".join(build_found) if build_found else None,
+                         bool(cats.get("build_systems", {}).get("not_collected"))),
                 _acc_row("Container Availability Assessment",
                          accessibility.get("has_container"),
-                         ", ".join(container_found) if container_found else None),
+                         ", ".join(container_found) if container_found else None,
+                         bool(cats.get("containers", {}).get("not_collected"))),
                 (_sub_row(dep_sub, "architecture_compatibility") if deployment_envs
                  else "<p><strong>Architecture Compatibility Analysis:</strong> Not yet collected</p>"),
                 (_sub_row(dep_sub, "platform_documentation") if deployment_envs
