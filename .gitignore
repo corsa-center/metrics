@@ -33,3 +33,6 @@ orchestrator.log
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
+
+# Personal working notes, not for the repo
+GREG_FEEDBACK_pass_fail_thresholds.md
