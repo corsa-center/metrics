@@ -98,7 +98,7 @@ jobs:
           ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.group_count == '' && github.event.inputs.chain != 'true') && 240 || 30 }}
         env:
           # Small hourly batches (see GROUP_COUNT below) keep real request
-          # volume around ~600/hour -- still comfortably under the automatic
+          # volume around ~700/hour -- still comfortably under the automatic
           # token's 1,000/hour-per-repository cap (itself well below the
           # 5,000/hour a personal token gets), with margin held back for
           # per-package variance and retry amplification, so routine
@@ -136,13 +136,14 @@ jobs:
           # A manual dispatch only splits if asked (group_count/group inputs);
           # left blank, it runs the whole catalog, same as before batching --
           # useful for validating a fix across everything at once.
-          GROUP_COUNT=12  # ~6 packages/run for a 71-package catalog (~600
-                          # req/hour at ~80-100 req/package, ~40% margin
+          GROUP_COUNT=10  # ~7 packages/run for a 71-package catalog (~700
+                          # req/hour at ~80-100 req/package, ~30% margin
                           # under the 1,000/hour cap); grows gracefully
                           # (batch size creeps up, not coverage breaking)
-                          # if the catalog grows past 72. Full-catalog
-                          # refresh drops from ~18.6 hours (18 groups) to
-                          # ~12.4 hours at the chain's observed ~62min/cycle.
+                          # if the catalog grows past 80. Full-catalog
+                          # refresh drops to ~10.3 hours at the chain's
+                          # observed ~62min/cycle (was ~18.6 hours at
+                          # 4/run, ~12.4 hours at 6/run).
           if [ -n "$SOFTWARE_ARG" ]; then
             : # targeting one package by name -- grouping would be meaningless
           elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.chain }}" = "true" ]; then
