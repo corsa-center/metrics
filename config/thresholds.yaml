@@ -66,9 +66,29 @@
   Multi-Channel Communication Activity: 2     # distinct channels found, minimum
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
+"4.2.4":
+  Engagement Quality Metrics: 2   # median comments per issue, minimum
+  Communication Pattern Analysis:
+    response_window_hours: 168          # "timely" response window (one week)
+    min_timely_response_share: 0.70     # share of issues answered within the window, minimum
+  Community Participation Assessment: 0.15  # share of issues/PRs from outside the maintainer group, minimum
+
+"4.2.5":
+  Contributor Retention Analysis:
+    retained_min_commits: 2       # commits within the recent window to count as "retained"
+    min_retention_rate_pct: 50    # share of new contributors who return, minimum
+  Contributor Lifecycle Mapping:
+    casual_max_commits: 4         # commits at or below this bucket as "casual" rather than "repeat"
+    min_repeat_contributors: 3    # repeat contributors, minimum
+  Onboarding Infrastructure Assessment: 3  # of 4 onboarding resources, minimum found
+
 "4.2.6":
   Decision-Making Visibility: 2   # public decision-making channels/documents found, minimum
                                    # (one alone -- e.g. a wiki nobody writes in -- says little)
+
+"4.2.8":
+  Institutional Affiliation Tracking: 3  # distinct organizations among top contributors, minimum
+  Funding Portfolio Analysis: 2          # distinct funding sources, minimum
 
 "4.2.10":
   Comprehensive Activity Analysis:

@@ -25,7 +25,7 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +50,6 @@ _ONBOARDING_PATHS = {
         "doc/getting-started.md", "GETTING_STARTED.md", "docs/source/getting_started.rst",
     ],
 }
-
-# Contribution-count boundaries for lifecycle buckets. The report offers
-# "one commit, fewer than five commits, or project-specific thresholds";
-# fewer-than-five is used for "casual" here.
-_CASUAL_MAX_COMMITS = 4
-
-# A contributor counts as retained once they have made more than one contribution.
-_RETAINED_MIN_COMMITS = 2
 
 # Window for "new" contributors and recent commit activity.
 _RECENT_DAYS = 365
@@ -324,9 +316,10 @@ class OutreachCollector(GitHubCollectorBase):
             for login, recent in recent_counts.items()
             if login in totals and totals[login] <= recent
         ]
+        retained_min_commits = get_threshold("4.2.5", "Contributor Retention Analysis", "retained_min_commits")
         retained = [
             login for login in new_contributors
-            if recent_counts[login] >= _RETAINED_MIN_COMMITS
+            if recent_counts[login] >= retained_min_commits
         ]
         retention_rate = (
             round(len(retained) / len(new_contributors) * 100, 1)
@@ -334,11 +327,12 @@ class OutreachCollector(GitHubCollectorBase):
             else None
         )
 
+        casual_max_commits = get_threshold("4.2.5", "Contributor Lifecycle Mapping", "casual_max_commits")
         lifecycle = {"one_time": 0, "casual": 0, "repeat": 0}
         for count in totals.values():
             if count <= 1:
                 lifecycle["one_time"] += 1
-            elif count <= _CASUAL_MAX_COMMITS:
+            elif count <= casual_max_commits:
                 lifecycle["casual"] += 1
             else:
                 lifecycle["repeat"] += 1
@@ -371,8 +365,9 @@ class OutreachCollector(GitHubCollectorBase):
         sub["new_contributor_tracking"] = new_entry
 
         rate = growth.get("retention_rate")
-        # Half of newcomers coming back is a healthy return rate for OSS.
-        retention_passing = rate is not None and rate >= 50
+        retention_passing = rate is not None and rate >= get_threshold(
+            "4.2.5", "Contributor Retention Analysis", "min_retention_rate_pct"
+        )
         retention_entry: Dict[str, Any] = {
             "label": "Contributor Retention Analysis",
             "value": f"{rate}% of new contributors returned" if rate is not None
@@ -385,8 +380,9 @@ class OutreachCollector(GitHubCollectorBase):
 
         lifecycle = growth.get("lifecycle", {})
         repeat = lifecycle.get("repeat", 0)
-        # A community sustained by more than a handful of regulars.
-        lifecycle_passing = repeat >= 3
+        lifecycle_passing = repeat >= get_threshold(
+            "4.2.5", "Contributor Lifecycle Mapping", "min_repeat_contributors"
+        )
         lifecycle_entry: Dict[str, Any] = {
             "label": "Contributor Lifecycle Mapping",
             "value": f"{lifecycle.get('one_time', 0)} one-time / "
@@ -411,8 +407,7 @@ class OutreachCollector(GitHubCollectorBase):
         sub["good_first_issue"] = gfi_entry
 
         found = onboarding.get("found", [])
-        # Over half the onboarding resources present.
-        onboarding_passing = len(found) >= 3
+        onboarding_passing = len(found) >= get_threshold("4.2.5", "Onboarding Infrastructure Assessment")
         onboarding_entry: Dict[str, Any] = {
             "label": "Onboarding Infrastructure Assessment",
             "value": f"{len(found)}/{len(_ONBOARDING_PATHS)} resources",
