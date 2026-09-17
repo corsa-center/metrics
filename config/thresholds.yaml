@@ -28,8 +28,9 @@
 # block, keyed the same way as this file, to override any value below at
 # startup. An override key that doesn't match an existing default here fails
 # fast when the orchestrator starts, instead of being silently ignored.
-# Per-project and per-package threshold overrides are not wired up yet --
-# see GREG_FEEDBACK_pass_fail_thresholds.md item 4.
+# Per-project and per-package threshold overrides -- letting one project opt
+# into a different value than everyone else, not just a different indicator
+# set -- are not wired up yet.
 #
 # Sub-metrics without an entry here have nothing to configure: pure
 # presence/structural checks, graduated scoring rubrics (e.g. CHAOSS's
