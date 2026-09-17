@@ -365,9 +365,7 @@ class OutreachCollector(GitHubCollectorBase):
         sub["new_contributor_tracking"] = new_entry
 
         rate = growth.get("retention_rate")
-        retention_passing = rate is not None and rate >= get_threshold(
-            "4.2.5", "Contributor Retention Analysis", "min_retention_rate_pct"
-        )
+        retention_passing = rate is not None and rate >= get_threshold("4.2.5", "Contributor Retention Analysis", "min_retention_rate_pct")
         retention_entry: Dict[str, Any] = {
             "label": "Contributor Retention Analysis",
             "value": f"{rate}% of new contributors returned" if rate is not None
@@ -380,9 +378,7 @@ class OutreachCollector(GitHubCollectorBase):
 
         lifecycle = growth.get("lifecycle", {})
         repeat = lifecycle.get("repeat", 0)
-        lifecycle_passing = repeat >= get_threshold(
-            "4.2.5", "Contributor Lifecycle Mapping", "min_repeat_contributors"
-        )
+        lifecycle_passing = repeat >= get_threshold("4.2.5", "Contributor Lifecycle Mapping", "min_repeat_contributors")
         lifecycle_entry: Dict[str, Any] = {
             "label": "Contributor Lifecycle Mapping",
             "value": f"{lifecycle.get('one_time', 0)} one-time / "

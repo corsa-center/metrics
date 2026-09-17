@@ -190,11 +190,10 @@ Every sub-metric's pass/fail decision (the ✓/✗ shown on the dashboard) is
 governed by a value in [`config/thresholds.yaml`](config/thresholds.yaml) --
 that file **is** the full, current list of every changeable threshold and
 its default, organized by CASS report section number and the exact
-sub-metric label, with an inline comment explaining each one. Open it
-directly rather than looking here for the list; this guide only covers the
-override mechanism. ([METRICS_CATALOG.md](METRICS_CATALOG.md)'s "Meets
-threshold when" column shows the same values in prose, for cross-reference
-against the report's own language.)
+sub-metric label, with an inline comment explaining each one.
+([METRICS_CATALOG.md](METRICS_CATALOG.md)'s "Meets threshold when" column
+shows the same values in prose, for cross-reference against the report's
+own language.)
 
 To change a default without editing collector code, copy the relevant
 section/label(/param) structure from `config/thresholds.yaml` into a

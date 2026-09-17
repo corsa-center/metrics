@@ -140,8 +140,9 @@ class MetricsOrchestrator:
         # Overrides for config/thresholds.yaml's defaults (see that file).
         # Installed before any collector's collect() can run, so every
         # get_threshold() call during this process sees the final value.
-        # An override referencing a threshold thresholds.yaml doesn't define
-        # raises here, at startup, rather than being silently ignored.
+        # An override referencing a threshold that isn't declared in
+        # thresholds.yaml raises here, at startup, instead of being
+        # silently ignored.
         configure_threshold_overrides(self.config.get("thresholds"))
         self.dashboard_base_url = self.config.get(
             "dashboard_base_url", "https://corsa.center/dashboard"

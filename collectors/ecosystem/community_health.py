@@ -242,10 +242,9 @@ class CommunityHealthCollector:
             if valid:
                 last_updated_days = min(valid)
 
-        stale_days = get_threshold("4.2.1", "Governance Effectiveness Assessment", "stale_days")
         maintained = (
             last_updated_days is not None
-            and last_updated_days <= stale_days
+            and last_updated_days <= get_threshold("4.2.1", "Governance Effectiveness Assessment", "stale_days")
         )
         return {
             "has_codeowners": has_codeowners,

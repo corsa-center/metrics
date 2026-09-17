@@ -1,12 +1,12 @@
 """Unit tests for the threshold registry (collectors/ecosystem/base.py) and
 for config/thresholds.yaml staying in sync with the code that reads it.
 
-The whole point of this registry is that a threshold with nobody reading it
-can't happen silently -- that's exactly how config/thresholds.yaml's own
-CI/CD default note and the two removed active_maintenance.py constants went
-unnoticed. TestConfigMatchesCode below is the mechanical check for that,
+The whole point of this registry is that a threshold declared in
+config/thresholds.yaml with no get_threshold() call site reading it -- or a
+call site referencing a threshold that isn't declared -- can't happen
+silently. TestConfigMatchesCode below is the mechanical check for that,
 mirroring tests/test_collector_toggles.py's TestConfigMatchesCode for the
-same reason.
+same class of bug (a config value nothing reads).
 """
 
 import re

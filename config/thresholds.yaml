@@ -1,27 +1,18 @@
 # Threshold registry for CASS sub-metric pass/fail decisions.
 #
-# This is the single source of truth for every configurable threshold in the
-# framework -- the values that used to be scattered as magic numbers across
-# collectors and orchestrator.py's dashboard-rendering code, in two
-# disconnected layers with no cross-check between them. Three of those
-# numbers (a departure-rate cap, a channel count, a cycle-time cap) turned
-# out to be *defined* in a collector but never actually *read* -- the
-# rendering layer had its own duplicate literal doing the real work, and the
-# named "constant" was pure decoration. This file exists so that can't
-# happen again: every value here is read by exactly the code that decides
-# pass/fail, nothing is duplicated, and an unused or misspelled entry fails
-# a test (tests/test_thresholds.py) rather than silently doing nothing.
+# Single source of truth for every configurable threshold in the framework.
+# Every value here is read by exactly the code that decides pass/fail --
+# nothing is duplicated -- and an unused or misspelled entry fails a test
+# (tests/test_thresholds.py) instead of silently doing nothing.
 #
 # Keyed by CASS report section number, then the exact sub-metric label from
-# METRICS_CATALOG.md / SECTION_SUBMETRICS in orchestrator.py -- not by
-# Python constant name, since the constant name means nothing to a project
-# maintainer deciding what to configure. A sub-metric with nothing
-# configurable (a pure presence/structural check, like "a license was
-# identified") has no entry here at all -- absence means "not
+# METRICS_CATALOG.md / SECTION_SUBMETRICS in orchestrator.py. A sub-metric
+# with nothing configurable (a pure presence/structural check, like "a
+# license was identified") has no entry here -- absence means "not
 # configurable," not "use some hidden default."
 #
-# Three value shapes:
-#   - a bare number: a single >=/<=/</> comparison
+# Each value is one of three types:
+#   - a number: a single >=/<=/</> comparison
 #   - a list of strings: the value must be one of these (set membership)
 #   - a mapping: several independently-named parameters for one sub-metric
 #
@@ -30,23 +21,18 @@
 # configured here -- these thresholds only ever apply to data that was
 # actually collected.
 #
-# Overrides: config/orchestrator.yaml can carry its own top-level
-# `thresholds:` block in this same shape to override any value below at
+# Overrides: config/orchestrator.yaml can carry a top-level `thresholds:`
+# block, keyed the same way as this file, to override any value below at
 # startup. An override key that doesn't match an existing default here fails
-# fast when the orchestrator starts, rather than being silently ignored.
-# Per-project and per-package threshold overrides (narrowing what a project
-# is measured against, not just its text) are not wired up yet -- see
-# GREG_FEEDBACK_pass_fail_thresholds.md item 4.
+# fast when the orchestrator starts, instead of being silently ignored.
+# Per-project and per-package threshold overrides are not wired up yet --
+# see GREG_FEEDBACK_pass_fail_thresholds.md item 4.
 #
-# Only the sub-metrics with something genuinely configurable are listed
-# below. Every numeric/set-membership pass-fail decision found across
-# collectors/ and orchestrator.py's dashboard rendering was migrated here in
-# one pass; what's left uncovered is deliberate -- pure presence/structural
-# checks (no entry needed), graduated scoring rubrics like CHAOSS's weighted
-# brackets (a different mechanism than binary pass/fail, out of scope until
-# GREG_FEEDBACK_pass_fail_thresholds.md item 5), sampling/pagination caps
-# (not a scoring decision at all), and a couple of values that only feed
-# descriptive/detail text rather than any pass/fail outcome.
+# Sub-metrics without an entry here have nothing to configure: pure
+# presence/structural checks, graduated scoring rubrics (e.g. CHAOSS's
+# weighted brackets -- item 5 of the same feedback thread), sampling/
+# pagination caps, and values that only feed descriptive text rather than
+# a pass/fail outcome.
 
 "4.2.1":
   Enhanced Document Detection: 2       # of {CoC, Governance, Contributing}, minimum found
