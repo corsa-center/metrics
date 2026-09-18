@@ -44,25 +44,27 @@ _PROVENANCE_ASSET_HINTS = [
 _RELEASES_SAMPLE = 5
 
 
-class SupplyChainCollector(GitHubForge):
+class SupplyChainCollector:
     """Collects supply-chain transparency indicators (CASS Report Section 4.3.8)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Collecting supply chain metrics for {owner}/{repo}")
+        logger.info(f"Collecting supply chain metrics for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             (release_assets, assets_gap), (root_sbom, root_gap) = await asyncio.gather(
-                self._fetch_release_assets(client, owner, repo),
-                self._check_root_sbom(client, owner, repo),
+                self._fetch_release_assets(client, ref),
+                self._check_root_sbom(client, ref),
             )
 
         sbom = self._find_sbom(root_sbom, release_assets, root_gap or assets_gap)
@@ -85,8 +87,8 @@ class SupplyChainCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "has_sbom": sbom["passing"],
             "has_build_provenance": provenance["passing"],
             "sub_metrics": sub_metrics,
@@ -98,7 +100,7 @@ class SupplyChainCollector(GitHubForge):
     # ------------------------------------------------------------------ #
 
     async def _check_root_sbom(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Returns (html_url_or_None, saw_gap). A gap on one candidate path
         doesn't stop the rest from being checked, but is tracked so a
@@ -107,7 +109,7 @@ class SupplyChainCollector(GitHubForge):
         """
         saw_gap = False
         for path in _SBOM_ROOT_FILES:
-            html_url = await self._check_file_exists(client, owner, repo, path)
+            html_url = await self.forge.file_exists(client, ref, path)
             if html_url is COLLECTION_GAP:
                 saw_gap = True
                 continue
@@ -116,18 +118,20 @@ class SupplyChainCollector(GitHubForge):
         return None, saw_gap
 
     async def _fetch_release_assets(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Returns (flat list of {name, url, release}, is_gap). An empty
         list with is_gap=False is a real, confirmed result (no releases);
         is_gap=True means the release list itself couldn't be fetched, so
         an empty list here says nothing trustworthy about SBOM/provenance
         presence.
+
+        Reads GitHub's release "assets" field directly (browser_download_url
+        etc.) -- forge.releases() intentionally doesn't reshape this (see its
+        docstring); GitLab's release asset shape differs and will need its
+        own mapping when GitLabForge lands.
         """
-        releases = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
-            params={"per_page": _RELEASES_SAMPLE},
-        )
+        releases = await self.forge.releases(client, ref, per_page=_RELEASES_SAMPLE)
         if releases is COLLECTION_GAP:
             return [], True
 
@@ -223,7 +227,7 @@ class SupplyChainCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "has_sbom": False,
             "has_build_provenance": False,
             "sub_metrics": sub_metrics,

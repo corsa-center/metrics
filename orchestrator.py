@@ -827,7 +827,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "supply_chain", package):
             try:
                 from collectors.quality.supply_chain import SupplyChainCollector
-                collector = SupplyChainCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = SupplyChainCollector(GitHubForge(github_token))
                 sub_results["supply_chain"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Supply chain collection failed for {package['name']}: {e}")
