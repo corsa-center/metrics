@@ -617,6 +617,17 @@ class GitHubForge:
             return None
         return resp.json().get("total_count", 0)
 
+    async def user(self, client: httpx.AsyncClient, login: str):
+        """GitHub user/org profile, or None (confirmed absent) / COLLECTION_GAP.
+
+        Raw pass-through -- only `company` and `type` (User vs
+        Organization) are read by any caller today. GitLab's user API has
+        no `company` field and no equivalent per-account User/Organization
+        distinction (GitLab expresses that at the namespace/group level
+        instead) -- no attempt at parity here yet.
+        """
+        return await self._github_get(client, f"https://api.github.com/users/{login}")
+
     async def community_profile(self, client: httpx.AsyncClient, ref: str):
         """GitHub's aggregated community-health-file report, or {}/COLLECTION_GAP.
 

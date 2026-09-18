@@ -651,7 +651,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "funding", package):
             try:
                 from collectors.ecosystem.funding import FundingCollector
-                collector = FundingCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = FundingCollector(GitHubForge(github_token))
                 sub_results["funding"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Funding collection failed for {package['name']}: {e}")

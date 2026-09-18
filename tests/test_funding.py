@@ -2,15 +2,51 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from forge.base import COLLECTION_GAP
 from collectors.ecosystem.funding import FundingCollector, _FUNDING_FILES
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.file_results = {}
+        self.file_content_results = {}
+        self.readme_result = None
+        self.contributors_result = []
+        self.user_results = {}
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    async def file_content(self, client, ref, path):
+        return self.file_content_results.get(path)
+
+    async def readme(self, client, ref):
+        return self.readme_result
+
+    async def contributors(self, client, ref, *, per_page=100, page=1):
+        return self.contributors_result
+
+    async def user(self, client, login):
+        return self.user_results.get(login)
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return FundingCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return FundingCollector(forge)
 
 
 class TestCompanyNormalization:
@@ -172,89 +208,55 @@ class TestScoringGapHandling:
 
 
 class TestFindFundingFilesGapHandling:
-    def _run(self, collector, responses):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+    def _run(self, collector, forge, responses):
+        forge.file_results = responses
+        return asyncio.run(collector._find_funding_files(None, "o/r"))
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_funding_files(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gap_with_no_find_is_not_collected(self, collector):
+    def test_gap_with_no_find_is_not_collected(self, collector, forge):
         responses = {p: COLLECTION_GAP for p in _FUNDING_FILES}
-        result = self._run(collector, responses)
+        result = self._run(collector, forge, responses)
         assert result["found"] == []
         assert result["not_collected"] is True
 
-    def test_found_file_is_not_marked_not_collected_despite_gaps_elsewhere(self, collector):
+    def test_found_file_is_not_marked_not_collected_despite_gaps_elsewhere(self, collector, forge):
         responses = {p: COLLECTION_GAP for p in _FUNDING_FILES}
         responses[".github/FUNDING.yml"] = "http://x"
-
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
-
-        async def fake_platforms(client, owner, repo, path):
-            return [], False
-
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists), \
-                 patch.object(collector, "_read_funding_platforms", side_effect=fake_platforms):
-                return await collector._find_funding_files(None, "o", "r")
-
-        result = asyncio.run(go())
+        forge.file_results = responses
+        # No FUNDING.yml content configured on the fake -> file_content()
+        # returns None, so _read_funding_platforms reports ([], False).
+        result = asyncio.run(collector._find_funding_files(None, "o/r"))
         assert len(result["found"]) == 1
         assert "not_collected" not in result
 
 
 class TestGetOwnerTypeGapHandling:
-    def test_gap_is_tracked(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_owner_type(None, "o")
-
-        owner_type, saw_gap = asyncio.run(go())
+    def test_gap_is_tracked(self, collector, forge):
+        forge.user_results = {"o": COLLECTION_GAP}
+        owner_type, saw_gap = asyncio.run(collector._get_owner_type(None, "o"))
         assert owner_type is None
         assert saw_gap is True
 
-    def test_confirmed_user_type_is_not_a_gap(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value={"type": "User"})):
-                return await collector._get_owner_type(None, "o")
-
-        owner_type, saw_gap = asyncio.run(go())
+    def test_confirmed_user_type_is_not_a_gap(self, collector, forge):
+        forge.user_results = {"o": {"type": "User"}}
+        owner_type, saw_gap = asyncio.run(collector._get_owner_type(None, "o"))
         assert owner_type == "User"
         assert saw_gap is False
 
 
 class TestGetAffiliationsGapHandling:
-    def test_contributors_listing_gap_is_tracked(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_affiliations(None, "o", "r")
-
-        result = asyncio.run(go())
+    def test_contributors_listing_gap_is_tracked(self, collector, forge):
+        forge.contributors_result = COLLECTION_GAP
+        result = asyncio.run(collector._get_affiliations(None, "o/r"))
         assert result["gap"] is True
         assert result["sampled"] == 0
 
-    def test_per_contributor_gap_excludes_from_sample(self, collector):
-        contributors = [{"login": "alice"}, {"login": "bob"}]
-
-        async def fake_github_get(client, url, params=None):
-            if url.endswith("/contributors"):
-                return contributors
-            if url.endswith("/users/alice"):
-                return {"company": "HDF Group"}
-            if url.endswith("/users/bob"):
-                return COLLECTION_GAP
-            return None
-
-        async def go():
-            with patch.object(collector, "_github_get", side_effect=fake_github_get):
-                return await collector._get_affiliations(None, "o", "r")
-
-        result = asyncio.run(go())
+    def test_per_contributor_gap_excludes_from_sample(self, collector, forge):
+        forge.contributors_result = [{"identity": "alice"}, {"identity": "bob"}]
+        forge.user_results = {
+            "alice": {"company": "HDF Group"},
+            "bob": COLLECTION_GAP,
+        }
+        result = asyncio.run(collector._get_affiliations(None, "o/r"))
         assert result["sampled"] == 1
         assert result["with_affiliation"] == 1
         assert result["gap"] is True
