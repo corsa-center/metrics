@@ -65,10 +65,11 @@ file at all.
 ## Fails open
 
 If `.corsa/metrics.yaml` is missing, unreachable, not valid YAML, declares an
-unsupported `schema`, or its `repo:` field doesn't match the package being
-collected, it is ignored entirely and every collector runs as if the file
-didn't exist. A project cannot break its own metrics collection by getting
-this file wrong.
+unsupported `schema`, its `repo:` field doesn't match the package being
+collected, or the package's repo isn't on a recognized forge (see
+`ORCHESTRATOR_GUIDE.md`'s "Supported hosts" section), it is ignored entirely
+and every collector runs as if the file didn't exist. A project cannot break
+its own metrics collection by getting this file wrong.
 
 ## Provenance
 

@@ -4,9 +4,9 @@ PROJECT_CONFIG_PATH (.corsa/metrics.yaml).
 """
 
 import asyncio
-import base64
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
+from forge.base import COLLECTION_GAP
 from orchestrator import MetricsOrchestrator, _sanitize_metric_config
 
 
@@ -114,74 +114,75 @@ class TestSanitizeMetricConfig:
         assert _sanitize_metric_config("not a mapping") == {}
 
 
-def _mock_async_client(mock_resp):
-    """A context-manager mock standing in for `async with httpx.AsyncClient() as client`."""
-    client = AsyncMock()
-    client.get = AsyncMock(return_value=mock_resp)
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=client)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
+class FakeForge:
+    """Minimal forge double for _fetch_project_config -- only implements the
+    two methods it calls, mirroring GitHubForge/GitLabForge's shared
+    extract_ref/file_content contract rather than mocking raw HTTP."""
+
+    def __init__(self, ref="HDFGroup/hdf5", content=None):
+        self._ref = ref
+        self._content = content
+
+    def extract_ref(self, repo_url):
+        return self._ref
+
+    async def file_content(self, client, ref, path):
+        if isinstance(self._content, Exception):
+            raise self._content
+        return self._content
 
 
-def _mock_response(status_code=200, content_b64=None):
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.json.return_value = {"content": content_b64} if content_b64 else {}
-    return resp
-
-
-def _b64(text: str) -> str:
-    return base64.b64encode(text.encode()).decode()
-
-
-PACKAGE = {"repository": "HDFGroup/hdf5", "name": "hdf5"}
+PACKAGE = {
+    "repository": "HDFGroup/hdf5",
+    "name": "hdf5",
+    "repo_url": "https://github.com/HDFGroup/hdf5",
+}
 
 
 class TestFetchProjectConfig:
     def test_disabled_globally_skips_fetch_entirely(self):
         o = _orch(project_config_enabled=False)
-        with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock()
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
-        mock_ctor.assert_not_called()
+        o._resolve_forge.assert_not_called()
 
     def test_missing_file_returns_empty(self):
         o = _orch()
-        resp = _mock_response(status_code=404)
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=None))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
+        assert result == {}
+
+    def test_collection_gap_fails_open(self):
+        o = _orch()
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=COLLECTION_GAP))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
 
     def test_network_error_fails_open(self):
         o = _orch()
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(side_effect=ConnectionError("boom"))
-        with patch("orchestrator.httpx.AsyncClient", return_value=cm):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=ConnectionError("boom")))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
 
     def test_malformed_yaml_returns_empty(self):
         o = _orch()
-        resp = _mock_response(content_b64=_b64("not: valid: yaml: : :"))
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content="not: valid: yaml: : :"))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
 
     def test_schema_mismatch_returns_empty(self):
         o = _orch()
         yaml_text = "schema: 99\nrepo: HDFGroup/hdf5\n"
-        resp = _mock_response(content_b64=_b64(yaml_text))
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=yaml_text))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
 
     def test_repo_mismatch_returns_empty(self):
         o = _orch()
         yaml_text = "schema: 1\nrepo: someone-else/other-repo\n"
-        resp = _mock_response(content_b64=_b64(yaml_text))
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=yaml_text))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
 
     def test_valid_config_is_returned(self):
@@ -193,29 +194,32 @@ class TestFetchProjectConfig:
             "  quality:\n"
             "    supply_chain: false\n"
         )
-        resp = _mock_response(content_b64=_b64(yaml_text))
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=yaml_text))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result["collectors"]["quality"]["supply_chain"] is False
 
     def test_repo_match_is_case_insensitive(self):
         o = _orch()
         yaml_text = "schema: 1\nrepo: hdfgroup/HDF5\n"
-        resp = _mock_response(content_b64=_b64(yaml_text))
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=yaml_text))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result != {}
 
-    def test_malformed_catalog_key_fails_open(self):
-        # repo_name comes from the live-fetched catalog's own keys, not from
-        # anything validated beforehand -- one with no "/" must not raise
-        # past this method.
+    def test_unrecognized_host_fails_open(self):
+        # _resolve_forge returning None (e.g. repo_url's host isn't a
+        # recognized forge) must not raise past this method.
         o = _orch()
-        bad_package = {"repository": "not-owner-slash-repo", "name": "x"}
-        with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
-            result = asyncio.run(o._fetch_project_config(bad_package))
+        o._resolve_forge = MagicMock(return_value=None)
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
-        mock_ctor.assert_not_called()
+
+    def test_unresolvable_ref_fails_open(self):
+        # A forge that can't parse this package's repo_url into a ref must
+        # not raise past this method either.
+        o = _orch()
+        o._resolve_forge = MagicMock(return_value=FakeForge(ref=None))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
+        assert result == {}
 
     def test_null_collectors_block_is_sanitized_not_raised(self):
         # Regression: a schema-valid file with an empty `collectors:` key
@@ -223,18 +227,16 @@ class TestFetchProjectConfig:
         # chaining as None and raised AttributeError instead of failing open.
         o = _orch()
         yaml_text = "schema: 1\nrepo: HDFGroup/hdf5\ncollectors:\n"
-        resp = _mock_response(content_b64=_b64(yaml_text))
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=yaml_text))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert "collectors" not in result
         assert o._sub_enabled("quality", "supply_chain", {"project_config": result}) is True
 
     def test_null_overrides_block_is_sanitized_not_raised(self):
         o = _orch()
         yaml_text = "schema: 1\nrepo: HDFGroup/hdf5\noverrides:\n"
-        resp = _mock_response(content_b64=_b64(yaml_text))
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        o._resolve_forge = MagicMock(return_value=FakeForge(content=yaml_text))
+        result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert "overrides" not in result
 
 

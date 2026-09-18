@@ -65,15 +65,67 @@ collectors:
 api_credentials:
   github:
     token: ${GITHUB_TOKEN}
+  # GitLab, keyed by host. gitlab.com is recognized even without an entry
+  # here -- an absent token still works for public repos, just at GitLab's
+  # lower unauthenticated rate limit. A self-hosted instance (e.g.
+  # gitlab.kitware.com) has no way to self-identify as GitLab from its
+  # hostname alone, so it must be listed here explicitly: being listed is
+  # itself what makes it recognized, not a separate allowlist.
+  gitlab:
+    gitlab.com:
+      token: ${GITLAB_TOKEN}
+    gitlab.kitware.com:
+      token: ${GITLAB_KITWARE_TOKEN}
 ```
 
 ### 3. Set Environment Variables
 
 ```bash
 export GITHUB_TOKEN="your_github_token"
+export GITLAB_TOKEN="your_gitlab_com_token"           # Optional -- public repos work without it
+export GITLAB_KITWARE_TOKEN="your_kitware_token"      # Optional, only needed for gitlab.kitware.com repos
 export SEMANTIC_SCHOLAR_KEY="your_ss_key"  # Optional
 export OPENALEX_EMAIL="your@email.com"     # Optional but recommended
 ```
+
+### Supported hosts
+
+A package's `repo_url` host determines which forge collects it:
+
+- `github.com` -- always recognized.
+- `gitlab.com` -- always recognized, with or without `GITLAB_TOKEN` set.
+- Any other host -- only recognized if it's listed under
+  `api_credentials.gitlab.<host>` in `config/orchestrator.yaml` (e.g.
+  `gitlab.kitware.com`, which covers every package hosted there --
+  ParaView, VTK, Viskores). An unlisted host is skipped entirely: all three
+  CASS dimensions render as "not yet collected" for that package, the same
+  protective behavior as before GitLab support existed, rather than a
+  false negative from hitting the wrong API shape.
+
+GitLab-hosted packages get the same 3-dimension coverage as GitHub ones,
+with a few metrics GitLab genuinely cannot supply -- these render as "not
+yet collected", never as a zero or a failing result, so don't mistake them
+for bugs:
+
+- **Cross-repo issue search** (`search_issues`, feeding defect-trend and
+  newcomer-issue metrics) -- GitLab's instance-wide search API is
+  materially different from GitHub's, and may be disabled entirely by a
+  self-hosted instance's admin. Not implemented.
+- **Per-workflow CI breakdown** -- GitHub Actions has named workflows as a
+  first-class concept; GitLab Pipelines don't have an equivalent grouping.
+  `ci_workflows`/`ci_workflow_runs` always return empty for GitLab repos.
+- **Community profile** (`/community/profile`) -- a GitHub-only aggregate
+  endpoint. GitLab repos rely entirely on `community_health.py`'s own
+  direct file checks (CODE_OF_CONDUCT, GOVERNANCE, CONTRIBUTING), which run
+  the same on both platforms.
+- **OpenSSF Scorecard** -- its published dataset skews heavily toward
+  GitHub-hosted projects; a GitLab repo not in that dataset reads as "not
+  yet collected", not a failure.
+- **Weekly commit/contributor stats** -- GitHub exposes these via
+  dedicated `/stats/participation` and `/stats/contributors` endpoints;
+  GitLab has no equivalent, so they're derived from paged commit history
+  instead (bounded to a fixed number of pages), which is close but not
+  identical in methodology.
 
 ## Usage
 

@@ -14,7 +14,6 @@ Usage:
 
 import argparse
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -29,6 +28,7 @@ import re
 import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.github import GitHubForge
 from forge.gitlab import GitLabForge
 
@@ -231,35 +231,29 @@ class MetricsOrchestrator:
 
         Lets a project narrow which collectors run for it and annotate
         sub-metric overrides, same shape as package_config/ (see
-        docs/PROJECT_CONFIG.md). Any problem -- missing file, network error,
-        bad YAML, schema mismatch, a repo: field that disagrees with the
-        package being collected -- fails open and returns {}, i.e. collect
-        everything, exactly as if the project had never added the file.
+        docs/PROJECT_CONFIG.md). Any problem -- unrecognized host, missing
+        file, network error, bad YAML, schema mismatch, a repo: field that
+        disagrees with the package being collected -- fails open and
+        returns {}, i.e. collect everything, exactly as if the project had
+        never added the file.
         """
         if not self.project_config_enabled:
             return {}
 
         repo_name = package["repository"]
-        token = self._get_github_token()
 
         try:
-            # repo_name comes from the live-fetched catalog's own keys
-            # (prepare_software_list), not from anything we control -- a
-            # malformed one (no "/") must fail open like every other
-            # problem here, not raise past this method.
-            owner, repo = repo_name.split("/", 1)
-            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{PROJECT_CONFIG_PATH}"
-            headers = {"Accept": "application/vnd.github.v3+json"}
-            if token:
-                headers["Authorization"] = f"token {token}"
-
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url, headers=headers)
-            if resp.status_code != 200:
+            forge = self._resolve_forge(package.get("repo_url", ""))
+            if forge is None:
                 return {}
-            content = base64.b64decode(resp.json().get("content", "")).decode(
-                "utf-8", "replace"
-            )
+            ref = forge.extract_ref(package.get("repo_url", ""))
+            if ref is None:
+                return {}
+
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                content = await forge.file_content(client, ref, PROJECT_CONFIG_PATH)
+            if content is None or content is COLLECTION_GAP:
+                return {}
             data = yaml.safe_load(content) or {}
         except Exception as e:
             logger.warning(f"Could not fetch {PROJECT_CONFIG_PATH} for {repo_name}: {e}")
