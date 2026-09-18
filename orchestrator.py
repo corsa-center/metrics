@@ -579,7 +579,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "chaoss_activity", package):
             try:
                 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
-                collector = CHAOSSGovernanceCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = CHAOSSGovernanceCollector(GitHubForge(github_token))
                 sub_results["chaoss_activity"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")

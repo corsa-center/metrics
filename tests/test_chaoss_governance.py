@@ -7,7 +7,9 @@ from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
 
 @pytest.fixture
 def collector():
-    return CHAOSSGovernanceCollector()
+    # None: every test here exercises pure computation methods that never
+    # touch self.forge.
+    return CHAOSSGovernanceCollector(None)
 
 
 # ------------------------------------------------------------------ #
