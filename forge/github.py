@@ -17,6 +17,7 @@ Once every collector has migrated, the legacy methods and the inheritance
 usage go away, leaving only the semantic interface.
 """
 
+import asyncio
 import base64
 import re
 import httpx
@@ -363,6 +364,125 @@ class GitHubForge:
             }
             for e in data
         ]
+
+    async def contributors(
+        self, client: httpx.AsyncClient, ref: str, *, per_page: int = 100, page: int = 1
+    ):
+        """List contributors, or None/COLLECTION_GAP.
+
+        Each item: {identity, commit_count}. GitHub returns a user login per
+        contributor; GitLab's equivalent aggregates by name/email with no
+        user identity at all -- callers (bus-factor math) must treat
+        `identity` as an opaque grouping key, not assume it's a real
+        username.
+        """
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/contributors",
+            params={"per_page": per_page, "page": page},
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [
+            {"identity": c.get("login"), "commit_count": c.get("contributions", 0)}
+            for c in data
+        ]
+
+    async def first_commit_date(self, client: httpx.AsyncClient, ref: str):
+        """ISO date of the repository's oldest commit, or None/COLLECTION_GAP.
+
+        GitHub has no direct endpoint for this; asking for one commit per
+        page makes the `rel="last"` Link header point at the final (oldest)
+        page, so this costs at most two requests regardless of history size.
+        GitLab's commits API can do this in one request instead
+        (`order_by=default&sort=asc`, first page) -- GitLabForge won't need
+        this Link-header trick at all.
+        """
+        url = f"https://api.github.com/repos/{ref}/commits"
+        try:
+            resp = await client.get(url, headers=self.github_headers, params={"per_page": 1})
+        except Exception as e:
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
+            return COLLECTION_GAP
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            return COLLECTION_GAP
+
+        last_url = self._parse_link_header(resp.headers.get("Link"), "last")
+        if not last_url:
+            # Single page of history: the commit already in hand is the oldest.
+            data = resp.json()
+            return data[0]["commit"]["committer"]["date"] if data else None
+
+        try:
+            resp = await client.get(last_url, headers=self.github_headers)
+        except Exception as e:
+            logger.warning(f"COLLECTION-GAP url={last_url} status=exception reason={e!r}")
+            return COLLECTION_GAP
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            return COLLECTION_GAP
+        data = resp.json()
+        return data[0]["commit"]["committer"]["date"] if data else None
+
+    @staticmethod
+    def _parse_link_header(link_header: Optional[str], rel: str) -> Optional[str]:
+        """Parse the URL for a given `rel` out of a GitHub Link pagination header."""
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            segment = part.strip()
+            if f'rel="{rel}"' in segment:
+                return segment.split(";")[0].strip().strip("<>")
+        return None
+
+    async def commit_participation(self, client: httpx.AsyncClient, ref: str):
+        """Weekly commit counts for the last 52 weeks: {"all": [...52 ints],
+        "owner": [...52 ints]}, or {} if unavailable.
+
+        GitHub-only aggregate (its /stats/participation endpoint) -- no
+        GitLab equivalent exists; GitLabForge will need to derive an
+        equivalent signal from paged commits instead of wrapping a
+        matching endpoint. GitHub computes this asynchronously and
+        answers 202 while it works, so one retry is allowed before
+        giving up -- deliberately not COLLECTION_GAP-aware, since every
+        current caller already treats "unavailable" and "empty" the same
+        way (falls back to {}).
+        """
+        url = f"https://api.github.com/repos/{ref}/stats/participation"
+        try:
+            resp = await client.get(url, headers=self.github_headers)
+            if resp.status_code == 202:
+                await asyncio.sleep(3)
+                resp = await client.get(url, headers=self.github_headers)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.debug(f"Error fetching participation stats: {e}")
+        return {}
+
+    async def contributor_weekly_stats(self, client: httpx.AsyncClient, ref: str):
+        """Per-contributor weekly commit history for the last year, or [].
+
+        GitHub-only aggregate (/stats/contributors) -- same 202-while-computing
+        retry as commit_participation, and the same "no GitLab equivalent"
+        caveat. Raw GitHub shape (each item's `weeks` list of {w, a, d, c}) is
+        passed through unchanged; only active_maintenance.py's abandonment
+        analysis reads it today.
+        """
+        url = f"https://api.github.com/repos/{ref}/stats/contributors"
+        try:
+            resp = await client.get(url, headers=self.github_headers)
+            if resp.status_code == 202:
+                await asyncio.sleep(3)
+                resp = await client.get(url, headers=self.github_headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.debug(f"Error fetching contributor stats: {e}")
+        return []
 
     async def community_profile(self, client: httpx.AsyncClient, ref: str):
         """GitHub's aggregated community-health-file report, or {}/COLLECTION_GAP.

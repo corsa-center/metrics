@@ -241,6 +241,52 @@ class TestCommunityProfile:
         assert result is COLLECTION_GAP
 
 
+class TestParseLinkHeader:
+    def test_picks_requested_rel(self, forge):
+        header = (
+            '<https://api.github.com/repositories/1/commits?per_page=1&page=2>; rel="next", '
+            '<https://api.github.com/repositories/1/commits?per_page=1&page=9000>; rel="last"'
+        )
+        assert forge._parse_link_header(header, "last").endswith("page=9000")
+        assert forge._parse_link_header(header, "next").endswith("page=2")
+
+    def test_missing_header_returns_none(self, forge):
+        assert forge._parse_link_header(None, "last") is None
+        assert forge._parse_link_header("", "last") is None
+
+
+class TestFirstCommitDate:
+    def test_single_page_uses_the_commit_in_hand(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(
+            200, [{"commit": {"committer": {"date": "1997-07-30T21:17:56Z"}}}],
+            headers={},
+        ))
+        result = asyncio.run(forge.first_commit_date(client, "o/r"))
+        assert result == "1997-07-30T21:17:56Z"
+
+    def test_multi_page_follows_the_last_link(self, forge):
+        first_page = _resp(200, [{"commit": {"committer": {"date": "2026-01-01T00:00:00Z"}}}],
+                            headers={"Link": '<https://api.github.com/repos/o/r/commits?per_page=1&page=9000>; rel="last"'})
+        last_page = _resp(200, [{"commit": {"committer": {"date": "1997-07-30T21:17:56Z"}}}])
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[first_page, last_page])
+        result = asyncio.run(forge.first_commit_date(client, "o/r"))
+        assert result == "1997-07-30T21:17:56Z"
+
+    def test_gap_on_first_page(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(403, headers={}))
+        result = asyncio.run(forge.first_commit_date(client, "o/r"))
+        assert result is COLLECTION_GAP
+
+    def test_404_is_none(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(404, headers={}))
+        result = asyncio.run(forge.first_commit_date(client, "o/r"))
+        assert result is None
+
+
 class TestGithubGet:
     def test_success_returns_json(self, forge):
         client = AsyncMock()

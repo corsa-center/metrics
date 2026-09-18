@@ -571,7 +571,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "active_maintenance", package):
             try:
                 from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
-                collector = ActiveMaintenanceCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = ActiveMaintenanceCollector(GitHubForge(github_token))
                 sub_results["maintenance"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")

@@ -7,7 +7,9 @@ from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
 @pytest.fixture
 def collector():
-    return ActiveMaintenanceCollector()
+    # None: every test here exercises pure computation methods that never
+    # touch self.forge.
+    return ActiveMaintenanceCollector(None)
 
 
 def _weeks(prior, recent):
