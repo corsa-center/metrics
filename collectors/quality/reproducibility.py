@@ -88,25 +88,27 @@ _WEIGHTS = {
 }
 
 
-class ReproducibilityCollector(GitHubForge):
+class ReproducibilityCollector:
     """Collects reproducibility indicators (CASS Report Section 4.3.3)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Collecting reproducibility metrics for {owner}/{repo}")
+        logger.info(f"Collecting reproducibility metrics for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             file_results, semver = await asyncio.gather(
-                self._scan_files(client, owner, repo),
-                self._check_semantic_versioning(client, owner, repo),
+                self._scan_files(client, ref),
+                self._check_semantic_versioning(client, ref),
             )
 
         categories = {**file_results, "semantic_versioning": semver}
@@ -114,8 +116,8 @@ class ReproducibilityCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "has_container": bool(categories["containers"]["found"]),
             "has_dependency_pinning": bool(categories["dependency_pinning"]["found"]),
             "has_fair4rs_metadata": bool(categories["fair4rs_metadata"]["found"]),
@@ -130,7 +132,7 @@ class ReproducibilityCollector(GitHubForge):
     # ------------------------------------------------------------------ #
 
     async def _scan_files(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         results: Dict[str, Any] = {}
 
@@ -143,7 +145,7 @@ class ReproducibilityCollector(GitHubForge):
             async def check_item(label: str, paths: List[str]) -> Tuple[str, str, Optional[str], bool]:
                 saw_gap = False
                 for path in paths:
-                    html_url = await self._check_file_exists(client, owner, repo, path)
+                    html_url = await self.forge.file_exists(client, ref, path)
                     if html_url is COLLECTION_GAP:
                         saw_gap = True
                         continue
@@ -189,12 +191,9 @@ class ReproducibilityCollector(GitHubForge):
     # ------------------------------------------------------------------ #
 
     async def _check_semantic_versioning(
-        self, client: httpx.AsyncClient, owner: str, repo: str, sample: int = 5
+        self, client: httpx.AsyncClient, ref: str, sample: int = 5
     ) -> Dict[str, Any]:
-        releases = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
-            params={"per_page": sample},
-        )
+        releases = await self.forge.releases(client, ref, per_page=sample)
         if releases is COLLECTION_GAP:
             return {
                 "uses_semver": False, "releases_checked": 0, "semver_count": 0,
@@ -203,7 +202,7 @@ class ReproducibilityCollector(GitHubForge):
 
         if not releases:
             # Confirmed no formal releases -- fall back to tags.
-            return await self._check_tags(client, owner, repo, sample)
+            return await self._check_tags(client, ref, sample)
 
         tags = [r.get("tag_name", "") for r in releases]
         semver_tags = [t for t in tags if _SEMVER_RE.match(t)]
@@ -217,12 +216,9 @@ class ReproducibilityCollector(GitHubForge):
         }
 
     async def _check_tags(
-        self, client: httpx.AsyncClient, owner: str, repo: str, sample: int
+        self, client: httpx.AsyncClient, ref: str, sample: int
     ) -> Dict[str, Any]:
-        tags_data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/tags",
-            params={"per_page": sample},
-        )
+        tags_data = await self.forge.tags(client, ref, per_page=sample)
         if tags_data is COLLECTION_GAP:
             return {
                 "uses_semver": False, "releases_checked": 0, "semver_count": 0,
@@ -278,7 +274,7 @@ class ReproducibilityCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "has_container": False,
             "has_dependency_pinning": False,
             "has_fair4rs_metadata": False,

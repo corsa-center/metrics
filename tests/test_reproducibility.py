@@ -2,14 +2,42 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from forge.base import COLLECTION_GAP
 from collectors.quality.reproducibility import ReproducibilityCollector, _FILE_CHECKS
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.file_results = {}
+        self.releases_result = []
+        self.tags_result = []
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    async def releases(self, client, ref, *, per_page=30, page=1):
+        return self.releases_result
+
+    async def tags(self, client, ref, *, per_page=30, page=1):
+        return self.tags_result
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return ReproducibilityCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return ReproducibilityCollector(forge)
 
 
 class TestEmptyResult:
@@ -33,56 +61,28 @@ class TestCollectInvalidUrl:
 
 
 class TestSemanticVersioning:
-    def _mock_releases(self, tags):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = [{"tag_name": t} for t in tags]
-        mock_resp.raise_for_status = MagicMock()
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_resp)
-        return mock_client
-
-    def test_semver_tags_detected(self, collector):
-        client = self._mock_releases(["v1.2.3", "v1.2.2", "v1.2.1"])
-        result = asyncio.run(
-            collector._check_semantic_versioning(client, "owner", "repo")
-        )
+    def test_semver_tags_detected(self, collector, forge):
+        forge.releases_result = [{"tag_name": t} for t in ["v1.2.3", "v1.2.2", "v1.2.1"]]
+        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
         assert result["uses_semver"] is True
         assert result["semver_count"] == 3
 
-    def test_non_semver_tags(self, collector):
-        client = self._mock_releases(["release-2024", "latest", "nightly"])
-        result = asyncio.run(
-            collector._check_semantic_versioning(client, "owner", "repo")
-        )
+    def test_non_semver_tags(self, collector, forge):
+        forge.releases_result = [{"tag_name": t} for t in ["release-2024", "latest", "nightly"]]
+        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
         assert result["uses_semver"] is False
         assert result["semver_count"] == 0
 
-    def test_mixed_tags(self, collector):
-        client = self._mock_releases(["v2.0.0", "nightly", "v1.9.0"])
-        result = asyncio.run(
-            collector._check_semantic_versioning(client, "owner", "repo")
-        )
+    def test_mixed_tags(self, collector, forge):
+        forge.releases_result = [{"tag_name": t} for t in ["v2.0.0", "nightly", "v1.9.0"]]
+        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
         assert result["uses_semver"] is True
         assert result["semver_count"] == 2
 
-    def test_no_releases_falls_back_to_tags(self, collector):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = []
-        mock_resp.raise_for_status = MagicMock()
-
-        tag_resp = MagicMock()
-        tag_resp.status_code = 200
-        tag_resp.json.return_value = [{"name": "v3.0.0"}]
-        tag_resp.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=[mock_resp, tag_resp])
-
-        result = asyncio.run(
-            collector._check_semantic_versioning(mock_client, "owner", "repo")
-        )
+    def test_no_releases_falls_back_to_tags(self, collector, forge):
+        forge.releases_result = []
+        forge.tags_result = [{"name": "v3.0.0"}]
+        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
         assert result["uses_semver"] is True
 
 
@@ -168,100 +168,73 @@ class TestComputeOverall:
 
 
 class TestScanFiles:
-    def _run_scan(self, collector, found_paths):
-        async def mock_exists(client, owner, repo, path):
-            return path in found_paths
+    def _run_scan(self, collector, forge, found_paths):
+        forge.file_results = {p: "http://x" for p in found_paths}
+        return asyncio.run(collector._scan_files(None, "o/r"))
 
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan_files(client, "owner", "repo")
-
-        return asyncio.run(run())
-
-    def test_dockerfile_detected(self, collector):
-        result = self._run_scan(collector, {"Dockerfile"})
+    def test_dockerfile_detected(self, collector, forge):
+        result = self._run_scan(collector, forge, {"Dockerfile"})
         assert "Dockerfile" in result["containers"]["found"]
 
-    def test_poetry_lock_detected(self, collector):
-        result = self._run_scan(collector, {"poetry.lock"})
+    def test_poetry_lock_detected(self, collector, forge):
+        result = self._run_scan(collector, forge, {"poetry.lock"})
         assert "Poetry lock" in result["dependency_pinning"]["found"]
 
-    def test_citation_cff_detected(self, collector):
-        result = self._run_scan(collector, {"CITATION.cff"})
+    def test_citation_cff_detected(self, collector, forge):
+        result = self._run_scan(collector, forge, {"CITATION.cff"})
         assert "CITATION.cff" in result["fair4rs_metadata"]["found"]
 
-    def test_nothing_found(self, collector):
-        result = self._run_scan(collector, set())
+    def test_nothing_found(self, collector, forge):
+        result = self._run_scan(collector, forge, set())
         for cat in ("containers", "dependency_pinning", "fair4rs_metadata"):
             assert result[cat]["found"] == []
             assert result[cat]["percentage"] == 0.0
 
 
 class TestScanFilesGapHandling:
-    def _run_scan(self, collector, responses):
-        async def mock_exists(client, owner, repo, path):
-            return responses.get(path, None)
+    def _run_scan(self, collector, forge, responses):
+        forge.file_results = responses
+        return asyncio.run(collector._scan_files(None, "o/r"))
 
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan_files(client, "owner", "repo")
-
-        return asyncio.run(run())
-
-    def test_gapped_item_is_not_collected_not_a_confirmed_miss(self, collector):
-        result = self._run_scan(collector, {"Dockerfile": COLLECTION_GAP})
+    def test_gapped_item_is_not_collected_not_a_confirmed_miss(self, collector, forge):
+        result = self._run_scan(collector, forge, {"Dockerfile": COLLECTION_GAP})
         containers = result["containers"]
         assert "Dockerfile" not in containers["missing"]
         assert "Dockerfile" in containers["not_collected"]
 
-    def test_found_item_survives_a_gap_on_another_path(self, collector):
-        result = self._run_scan(collector, {"poetry.lock": "http://x"})
+    def test_found_item_survives_a_gap_on_another_path(self, collector, forge):
+        result = self._run_scan(collector, forge, {"poetry.lock": "http://x"})
         pinning = result["dependency_pinning"]
         assert "Poetry lock" in pinning["found"]
 
-    def test_category_fully_gapped_reports_no_percentage(self, collector):
+    def test_category_fully_gapped_reports_no_percentage(self, collector, forge):
         # Every candidate for every item in fair4rs_metadata gaps.
         responses = {p: COLLECTION_GAP for paths in _FILE_CHECKS["fair4rs_metadata"].values() for p in paths}
-        result = self._run_scan(collector, responses)
+        result = self._run_scan(collector, forge, responses)
         assert result["fair4rs_metadata"]["percentage"] is None
         assert result["fair4rs_metadata"]["count_total"] == 0
 
 
 class TestSemanticVersioningGapHandling:
-    def _mock_client(self, status_code, body=None):
-        mock_resp = MagicMock()
-        mock_resp.status_code = status_code
-        mock_resp.json.return_value = body
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_resp)
-        return mock_client
+    """HTTP-level gap detection (network errors, 403s) is covered against
+    the forge directly in tests/forge/test_github.py; these only need to
+    prove this collector reacts correctly to what the forge hands back."""
 
-    def test_releases_request_failure_is_not_collected_not_a_confirmed_no(self, collector):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=ConnectionError("boom"))
-        result = asyncio.run(collector._check_semantic_versioning(mock_client, "o", "r"))
+    def test_releases_gap_is_not_collected_not_a_confirmed_no(self, collector, forge):
+        forge.releases_result = COLLECTION_GAP
+        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
         assert result["uses_semver"] is False
         assert result["not_collected"] is True
 
-    def test_releases_rate_limited_is_not_collected(self, collector):
-        client = self._mock_client(403)
-        result = asyncio.run(collector._check_semantic_versioning(client, "o", "r"))
-        assert result["not_collected"] is True
-
-    def test_tags_request_failure_is_not_collected(self, collector):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=ConnectionError("boom"))
-        result = asyncio.run(collector._check_tags(mock_client, "o", "r", 5))
+    def test_tags_gap_is_not_collected(self, collector, forge):
+        forge.tags_result = COLLECTION_GAP
+        result = asyncio.run(collector._check_tags(None, "o/r", 5))
         assert result["uses_semver"] is False
         assert result["not_collected"] is True
 
-    def test_confirmed_no_releases_or_tags_is_a_real_negative(self, collector):
-        # 200 with an empty body -- a real, trustworthy "no releases, no tags".
-        empty_releases = self._mock_client(200, [])
-        result = asyncio.run(collector._check_semantic_versioning(empty_releases, "o", "r"))
+    def test_confirmed_no_releases_or_tags_is_a_real_negative(self, collector, forge):
+        forge.releases_result = []
+        forge.tags_result = []
+        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
         assert result["uses_semver"] is False
         assert "not_collected" not in result

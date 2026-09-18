@@ -744,7 +744,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "reproducibility", package):
             try:
                 from collectors.quality.reproducibility import ReproducibilityCollector
-                collector = ReproducibilityCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = ReproducibilityCollector(GitHubForge(github_token))
                 sub_results["reproducibility"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Reproducibility collection failed for {package['name']}: {e}")

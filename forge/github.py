@@ -191,6 +191,30 @@ class GitHubForge:
             return data
         return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
+    async def releases(
+        self, client: httpx.AsyncClient, ref: str, *, per_page: int = 30, page: int = 1
+    ):
+        """List releases (newest first), or None/COLLECTION_GAP.
+
+        Not reshaped like repo_info: GitHub's `tag_name`/`published_at`
+        fields are already spelled the same way on GitLab's Releases API,
+        so raw items pass through unchanged.
+        """
+        return await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/releases",
+            params={"per_page": per_page, "page": page},
+        )
+
+    async def tags(
+        self, client: httpx.AsyncClient, ref: str, *, per_page: int = 30, page: int = 1
+    ):
+        """List tags, or None/COLLECTION_GAP. Each item has at least `name`,
+        spelled the same way on GitLab's Tags API."""
+        return await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/tags",
+            params={"per_page": per_page, "page": page},
+        )
+
     def pages_url(self, ref: str) -> str:
         """Predictable Pages URL for `ref`, regardless of whether Pages is
         actually enabled -- check `repo_info(...)["has_pages"]` first."""
