@@ -17,6 +17,7 @@ Once every collector has migrated, the legacy methods and the inheritance
 usage go away, leaving only the semantic interface.
 """
 
+import base64
 import re
 import httpx
 import logging
@@ -182,6 +183,13 @@ class GitHubForge:
                 "key": license_data.get("key"),
             } if license_data else None,
         }
+
+    async def readme(self, client: httpx.AsyncClient, ref: str):
+        """Decoded README text, or None (confirmed absent) / COLLECTION_GAP."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{ref}/readme")
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
     def pages_url(self, ref: str) -> str:
         """Predictable Pages URL for `ref`, regardless of whether Pages is

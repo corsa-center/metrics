@@ -15,7 +15,6 @@ Analytics Integration.
 """
 
 import asyncio
-import base64
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -44,31 +43,33 @@ _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _SETEXT_HEADING = re.compile(r"^\s{0,3}(\S.*)\n\s{0,3}[=-]{3,}\s*$", re.MULTILINE)
 
 
-class UsabilityCollector(GitHubForge):
+class UsabilityCollector:
     """Collects documentation completeness signals (Section 4.3.4)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting usability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             readme, (doc_dir, doc_dir_gap), (site, site_gap) = await asyncio.gather(
-                self._analyze_readme(client, owner, repo),
-                self._find_doc_directory(client, owner, repo),
-                self._find_documentation_site(client, owner, repo),
+                self._analyze_readme(client, ref),
+                self._find_doc_directory(client, ref),
+                self._find_documentation_site(client, ref),
                 return_exceptions=False,
             )
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "readme": readme,
             "doc_directory": doc_dir,
             "documentation_site": site,
@@ -78,21 +79,18 @@ class UsabilityCollector(GitHubForge):
         }
 
     async def _analyze_readme(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Which of the core user questions the README's headings answer."""
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/readme"
-        )
-        if data is COLLECTION_GAP:
+        text = await self.forge.readme(client, ref)
+        if text is COLLECTION_GAP:
             return {
                 "exists": False, "sections": [], "missing": list(_README_SECTIONS),
                 "not_collected": True,
             }
-        if data is None:
+        if text is None:
             return {"exists": False, "sections": [], "missing": list(_README_SECTIONS)}
 
-        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
         headings = _ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)
 
         found = [
@@ -109,7 +107,7 @@ class UsabilityCollector(GitHubForge):
         }
 
     async def _find_doc_directory(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """First documentation directory present in the repository, and
         whether any candidate along the way gapped rather than confirming
@@ -117,7 +115,7 @@ class UsabilityCollector(GitHubForge):
         """
         saw_gap = False
         for path in _DOC_DIRECTORIES:
-            url = await self._check_file_exists(client, owner, repo, path)
+            url = await self.forge.file_exists(client, ref, path)
             if url is COLLECTION_GAP:
                 saw_gap = True
                 continue
@@ -126,19 +124,18 @@ class UsabilityCollector(GitHubForge):
         return None, saw_gap
 
     async def _find_documentation_site(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """A published documentation site, from GitHub Pages or the homepage."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        data = await self.forge.repo_info(client, ref)
         if data is COLLECTION_GAP:
             return None, True
         if data is None:
             return None, False
-        homepage = (data.get("homepage") or "").strip()
-        if homepage:
-            return {"url": homepage, "source": "repository homepage"}, False
+        if data.get("homepage"):
+            return {"url": data["homepage"], "source": "repository homepage"}, False
         if data.get("has_pages"):
-            return {"url": f"https://{owner}.github.io/{repo}/", "source": "GitHub Pages"}, False
+            return {"url": self.forge.pages_url(ref), "source": "GitHub Pages"}, False
         return None, False
 
     def _calculate_score(
@@ -201,7 +198,7 @@ class UsabilityCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "readme": readme,
             "doc_directory": None,
             "documentation_site": None,

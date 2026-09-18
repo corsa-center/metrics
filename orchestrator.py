@@ -771,7 +771,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "usability", package):
             try:
                 from collectors.quality.usability import UsabilityCollector
-                collector = UsabilityCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = UsabilityCollector(GitHubForge(github_token))
                 sub_results["usability"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Usability collection failed for {package['name']}: {e}")

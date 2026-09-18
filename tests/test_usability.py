@@ -1,14 +1,51 @@
 """Unit tests for UsabilityCollector (CASS Section 4.3.4)."""
 
+import asyncio
+import re
+
 import pytest
 
 from forge.base import COLLECTION_GAP
-from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
+from collectors.quality.usability import (
+    UsabilityCollector, _README_SECTIONS, _ATX_HEADING, _SETEXT_HEADING,
+)
+
+
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.readme_result = None
+        self.file_results = {}
+        self.repo_info_result = {}
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "nope" else "o/r"
+
+    async def readme(self, client, ref):
+        return self.readme_result
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    async def repo_info(self, client, ref):
+        return self.repo_info_result
+
+    def pages_url(self, ref):
+        return "https://o.github.io/r/"
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
 
 
 @pytest.fixture
-def collector():
-    return UsabilityCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return UsabilityCollector(forge)
 
 
 class TestScoring:
@@ -80,99 +117,77 @@ class TestScoring:
 
 
 class TestHeadingDetection:
-    def _sections(self, collector, markdown):
-        import re
-        from collectors.quality.usability import _ATX_HEADING, _SETEXT_HEADING
+    def _sections(self, markdown):
         headings = _ATX_HEADING.findall(markdown) + _SETEXT_HEADING.findall(markdown)
         return [
             label for label, pattern in _README_SECTIONS.items()
             if any(re.search(pattern, h, re.IGNORECASE) for h in headings)
         ]
 
-    def test_atx_headings(self, collector):
-        assert "Installation" in self._sections(collector, "# Intro\n## Installation\ntext")
+    def test_atx_headings(self):
+        assert "Installation" in self._sections("# Intro\n## Installation\ntext")
 
-    def test_setext_headings(self, collector):
-        assert "Usage" in self._sections(collector, "Usage\n-----\nsome text")
+    def test_setext_headings(self):
+        assert "Usage" in self._sections("Usage\n-----\nsome text")
 
-    def test_body_mentions_do_not_count(self, collector):
+    def test_body_mentions_do_not_count(self):
         # "install" in a paragraph isn't a documented installation section.
-        assert self._sections(collector, "# Intro\nYou can install it somehow.") == []
+        assert self._sections("# Intro\nYou can install it somehow.") == []
 
-    def test_synonyms_match(self, collector):
-        assert "Installation" in self._sections(collector, "## Getting Started")
-        assert "Usage" in self._sections(collector, "## Quick Start")
+    def test_synonyms_match(self):
+        assert "Installation" in self._sections("## Getting Started")
+        assert "Usage" in self._sections("## Quick Start")
 
 
 class TestEmptyResult:
     def test_invalid_url(self, collector):
-        import asyncio
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "nope"}))
         assert r["readme"]["exists"] is False
         assert r["overall_score"]["score"] == 0
 
 
 class TestAnalyzeReadmeGapHandling:
-    def _run(self, collector, client):
-        import asyncio
-        return asyncio.run(collector._analyze_readme(client, "o", "r"))
-
-    def test_gap_is_not_collected_not_a_confirmed_missing_readme(self, collector):
-        from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-            result = self._run(collector, None)
+    def test_gap_is_not_collected_not_a_confirmed_missing_readme(self, collector, forge):
+        forge.readme_result = COLLECTION_GAP
+        result = asyncio.run(collector._analyze_readme(None, "o/r"))
         assert result["exists"] is False
         assert result["not_collected"] is True
 
-    def test_confirmed_404_is_a_real_negative(self, collector):
-        from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=None)):
-            result = self._run(collector, None)
+    def test_confirmed_404_is_a_real_negative(self, collector, forge):
+        forge.readme_result = None
+        result = asyncio.run(collector._analyze_readme(None, "o/r"))
         assert result["exists"] is False
         assert "not_collected" not in result
 
 
 class TestFindDocDirectoryGapHandling:
-    def _run(self, collector, responses):
-        import asyncio
-        from unittest.mock import AsyncMock, patch
+    def _run(self, collector, forge, responses):
+        forge.file_results = responses
+        return asyncio.run(collector._find_doc_directory(None, "o/r"))
 
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
-
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_doc_directory(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gap_on_all_candidates_is_tracked(self, collector):
-        path, saw_gap = self._run(collector, {"docs": COLLECTION_GAP, "doc": COLLECTION_GAP,
-                                                "documentation": COLLECTION_GAP, "Documentation": COLLECTION_GAP})
+    def test_gap_on_all_candidates_is_tracked(self, collector, forge):
+        path, saw_gap = self._run(collector, forge, {
+            "docs": COLLECTION_GAP, "doc": COLLECTION_GAP,
+            "documentation": COLLECTION_GAP, "Documentation": COLLECTION_GAP,
+        })
         assert path is None
         assert saw_gap is True
 
-    def test_found_directory_reports_no_gap(self, collector):
-        path, saw_gap = self._run(collector, {"docs": "http://x"})
+    def test_found_directory_reports_no_gap(self, collector, forge):
+        path, saw_gap = self._run(collector, forge, {"docs": "http://x"})
         assert path == "docs"
         assert saw_gap is False
 
 
 class TestFindDocumentationSiteGapHandling:
-    def _run(self, collector):
-        import asyncio
-        return asyncio.run(collector._find_documentation_site(None, "o", "r"))
-
-    def test_gap_is_tracked_separately_from_confirmed_absence(self, collector):
-        from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-            site, saw_gap = self._run(collector)
+    def test_gap_is_tracked_separately_from_confirmed_absence(self, collector, forge):
+        forge.repo_info_result = COLLECTION_GAP
+        site, saw_gap = asyncio.run(collector._find_documentation_site(None, "o/r"))
         assert site is None
         assert saw_gap is True
 
-    def test_confirmed_repo_with_no_homepage_or_pages_is_not_a_gap(self, collector):
-        from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value={"homepage": "", "has_pages": False})):
-            site, saw_gap = self._run(collector)
+    def test_confirmed_repo_with_no_homepage_or_pages_is_not_a_gap(self, collector, forge):
+        forge.repo_info_result = {"homepage": None, "has_pages": False}
+        site, saw_gap = asyncio.run(collector._find_documentation_site(None, "o/r"))
         assert site is None
         assert saw_gap is False
