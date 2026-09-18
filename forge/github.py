@@ -295,21 +295,27 @@ class GitHubForge:
         self, client: httpx.AsyncClient, ref: str, *,
         per_page: int = 100, page: int = 1,
         since: Optional[str] = None, until: Optional[str] = None,
+        path: Optional[str] = None,
     ):
         """List commits (newest first), or None/COLLECTION_GAP.
 
         Each item: {sha, message, subject (first line), author_identity,
-        date} -- unwraps GitHub's nested commit.author.{name,date} /
-        top-level author.login (when the committer has a GitHub account)
-        into one identity field, matching GitLab's flatter commit shape
-        (author_name/authored_date at the top level) so callers don't
-        branch on platform.
+        date, committer_date} -- unwraps GitHub's nested
+        commit.author.{name,date} / top-level author.login (when the
+        committer has a GitHub account) into one identity field, matching
+        GitLab's flatter commit shape (author_name/authored_date at the top
+        level) so callers don't branch on platform. `date` is the author
+        date; `committer_date` (can differ -- a rebased or merged commit
+        keeps its original author date) is kept separately for callers
+        specifically measuring when a change actually landed.
         """
         params: Dict[str, Any] = {"per_page": per_page, "page": page}
         if since:
             params["since"] = since
         if until:
             params["until"] = until
+        if path:
+            params["path"] = path
         data = await self._github_get(
             client, f"https://api.github.com/repos/{ref}/commits", params=params
         )
@@ -321,14 +327,55 @@ class GitHubForge:
             message = commit.get("message") or ""
             author = c.get("author") or {}
             commit_author = commit.get("author") or {}
+            commit_committer = commit.get("committer") or {}
             out.append({
                 "sha": c.get("sha"),
                 "message": message,
                 "subject": message.split("\n")[0],
                 "author_identity": author.get("login") or commit_author.get("name"),
                 "date": commit_author.get("date"),
+                "committer_date": commit_committer.get("date"),
             })
         return out
+
+    async def dir_listing(self, client: httpx.AsyncClient, ref: str, path: str = ""):
+        """Entries directly in a directory, or COLLECTION_GAP.
+
+        Each entry: {name, path, html_url, size, type ("file"/"dir")}. An
+        empty list is a confirmed result (directory absent or has no
+        entries) -- GitHub's Contents API 404s for a missing directory,
+        same as a missing file.
+        """
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/contents/{path}".rstrip("/")
+        )
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
+        if not isinstance(data, list):
+            return []
+        return [
+            {
+                "name": e["name"],
+                "path": e.get("path", e["name"]),
+                "html_url": e.get("html_url", ""),
+                "size": e.get("size", 0),
+                "type": e.get("type"),
+            }
+            for e in data
+        ]
+
+    async def community_profile(self, client: httpx.AsyncClient, ref: str):
+        """GitHub's aggregated community-health-file report, or {}/COLLECTION_GAP.
+
+        GitHub-only -- there is no GitLab equivalent, so GitLabForge always
+        returns {} (a real answer: GitLab has no such aggregate), never a
+        gap. Callers that need per-document detection use dir_listing/
+        file_exists instead, which both forges support.
+        """
+        data = await self._github_get(client, f"https://api.github.com/repos/{ref}/community/profile")
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
+        return data or {}
 
     async def repo_tree(self, client: httpx.AsyncClient, ref: str):
         """Whole file layout in one call: {"files": [{"path", "size"}, ...],

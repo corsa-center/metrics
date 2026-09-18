@@ -551,7 +551,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "community_health", package):
             try:
                 from collectors.ecosystem.community_health import CommunityHealthCollector
-                collector = CommunityHealthCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = CommunityHealthCollector(GitHubForge(github_token))
                 sub_results["governance"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Governance collection failed for {package['name']}: {e}")

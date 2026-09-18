@@ -138,6 +138,7 @@ class TestCommits:
             "commit": {
                 "message": "Fix the thing\n\nLonger body here.",
                 "author": {"name": "Jane Doe", "date": "2026-01-01T00:00:00Z"},
+                "committer": {"date": "2026-01-02T00:00:00Z"},
             },
             "author": {"login": "janedoe"},
         }])
@@ -148,7 +149,14 @@ class TestCommits:
             "subject": "Fix the thing",
             "author_identity": "janedoe",
             "date": "2026-01-01T00:00:00Z",
+            "committer_date": "2026-01-02T00:00:00Z",
         }]
+
+    def test_path_filter_is_forwarded(self, forge):
+        client = self._client([])
+        asyncio.run(forge.commits(client, "o/r", path="GOVERNANCE.md"))
+        _, kwargs = client.get.call_args
+        assert kwargs["params"]["path"] == "GOVERNANCE.md"
 
     def test_falls_back_to_commit_author_name_without_github_account(self, forge):
         client = self._client([{
@@ -183,6 +191,53 @@ class TestRepoTree:
         client = AsyncMock()
         client.get = AsyncMock(return_value=_resp(403))
         result = asyncio.run(forge.repo_tree(client, "o/r"))
+        assert result is COLLECTION_GAP
+
+
+class TestDirListing:
+    def test_filters_to_matching_shape(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, [
+            {"name": "a.md", "path": "docs/a.md", "html_url": "http://x", "size": 5, "type": "file"},
+            {"name": "sub", "path": "docs/sub", "type": "dir"},
+        ]))
+        result = asyncio.run(forge.dir_listing(client, "o/r", "docs"))
+        assert result == [
+            {"name": "a.md", "path": "docs/a.md", "html_url": "http://x", "size": 5, "type": "file"},
+            {"name": "sub", "path": "docs/sub", "html_url": "", "size": 0, "type": "dir"},
+        ]
+
+    def test_a_single_file_path_is_an_empty_listing_not_a_crash(self, forge):
+        # The Contents API returns a dict, not a list, when path names a file.
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, {"name": "README.md", "type": "file"}))
+        result = asyncio.run(forge.dir_listing(client, "o/r", "README.md"))
+        assert result == []
+
+    def test_gap_passes_through(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(403))
+        result = asyncio.run(forge.dir_listing(client, "o/r", "docs"))
+        assert result is COLLECTION_GAP
+
+
+class TestCommunityProfile:
+    def test_returns_data(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, {"health_percentage": 80}))
+        result = asyncio.run(forge.community_profile(client, "o/r"))
+        assert result == {"health_percentage": 80}
+
+    def test_404_is_empty_dict_not_none(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(404))
+        result = asyncio.run(forge.community_profile(client, "o/r"))
+        assert result == {}
+
+    def test_gap_passes_through(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(403))
+        result = asyncio.run(forge.community_profile(client, "o/r"))
         assert result is COLLECTION_GAP
 
 
