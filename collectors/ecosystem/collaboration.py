@@ -45,24 +45,26 @@ _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
 _RATE_LIMIT_PAUSE_SECONDS = 2
 
 
-class CollaborationCollector(GitHubForge):
+class CollaborationCollector:
     """Collects ecosystem integration metrics (Section 4.2.7)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting collaboration metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             by_repo, spack = await asyncio.gather(
-                self._lookup_by_repository(client, owner, repo),
-                self._lookup_spack(client, repo),
+                self._lookup_by_repository(client, ref),
+                self._lookup_spack(client, ref.rsplit("/", 1)[-1]),
                 return_exceptions=True,
             )
 
@@ -76,8 +78,8 @@ class CollaborationCollector(GitHubForge):
         registries = self._merge(by_repo + ([spack] if spack else []))
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "registries": registries,
             "ecosystems": sorted({r["ecosystem"] for r in registries}),
             "overall_score": self._calculate_score(registries),
@@ -115,10 +117,10 @@ class CollaborationCollector(GitHubForge):
         return None
 
     async def _lookup_by_repository(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict[str, Any]]:
         """Every package ecosyste.ms links back to this repository."""
-        target = quote(f"https://github.com/{owner}/{repo}", safe="")
+        target = quote(f"https://{self.forge.host}/{ref}", safe="")
         data = await self._get_json(
             client, f"{_PACKAGES_API}/packages/lookup?repository_url={target}"
         )
@@ -267,7 +269,7 @@ class CollaborationCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "registries": [],
             "ecosystems": [],
             "overall_score": self._calculate_score([]),

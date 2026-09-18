@@ -637,7 +637,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "collaboration", package):
             try:
                 from collectors.ecosystem.collaboration import CollaborationCollector
-                collector = CollaborationCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = CollaborationCollector(GitHubForge(github_token))
                 sub_results["collaboration"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Collaboration collection failed for {package['name']}: {e}")
