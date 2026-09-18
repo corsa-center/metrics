@@ -560,7 +560,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "licensing", package):
             try:
                 from collectors.ecosystem.licensing import LicensingCollector
-                collector = LicensingCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = LicensingCollector(GitHubForge(github_token))
                 sub_results["licensing"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Licensing collection failed for {package['name']}: {e}")

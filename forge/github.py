@@ -196,6 +196,54 @@ class GitHubForge:
             } if license_data else None,
         }
 
+    async def file_metadata(self, client: httpx.AsyncClient, ref: str, path: str):
+        """Like file_exists, but returns {html_url, size, download_url} for a
+        confirmed file instead of just its URL -- for callers (license
+        detection) that need to fetch the file's own content afterward.
+        None for confirmed absence (including a path that's actually a
+        directory) or COLLECTION_GAP.
+        """
+        owner, repo = ref.split("/", 1)
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+        )
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
+        if data is None or isinstance(data, list):
+            return None
+        return {
+            "html_url": data.get("html_url", ""),
+            "size": data.get("size", 0),
+            "download_url": data.get("download_url", ""),
+        }
+
+    async def license(self, client: httpx.AsyncClient, ref: str):
+        """Detected license metadata, or None (no detected license) /
+        COLLECTION_GAP.
+
+        Keys: file_path, html_url, size, download_url, spdx_id, key, name.
+        Distinct from repo_info()'s license sub-dict, which comes from a
+        cheaper call but lacks file location/size -- this one is for
+        collectors that need to fetch the license file's own content.
+        GitLab's license metadata has no file-location/download_url
+        equivalent (it's project-level detection, not tied to a specific
+        blob) -- GitLabForge will need those two keys to degrade gracefully
+        rather than guessing at a URL.
+        """
+        data = await self._github_get(client, f"https://api.github.com/repos/{ref}/license")
+        if data is COLLECTION_GAP or data is None:
+            return data
+        license_data = data.get("license") or {}
+        return {
+            "file_path": data.get("name", "LICENSE"),
+            "html_url": data.get("html_url", ""),
+            "size": data.get("size", 0),
+            "download_url": data.get("download_url", ""),
+            "spdx_id": license_data.get("spdx_id"),
+            "key": license_data.get("key", "unknown"),
+            "name": license_data.get("name", "Unknown"),
+        }
+
     async def readme(self, client: httpx.AsyncClient, ref: str):
         """Decoded README text, or None (confirmed absent) / COLLECTION_GAP."""
         data = await self._github_get(client, f"https://api.github.com/repos/{ref}/readme")
