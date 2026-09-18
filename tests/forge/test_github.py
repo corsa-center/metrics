@@ -40,6 +40,20 @@ def _resp(status_code, json_body=None, headers=None, text=""):
     return r
 
 
+class TestExtractRef:
+    def test_https_url(self, forge):
+        assert forge.extract_ref("https://github.com/owner/repo") == "owner/repo"
+
+    def test_git_suffix_stripped(self, forge):
+        assert forge.extract_ref("https://github.com/owner/repo.git") == "owner/repo"
+
+    def test_trailing_slash_stripped(self, forge):
+        assert forge.extract_ref("https://github.com/owner/repo/") == "owner/repo"
+
+    def test_non_github_url_is_none(self, forge):
+        assert forge.extract_ref("https://gitlab.com/owner/repo") is None
+
+
 class TestCheckFileExists:
     def _client(self, status_code, json_body=None):
         client = AsyncMock()

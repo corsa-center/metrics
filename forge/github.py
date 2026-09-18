@@ -484,6 +484,99 @@ class GitHubForge:
             logger.debug(f"Error fetching contributor stats: {e}")
         return []
 
+    async def ci_runs(
+        self, client: httpx.AsyncClient, ref: str, *,
+        branch: Optional[str] = None, status: Optional[str] = None,
+        per_page: int = 100, page: int = 1,
+    ):
+        """GitHub Actions workflow runs across the whole repo, or None/COLLECTION_GAP.
+
+        Each item: {status, conclusion, created_at, updated_at}. GitLab's
+        pipelines API covers the same "every CI run regardless of which
+        workflow file" concept, but GitHub Actions' per-named-workflow
+        breakdown (ci_workflows/ci_workflow_runs below) has no GitLab
+        equivalent -- a GitLab pipeline isn't attributed to one of several
+        named workflow files the way a run is here.
+        """
+        params: Dict[str, Any] = {"per_page": per_page, "page": page}
+        if branch:
+            params["branch"] = branch
+        if status:
+            params["status"] = status
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/actions/runs", params=params
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [
+            {
+                "status": r.get("status"),
+                "conclusion": r.get("conclusion"),
+                "created_at": r.get("created_at"),
+                "updated_at": r.get("updated_at"),
+            }
+            for r in data.get("workflow_runs", [])
+        ]
+
+    async def ci_workflows(self, client: httpx.AsyncClient, ref: str):
+        """List of {id, name} GitHub Actions workflow definitions, or
+        None/COLLECTION_GAP. GitHub-Actions-specific -- see ci_runs' docstring."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{ref}/actions/workflows")
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [{"id": w.get("id"), "name": w.get("name")} for w in data.get("workflows", [])]
+
+    async def ci_workflow_runs(
+        self, client: httpx.AsyncClient, ref: str, workflow_id: Any, *, per_page: int = 100
+    ):
+        """Runs for one named workflow (PRs excluded), or None/COLLECTION_GAP.
+        Each item: {status, conclusion}."""
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/actions/workflows/{workflow_id}/runs",
+            params={"per_page": per_page, "exclude_pull_requests": "true"},
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [
+            {"status": r.get("status"), "conclusion": r.get("conclusion")}
+            for r in data.get("workflow_runs", [])
+        ]
+
+    async def deployments(
+        self, client: httpx.AsyncClient, ref: str, *, per_page: int = 100, page: int = 1
+    ):
+        """Deployments (newest first), or None/COLLECTION_GAP.
+
+        Each item: {created_at, statuses_url} -- statuses_url is an opaque
+        GitHub-provided follow-up URL, passed through as-is (not every
+        deployment's outcome is worth resolving eagerly); fetch it via
+        deployment_succeeded(). GitLab's nearest equivalent is its
+        Deployments/Environments API, shaped differently -- no attempt at
+        parity here yet.
+        """
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/deployments",
+            params={"per_page": per_page, "page": page},
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [{"created_at": d.get("created_at"), "statuses_url": d.get("statuses_url")} for d in data]
+
+    async def deployment_succeeded(self, client: httpx.AsyncClient, statuses_url: str) -> bool:
+        """Whether any recorded status for a deployment was 'success'.
+
+        Best-effort: returns False on any fetch problem, matching how the
+        one caller already treats an unresolved status as "not a successful
+        deployment" rather than distinguishing that from a confirmed failure.
+        """
+        try:
+            resp = await client.get(statuses_url, headers=self.github_headers)
+            if resp.status_code == 200:
+                return any(s.get("state") == "success" for s in resp.json())
+        except Exception as e:
+            logger.error(f"Error fetching deployment statuses: {e}")
+        return False
+
     async def community_profile(self, client: httpx.AsyncClient, ref: str):
         """GitHub's aggregated community-health-file report, or {}/COLLECTION_GAP.
 

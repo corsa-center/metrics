@@ -4,38 +4,13 @@ import pytest
 from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
 
 
-CONFIG = {
-    "api_credentials": {
-        "github": {"token": ""},
-    }
-}
-
-
 @pytest.fixture
 def collector():
-    return CICDMetricsCollector(CONFIG)
-
-
-# ------------------------------------------------------------------ #
-# _parse_repo_url                                                      #
-# ------------------------------------------------------------------ #
-
-class TestParseRepoUrl:
-    def test_https_url(self, collector):
-        assert collector._parse_repo_url("https://github.com/owner/repo") == \
-            "https://api.github.com/repos/owner/repo"
-
-    def test_git_suffix_stripped(self, collector):
-        assert collector._parse_repo_url("https://github.com/owner/repo.git") == \
-            "https://api.github.com/repos/owner/repo"
-
-    def test_trailing_slash_stripped(self, collector):
-        assert collector._parse_repo_url("https://github.com/owner/repo/") == \
-            "https://api.github.com/repos/owner/repo"
-
-    def test_invalid_url_raises(self, collector):
-        with pytest.raises(ValueError):
-            collector._parse_repo_url("https://gitlab.com/owner/repo")
+    # None: every test here exercises _calculate_score, which is pure and
+    # never touches self.forge. URL-parsing coverage (formerly
+    # _parse_repo_url here) now lives in tests/forge/test_github.py
+    # against GitHubForge.extract_ref.
+    return CICDMetricsCollector(None)
 
 
 # ------------------------------------------------------------------ #

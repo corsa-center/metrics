@@ -743,7 +743,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "ci_cd", package):
             try:
                 from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
-                collector = CICDMetricsCollector(self.config)
+                from forge.github import GitHubForge
+                collector = CICDMetricsCollector(GitHubForge(github_token))
                 sub_results["ci_cd"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
