@@ -2,31 +2,68 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from forge.base import COLLECTION_GAP
 from collectors.ecosystem.outreach import OutreachCollector, _ONBOARDING_PATHS
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.contributors_pages = []
+        self.commits_pages = []
+        self.search_results = {}
+        self.file_results = {}
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def contributors(self, client, ref, *, per_page=100, page=1):
+        idx = page - 1
+        return self.contributors_pages[idx] if idx < len(self.contributors_pages) else []
+
+    async def commits(self, client, ref, *, since=None, per_page=100, page=1):
+        idx = page - 1
+        return self.commits_pages[idx] if idx < len(self.commits_pages) else []
+
+    async def search_issues(self, client, query, *, per_page=1):
+        for key, value in self.search_results.items():
+            if key in query:
+                return value
+        return 0
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return OutreachCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return OutreachCollector(forge)
 
 
 class TestContributorGrowth:
     def test_new_contributor_is_one_with_no_prior_history(self, collector):
         # alice has 3 all-time and 3 recent → entirely new.
         # bob has 50 all-time but only 2 recent → an existing contributor.
-        contributors = [{"login": "alice", "contributions": 3},
-                        {"login": "bob", "contributions": 50}]
+        contributors = [{"identity": "alice", "commit_count": 3},
+                        {"identity": "bob", "commit_count": 50}]
         recent = {"alice": 3, "bob": 2}
         g = collector._analyze_contributor_growth(contributors, recent)
         assert g["new_contributors"] == 1
 
     def test_retention_counts_newcomers_who_came_back(self, collector):
-        contributors = [{"login": "a", "contributions": 1},
-                        {"login": "b", "contributions": 4},
-                        {"login": "c", "contributions": 1}]
+        contributors = [{"identity": "a", "commit_count": 1},
+                        {"identity": "b", "commit_count": 4},
+                        {"identity": "c", "commit_count": 1}]
         recent = {"a": 1, "b": 4, "c": 1}
         g = collector._analyze_contributor_growth(contributors, recent)
         assert g["new_contributors"] == 3
@@ -34,17 +71,17 @@ class TestContributorGrowth:
         assert g["retention_rate"] == pytest.approx(33.3)
 
     def test_retention_is_none_without_newcomers(self, collector):
-        contributors = [{"login": "bob", "contributions": 50}]
+        contributors = [{"identity": "bob", "commit_count": 50}]
         g = collector._analyze_contributor_growth(contributors, {"bob": 2})
         assert g["new_contributors"] == 0
         assert g["retention_rate"] is None
 
     def test_lifecycle_buckets(self, collector):
         contributors = [
-            {"login": "one", "contributions": 1},
-            {"login": "two", "contributions": 4},
-            {"login": "three", "contributions": 5},
-            {"login": "four", "contributions": 900},
+            {"identity": "one", "commit_count": 1},
+            {"identity": "two", "commit_count": 4},
+            {"identity": "three", "commit_count": 5},
+            {"identity": "four", "commit_count": 900},
         ]
         g = collector._analyze_contributor_growth(contributors, {})
         assert g["lifecycle"] == {"one_time": 1, "casual": 1, "repeat": 2}
@@ -58,7 +95,7 @@ class TestContributorGrowth:
         # /contributors is capped at 5 pages; an author beyond it must not be
         # miscounted as new just because their total is unknown.
         g = collector._analyze_contributor_growth(
-            [{"login": "known", "contributions": 10}], {"unknown": 3}
+            [{"identity": "known", "commit_count": 10}], {"unknown": 3}
         )
         assert g["new_contributors"] == 0
 
@@ -89,12 +126,12 @@ class TestScoring:
         assert not s["sub_scores"]["good_first_issue"]["passing"]
         s = self._score(collector, issues={"total": 5, "open": 2, "closed": 3})
         assert s["sub_scores"]["good_first_issue"]["passing"]
+
     def test_onboarding_threshold(self, collector):
         assert not self._score(collector, onboarding={"found": ["a", "b"]})[
             "sub_scores"]["onboarding_infrastructure"]["passing"]
         assert self._score(collector, onboarding={"found": ["a", "b", "c"]})[
             "sub_scores"]["onboarding_infrastructure"]["passing"]
-
 
 
 class TestNewcomerLabelQuery:
@@ -113,17 +150,8 @@ class TestNewcomerLabelQuery:
         assert "good-first-issue" in labels and '"good-first-issue"' not in labels
 
 
-class TestPagination:
-    def test_next_link_parsing(self, collector):
-        header = ('<https://api.github.com/x?page=2>; rel="next", '
-                  '<https://api.github.com/x?page=9>; rel="last"')
-        assert collector._next_link(header).endswith("page=2")
-        assert collector._next_link(None) is None
-
-
 class TestEmptyResult:
     def test_invalid_url(self, collector):
-        import asyncio
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "not-a-url"}))
         assert r["overall_score"]["score"] == 0
         assert r["overall_score"]["max_score"] == 5
@@ -183,138 +211,54 @@ class TestScoringGapHandling:
         assert s["status"] == "not_collected"
 
 
-class TestGetPageGapHandling:
-    def test_gap_on_exception(self, collector):
-        async def go():
-            client = AsyncMock()
-            client.get = AsyncMock(side_effect=ConnectionError("boom"))
-            return await collector._get_page(client, "http://x")
-
-        page, next_url = asyncio.run(go())
-        assert page is COLLECTION_GAP
-
-    def test_gap_on_non_200(self, collector):
-        async def go():
-            resp = MagicMock()
-            resp.status_code = 403
-            client = AsyncMock()
-            client.get = AsyncMock(return_value=resp)
-            return await collector._get_page(client, "http://x")
-
-        page, next_url = asyncio.run(go())
-        assert page is COLLECTION_GAP
-
-    def test_confirmed_404_is_a_real_empty_page(self, collector):
-        async def go():
-            resp = MagicMock()
-            resp.status_code = 404
-            client = AsyncMock()
-            client.get = AsyncMock(return_value=resp)
-            return await collector._get_page(client, "http://x")
-
-        page, next_url = asyncio.run(go())
-        assert page == []
-
-    def test_next_link_extracted_from_success(self, collector):
-        async def go():
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = [{"login": "a"}]
-            resp.headers = {"Link": '<http://x?page=2>; rel="next"'}
-            client = AsyncMock()
-            client.get = AsyncMock(return_value=resp)
-            return await collector._get_page(client, "http://x")
-
-        page, next_url = asyncio.run(go())
-        assert page == [{"login": "a"}]
-        assert next_url == "http://x?page=2"
-
-
 class TestGetContributorsGapHandling:
-    def test_gap_on_first_page_reports_gap_with_partial_results(self, collector):
-        async def go():
-            with patch.object(collector, "_get_page", new=AsyncMock(return_value=(COLLECTION_GAP, None))):
-                return await collector._get_contributors(None, "o", "r")
-
-        contributors, saw_gap = asyncio.run(go())
+    def test_gap_on_first_page_reports_gap_with_partial_results(self, collector, forge):
+        forge.contributors_pages = [COLLECTION_GAP]
+        contributors, saw_gap = asyncio.run(collector._get_contributors(None, "o/r"))
         assert contributors == []
         assert saw_gap is True
 
-    def test_gap_after_a_successful_first_page_keeps_what_was_fetched(self, collector):
-        calls = {"n": 0}
-
-        async def fake_page(client, url, params=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return [{"login": "a", "contributions": 5}], "http://next"
-            return COLLECTION_GAP, None
-
-        async def go():
-            with patch.object(collector, "_get_page", side_effect=fake_page):
-                return await collector._get_contributors(None, "o", "r")
-
-        contributors, saw_gap = asyncio.run(go())
+    def test_gap_after_a_successful_first_page_keeps_what_was_fetched(self, collector, forge):
+        forge.contributors_pages = [
+            [{"identity": "a", "commit_count": 5}], COLLECTION_GAP,
+        ]
+        contributors, saw_gap = asyncio.run(collector._get_contributors(None, "o/r"))
         assert len(contributors) == 1
         assert saw_gap is True
 
-    def test_clean_exhaustion_is_not_a_gap(self, collector):
-        async def go():
-            with patch.object(collector, "_get_page", new=AsyncMock(return_value=([], None))):
-                return await collector._get_contributors(None, "o", "r")
-
-        contributors, saw_gap = asyncio.run(go())
+    def test_clean_exhaustion_is_not_a_gap(self, collector, forge):
+        forge.contributors_pages = [[]]
+        contributors, saw_gap = asyncio.run(collector._get_contributors(None, "o/r"))
         assert contributors == []
         assert saw_gap is False
 
 
 class TestGetNewcomerIssuesGapHandling:
-    def test_open_search_failure_with_zero_is_not_collected(self, collector):
-        async def fake_search_get(client, url, headers):
-            return None if "state%3Aopen" in url else MagicMock(json=lambda: {"total_count": 3})
-
-        async def go():
-            with patch("collectors.ecosystem.outreach.search_get", side_effect=fake_search_get):
-                return await collector._get_newcomer_issues(None, "o", "r")
-
-        result = asyncio.run(go())
+    def test_open_search_failure_with_zero_is_not_collected(self, collector, forge):
+        forge.search_results = {"state:open": None, "state:closed": 3}
+        result = asyncio.run(collector._get_newcomer_issues(None, "o/r"))
         assert result["not_collected"] is True
 
-    def test_open_confirmed_nonzero_survives_a_closed_gap(self, collector):
-        async def fake_search_get(client, url, headers):
-            if "state%3Aopen" in url:
-                resp = MagicMock()
-                resp.json.return_value = {"total_count": 4}
-                return resp
-            return None
-
-        async def go():
-            with patch("collectors.ecosystem.outreach.search_get", side_effect=fake_search_get):
-                return await collector._get_newcomer_issues(None, "o", "r")
-
-        result = asyncio.run(go())
+    def test_open_confirmed_nonzero_survives_a_closed_gap(self, collector, forge):
+        forge.search_results = {"state:open": 4, "state:closed": None}
+        result = asyncio.run(collector._get_newcomer_issues(None, "o/r"))
         assert result["open"] == 4
         assert "not_collected" not in result
 
 
 class TestCheckOnboardingGapHandling:
-    def _run(self, collector, responses):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+    def _run(self, collector, forge, responses):
+        forge.file_results = responses
+        return asyncio.run(collector._check_onboarding(None, "o/r"))
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._check_onboarding(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gapped_label_with_no_find_is_not_collected(self, collector):
+    def test_gapped_label_with_no_find_is_not_collected(self, collector, forge):
         responses = {p: COLLECTION_GAP for paths in _ONBOARDING_PATHS.values() for p in paths}
-        result = self._run(collector, responses)
+        result = self._run(collector, forge, responses)
         assert result["found"] == []
         assert set(result["not_collected"]) == set(_ONBOARDING_PATHS)
 
-    def test_found_label_survives_gaps_on_others(self, collector):
+    def test_found_label_survives_gaps_on_others(self, collector, forge):
         responses = {p: COLLECTION_GAP for paths in _ONBOARDING_PATHS.values() for p in paths}
         responses["CONTRIBUTING.md"] = "http://x"
-        result = self._run(collector, responses)
+        result = self._run(collector, forge, responses)
         assert "Contributing guide" in result["found"]

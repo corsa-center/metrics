@@ -621,7 +621,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "outreach", package):
             try:
                 from collectors.ecosystem.outreach import OutreachCollector
-                collector = OutreachCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = OutreachCollector(GitHubForge(github_token))
                 sub_results["outreach"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Outreach collection failed for {package['name']}: {e}")
