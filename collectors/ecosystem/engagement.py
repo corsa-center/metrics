@@ -231,7 +231,7 @@ class EngagementCollector:
         }
 
     def _compute_backlog(self, repo_info: Dict, issues: List[Dict]) -> Dict[str, Any]:
-        open_count = repo_info.get("open_issues_count")  # includes open PRs
+        open_count = repo_info.get("open_issues")  # includes open PRs on GitHub
         closed_in_sample = sum(1 for i in issues if i.get("state") == "closed")
         open_in_sample = sum(1 for i in issues if i.get("state") == "open")
         sample_ratio = (

@@ -144,8 +144,50 @@ class GitHubForge:
         return f"{owner_repo[0]}/{owner_repo[1]}" if owner_repo else None
 
     async def repo_info(self, client: httpx.AsyncClient, ref: str):
-        """GET /repos/{ref} -- raw GitHub repository object, JSON/None/COLLECTION_GAP."""
-        return await self._github_get(client, f"https://api.github.com/repos/{ref}")
+        """Normalized repository info, or None (confirmed absent) / COLLECTION_GAP.
+
+        Canonical keys, stable across forges: stars, forks, watchers,
+        open_issues, description, homepage, has_wiki, has_pages,
+        has_discussions, archived, disabled, language, size_kb, created_at,
+        updated_at, pushed_at, default_branch, license ({spdx_id, name,
+        key} or None). `has_discussions` is GitHub-only -- GitLabForge
+        always returns False for it, a real answer (GitLab has no
+        Discussions feature), not a gap.
+        """
+        data = await self._github_get(client, f"https://api.github.com/repos/{ref}")
+        if data is COLLECTION_GAP or data is None:
+            return data
+        license_data = data.get("license") or {}
+        return {
+            "stars": data.get("stargazers_count", 0),
+            "forks": data.get("forks_count", 0),
+            "watchers": data.get("subscribers_count", 0),
+            "open_issues": data.get("open_issues_count", 0),
+            "description": data.get("description"),
+            "homepage": (data.get("homepage") or "").strip() or None,
+            "has_wiki": bool(data.get("has_wiki")),
+            "has_pages": bool(data.get("has_pages")),
+            "has_discussions": bool(data.get("has_discussions")),
+            "archived": bool(data.get("archived")),
+            "disabled": bool(data.get("disabled")),
+            "language": data.get("language"),
+            "size_kb": data.get("size", 0),
+            "created_at": data.get("created_at"),
+            "updated_at": data.get("updated_at"),
+            "pushed_at": data.get("pushed_at"),
+            "default_branch": data.get("default_branch") or "HEAD",
+            "license": {
+                "spdx_id": license_data.get("spdx_id"),
+                "name": license_data.get("name"),
+                "key": license_data.get("key"),
+            } if license_data else None,
+        }
+
+    def pages_url(self, ref: str) -> str:
+        """Predictable Pages URL for `ref`, regardless of whether Pages is
+        actually enabled -- check `repo_info(...)["has_pages"]` first."""
+        owner, repo = ref.split("/", 1)
+        return f"https://{owner}.github.io/{repo}/"
 
     async def file_exists(self, client: httpx.AsyncClient, ref: str, path: str):
         """Same contract as `_check_file_exists`, taking a combined ref."""

@@ -77,6 +77,55 @@ class TestCheckFileExists:
         assert result is COLLECTION_GAP
 
 
+class TestRepoInfo:
+    def _client(self, json_body):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, json_body))
+        return client
+
+    def test_normalizes_field_names(self, forge):
+        client = self._client({
+            "stargazers_count": 42, "forks_count": 7, "subscribers_count": 3,
+            "open_issues_count": 5, "description": "desc", "homepage": " https://x ",
+            "has_wiki": True, "has_pages": False, "has_discussions": True,
+            "archived": False, "disabled": False, "language": "Python",
+            "size": 1024, "created_at": "2020-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z", "pushed_at": "2026-01-01T00:00:00Z",
+            "default_branch": "main",
+            "license": {"spdx_id": "MIT", "name": "MIT License", "key": "mit"},
+        })
+        result = asyncio.run(forge.repo_info(client, "o/r"))
+        assert result["stars"] == 42
+        assert result["forks"] == 7
+        assert result["watchers"] == 3
+        assert result["open_issues"] == 5
+        assert result["homepage"] == "https://x"
+        assert result["has_discussions"] is True
+        assert result["license"] == {"spdx_id": "MIT", "name": "MIT License", "key": "mit"}
+
+    def test_missing_license_is_none(self, forge):
+        client = self._client({"stargazers_count": 0})
+        result = asyncio.run(forge.repo_info(client, "o/r"))
+        assert result["license"] is None
+
+    def test_blank_homepage_is_none(self, forge):
+        client = self._client({"homepage": "   "})
+        result = asyncio.run(forge.repo_info(client, "o/r"))
+        assert result["homepage"] is None
+
+    def test_404_returns_none(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(404))
+        result = asyncio.run(forge.repo_info(client, "o/r"))
+        assert result is None
+
+    def test_gap_passes_through(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(403))
+        result = asyncio.run(forge.repo_info(client, "o/r"))
+        assert result is COLLECTION_GAP
+
+
 class TestGithubGet:
     def test_success_returns_json(self, forge):
         client = AsyncMock()
