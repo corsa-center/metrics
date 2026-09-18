@@ -2,15 +2,41 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from forge.base import COLLECTION_GAP
 from collectors.ecosystem.welcomeness import WelcomenessCollector, _DECISION_PATHS
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge: no HTTP, just canned
+    per-test responses for the semantic methods WelcomenessCollector calls.
+    """
+
+    def __init__(self):
+        self.repo_info_result = None
+        self.file_results = {}
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "nope" else "o/r"
+
+    async def repo_info(self, client, ref):
+        return self.repo_info_result
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return WelcomenessCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return WelcomenessCollector(forge)
 
 
 class TestScoring:
@@ -48,7 +74,6 @@ class TestScoring:
 
 class TestEmptyResult:
     def test_invalid_url(self, collector):
-        import asyncio
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "nope"}))
         assert r["public_channels"] == []
         assert r["overall_score"]["max_score"] == 1
@@ -82,45 +107,32 @@ class TestScoringGapHandling:
 
 
 class TestGetPublicChannelsGapHandling:
-    def test_gap_is_tracked(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_public_channels(None, "o", "r")
-
-        channels, saw_gap = asyncio.run(go())
+    def test_gap_is_tracked(self, collector, forge):
+        forge.repo_info_result = COLLECTION_GAP
+        channels, saw_gap = asyncio.run(collector._get_public_channels(None, "o/r"))
         assert channels == []
         assert saw_gap is True
 
-    def test_confirmed_flags_are_not_a_gap(self, collector):
-        async def go():
-            data = {"has_discussions": True, "has_wiki": False, "has_pages": False}
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
-                return await collector._get_public_channels(None, "o", "r")
-
-        channels, saw_gap = asyncio.run(go())
+    def test_confirmed_flags_are_not_a_gap(self, collector, forge):
+        forge.repo_info_result = {"has_discussions": True, "has_wiki": False, "has_pages": False}
+        channels, saw_gap = asyncio.run(collector._get_public_channels(None, "o/r"))
         assert channels == ["GitHub Discussions"]
         assert saw_gap is False
 
 
 class TestFindDecisionDocumentsGapHandling:
-    def _run(self, collector, responses):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+    def _run(self, collector, forge, responses):
+        forge.file_results = responses
+        return asyncio.run(collector._find_decision_documents(None, "o/r"))
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_decision_documents(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gapped_label_with_no_find_is_not_collected(self, collector):
+    def test_gapped_label_with_no_find_is_not_collected(self, collector, forge):
         responses = {p: COLLECTION_GAP for paths in _DECISION_PATHS.values() for p in paths}
-        result = self._run(collector, responses)
+        result = self._run(collector, forge, responses)
         assert result["found"] == []
         assert set(result["not_collected"]) == set(_DECISION_PATHS)
 
-    def test_found_label_survives_gaps_on_others(self, collector):
+    def test_found_label_survives_gaps_on_others(self, collector, forge):
         responses = {p: COLLECTION_GAP for paths in _DECISION_PATHS.values() for p in paths}
         responses["ROADMAP.md"] = "http://x"
-        result = self._run(collector, responses)
+        result = self._run(collector, forge, responses)
         assert "Roadmap" in result["found"]

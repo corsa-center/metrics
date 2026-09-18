@@ -51,23 +51,25 @@ _PUBLIC_CHANNELS = {
 }
 
 
-class WelcomenessCollector(GitHubForge):
+class WelcomenessCollector:
     """Collects decision-making visibility signals (Section 4.2.6)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting welcomeness metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
-                self._get_public_channels(client, owner, repo),
-                self._find_decision_documents(client, owner, repo),
+                self._get_public_channels(client, ref),
+                self._find_decision_documents(client, ref),
                 return_exceptions=True,
             )
 
@@ -85,21 +87,21 @@ class WelcomenessCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "public_channels": channels,
             "decision_documents": documents,
             "overall_score": self._calculate_score(channels, documents, channels_gap),
         }
 
     async def _get_public_channels(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Discussions / wiki / pages flags, straight off the repository object.
 
         Returns (channels, saw_gap).
         """
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        data = await self.forge.repo_info(client, ref)
         if data is COLLECTION_GAP:
             return [], True
         if data is None:
@@ -107,14 +109,14 @@ class WelcomenessCollector(GitHubForge):
         return [label for flag, label in _PUBLIC_CHANNELS.items() if data.get(flag)], False
 
     async def _find_decision_documents(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Roadmaps, meeting notes, decision records and governance docs."""
 
         async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
             saw_gap = False
             for path in paths:
-                url = await self._check_file_exists(client, owner, repo, path)
+                url = await self.forge.file_exists(client, ref, path)
                 if url is COLLECTION_GAP:
                     saw_gap = True
                     continue
@@ -187,7 +189,7 @@ class WelcomenessCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "public_channels": [],
             "decision_documents": {"found": [], "not_collected": [], "details": {}},
             "overall_score": self._calculate_score([], {"found": []}),

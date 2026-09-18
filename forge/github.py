@@ -1,9 +1,20 @@
 """GitHub-flavored forge: shared GitHub REST API utilities for collectors.
 
-This is collectors/ecosystem/base.py's former `GitHubCollectorBase`, moved
-here unchanged (same method names and behavior) as the first step of
-splitting platform-specific fetching out of collectors/ecosystem/base.py
-and into one forge module per platform (see forge/gitlab.py).
+Two generations of methods live here during the collector migration:
+
+- The legacy ones (`_extract_owner_repo`, `_github_get`, `_check_file_exists`)
+  are collectors/ecosystem/base.py's former `GitHubCollectorBase`, moved here
+  unchanged. Collectors not yet migrated still inherit `GitHubForge` and use
+  these directly, hardcoding `api.github.com` URLs themselves.
+- The semantic ones (`extract_ref`, `repo_info`, `file_exists`, ...) are the
+  platform-normalized interface migrated collectors use instead, via
+  composition (`self.forge = GitHubForge(token)`) rather than inheritance --
+  so the same collector code can run against `forge/gitlab.py`'s
+  `GitLabForge` unchanged once that lands. A method is added here only when
+  a collector migration actually needs it, not speculatively.
+
+Once every collector has migrated, the legacy methods and the inheritance
+usage go away, leaving only the semantic interface.
 """
 
 import re
@@ -109,3 +120,27 @@ class GitHubForge:
     def _get_timestamp(self) -> str:
         """Return current UTC timestamp in ISO format."""
         return datetime.now(timezone.utc).isoformat()
+
+    # ---------------------------------------------------------------- #
+    # Semantic interface -- see the module docstring. `ref` is always a
+    # normalized "owner/repo" string; GitHub's REST paths are literally
+    # `repos/{ref}/...`, so no further splitting is needed here.
+    # ---------------------------------------------------------------- #
+
+    def extract_ref(self, repo_url: str) -> Optional[str]:
+        """Return "owner/repo" for a GitHub repo_url, or None if it isn't one."""
+        owner_repo = self._extract_owner_repo(repo_url)
+        return f"{owner_repo[0]}/{owner_repo[1]}" if owner_repo else None
+
+    async def repo_info(self, client: httpx.AsyncClient, ref: str):
+        """GET /repos/{ref} -- raw GitHub repository object, JSON/None/COLLECTION_GAP."""
+        return await self._github_get(client, f"https://api.github.com/repos/{ref}")
+
+    async def file_exists(self, client: httpx.AsyncClient, ref: str, path: str):
+        """Same contract as `_check_file_exists`, taking a combined ref."""
+        owner, repo = ref.split("/", 1)
+        return await self._check_file_exists(client, owner, repo, path)
+
+    def get_timestamp(self) -> str:
+        """Public alias of `_get_timestamp` for composition-based callers."""
+        return self._get_timestamp()

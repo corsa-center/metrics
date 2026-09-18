@@ -623,7 +623,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "welcomeness", package):
             try:
                 from collectors.ecosystem.welcomeness import WelcomenessCollector
-                collector = WelcomenessCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = WelcomenessCollector(GitHubForge(github_token))
                 sub_results["welcomeness"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Welcomeness collection failed for {package['name']}: {e}")
