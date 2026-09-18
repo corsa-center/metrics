@@ -57,6 +57,17 @@ quality_collectors:
 api_credentials:
   github:
     token: ${GITHUB_TOKEN}  # Set via environment variable
+  # GitLab, keyed by host. gitlab.com is recognized even without an entry
+  # here (an absent token still works for public repos); a self-hosted
+  # instance (e.g. gitlab.kitware.com) has no way to self-identify as
+  # GitLab from its hostname alone, so it must be listed here explicitly --
+  # being listed is itself what makes orchestrator.py._resolve_forge treat
+  # that host as GitLab, not a separate allowlist. See docs/PROJECT_CONFIG.md.
+  gitlab:
+    gitlab.com:
+      token: ${GITLAB_TOKEN}
+    gitlab.kitware.com:
+      token: ${GITLAB_KITWARE_TOKEN}
   semantic_scholar:
     api_key: ${SEMANTIC_SCHOLAR_KEY}  # Optional, improves rate limits
   openalex:

@@ -7,12 +7,14 @@ Collects and aggregates citation-related metrics from multiple academic sources.
 import asyncio
 import logging
 from typing import Dict, Any, Optional
-import yaml
+
+import httpx
 
 from integrations.semantic_scholar import SemanticScholarClient
 from integrations.openalex import OpenAlexClient
 from integrations.zenodo import ZenodoClient
-from integrations.github_api import GitHubClient
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 
 class CitationMetricCollector:
@@ -26,14 +28,16 @@ class CitationMetricCollector:
     - Download/usage statistics
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], forge: GitHubForge):
         """
         Initialize citation collector
 
         Args:
             config: Configuration dict with API credentials and weights
+            forge: Forge instance (GitHubForge/GitLabForge) for this package's host
         """
         self.config = config
+        self.forge = forge
         self.logger = logging.getLogger(self.__class__.__name__)
 
         # Initialize API clients
@@ -44,7 +48,6 @@ class CitationMetricCollector:
         )
         self.openalex = OpenAlexClient(credentials.get("openalex") or {})
         self.zenodo = ZenodoClient(credentials.get("zenodo") or {})
-        self.github = GitHubClient(credentials.get("github") or {})
 
         # Get metric weights from config
         weights = (
@@ -75,14 +78,15 @@ class CitationMetricCollector:
         self.logger.info(f"Collecting citation metrics for {package.get('name')}")
 
         # Collect all metrics concurrently
-        results = await asyncio.gather(
-            self._get_formal_citations(package),
-            self._get_informal_mentions(package),
-            self._get_dependent_packages(package),
-            self._get_doi_resolutions(package),
-            self._get_github_stats(package),
-            return_exceptions=True,
-        )
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            results = await asyncio.gather(
+                self._get_formal_citations(package),
+                self._get_informal_mentions(package),
+                self._get_dependent_packages(client, package),
+                self._get_doi_resolutions(package),
+                self._get_github_stats(client, package),
+                return_exceptions=True,
+            )
 
         # Unpack results (handle any exceptions)
         formal_citations = results[0] if not isinstance(results[0], Exception) else 0
@@ -203,37 +207,37 @@ class CitationMetricCollector:
             self.logger.warning(f"Error fetching informal mentions: {e}")
             return 0
 
-    async def _get_dependent_packages(self, package: Dict[str, Any]) -> int:
+    async def _get_dependent_packages(
+        self, client: httpx.AsyncClient, package: Dict[str, Any]
+    ) -> int:
         """Get number of packages/repos that depend on this one (forks as a proxy)"""
-        repo_url = package.get("repo_url")
-
-        if not repo_url:
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
             return 0
 
-        try:
-            # GitHub doesn't expose a "used by" count via the REST/PyGithub API
-            # (would need to scrape the web UI or use GraphQL); use forks as a
-            # proxy instead. This is independent of whether CITATION.cff exists.
-            stats = await self.github.get_repository_stats(repo_url)
-            return stats.get("forks", 0)
-
-        except Exception as e:
-            self.logger.warning(f"Error fetching dependent packages: {e}")
+        # Neither GitHub nor GitLab expose a "used by" count via their REST
+        # APIs (would need to scrape the web UI or use GraphQL); use forks
+        # as a proxy instead. This is independent of whether CITATION.cff
+        # exists. A collection gap reads the same as "0 forks" here --
+        # unweighted evidence, not scored, so this one field doesn't carry
+        # the same not_collected distinction the scored sub-metrics do.
+        stats = await self.forge.repo_info(client, ref)
+        if not stats or stats is COLLECTION_GAP:
             return 0
+        return stats.get("forks", 0)
 
-    async def _get_github_stats(self, package: Dict[str, Any]) -> Dict[str, int]:
-        """Get GitHub stars and forks counts (unweighted evidence, not scored)"""
-        repo_url = package.get("repo_url")
-
-        if not repo_url:
+    async def _get_github_stats(
+        self, client: httpx.AsyncClient, package: Dict[str, Any]
+    ) -> Dict[str, int]:
+        """Get stars and forks counts (unweighted evidence, not scored)"""
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
             return {"stars": 0, "forks": 0}
 
-        try:
-            stats = await self.github.get_repository_stats(repo_url)
-            return {"stars": stats.get("stars", 0), "forks": stats.get("forks", 0)}
-        except Exception as e:
-            self.logger.warning(f"Error fetching GitHub stats: {e}")
+        stats = await self.forge.repo_info(client, ref)
+        if not stats or stats is COLLECTION_GAP:
             return {"stars": 0, "forks": 0}
+        return {"stars": stats.get("stars", 0), "forks": stats.get("forks", 0)}
 
     async def _get_doi_resolutions(self, package: Dict[str, Any]) -> int:
         """Get DOI resolution statistics from Zenodo"""
@@ -357,7 +361,8 @@ async def main():
     }
 
     # Collect metrics
-    collector = CitationMetricCollector(config)
+    forge = GitHubForge(config["api_credentials"]["github"]["token"])
+    collector = CitationMetricCollector(config, forge)
     results = await collector.collect(package)
 
     # Display results
