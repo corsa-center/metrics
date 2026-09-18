@@ -6,9 +6,21 @@ from unittest.mock import AsyncMock, MagicMock
 from collectors.quality.test_coverage import TestCoverageCollector
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    platform = "github"
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "owner/repo"
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
 def collector():
-    return TestCoverageCollector()
+    return TestCoverageCollector(FakeForge())
 
 
 SAMPLE_ACTIVE_REPO = {
@@ -29,7 +41,7 @@ class TestEmptyResult:
 
 class TestNoCoverageResult:
     def test_structure(self, collector):
-        result = collector._no_coverage_result("MyPkg", "owner", "repo")
+        result = collector._no_coverage_result("MyPkg", "owner/repo")
         assert result["coverage_exists"] is False
         assert result["repository"] == "owner/repo"
 
@@ -45,7 +57,7 @@ class TestFetchCoverage:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_coverage(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_coverage(mock_client, "MyPkg", "owner/repo")
         )
 
         assert result["coverage_exists"] is True
@@ -64,7 +76,7 @@ class TestFetchCoverage:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_coverage(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_coverage(mock_client, "MyPkg", "owner/repo")
         )
         assert result["coverage_exists"] is False
 
@@ -76,7 +88,7 @@ class TestFetchCoverage:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_coverage(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_coverage(mock_client, "MyPkg", "owner/repo")
         )
         assert result["coverage_exists"] is False
 

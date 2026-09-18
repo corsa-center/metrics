@@ -43,6 +43,12 @@ def _is_bot_login(login: str) -> bool:
 class GitHubForge:
     """Provides shared GitHub API utilities for ecosystem/quality collectors."""
 
+    #: Short platform identifier some external services (Codecov, OpenSSF
+    #: Scorecard) key their own URLs by, independent of this forge's own
+    #: API shape. Collectors that call such a service read this instead of
+    #: assuming "github" themselves.
+    platform = "github"
+
     def __init__(self, github_token: Optional[str] = None):
         if github_token:
             self.github_headers = {

@@ -59,30 +59,31 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
 }
 
 
-class AccessibilityCollector(GitHubForge):
+class AccessibilityCollector:
     """Detects portable build systems and container configs (Section 4.3.5)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Checking accessibility / portability for {owner}/{repo}")
+        logger.info(f"Checking accessibility / portability for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            return await self._scan(client, repo_name, owner, repo)
+            return await self._scan(client, repo_name, ref)
 
     async def _scan(
         self,
         client: httpx.AsyncClient,
         repo_name: str,
-        owner: str,
-        repo: str,
+        ref: str,
     ) -> Dict[str, Any]:
         category_results: Dict[str, Any] = {}
         all_found: List[str] = []
@@ -99,7 +100,7 @@ class AccessibilityCollector(GitHubForge):
             async def check_item(label: str, paths: List[str]) -> tuple:
                 saw_gap = False
                 for path in paths:
-                    html_url = await self._check_file_exists(client, owner, repo, path)
+                    html_url = await self.forge.file_exists(client, ref, path)
                     if html_url is COLLECTION_GAP:
                         saw_gap = True
                         continue
@@ -149,8 +150,8 @@ class AccessibilityCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "has_container": has_container,
             "has_portable_build_system": has_portable_build,
             "categories": category_results,
@@ -166,7 +167,7 @@ class AccessibilityCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "has_container": False,
             "has_portable_build_system": False,
             "categories": {},

@@ -754,7 +754,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "accessibility", package):
             try:
                 from collectors.quality.accessibility import AccessibilityCollector
-                collector = AccessibilityCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = AccessibilityCollector(GitHubForge(github_token))
                 sub_results["accessibility"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
@@ -763,7 +764,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "test_coverage", package):
             try:
                 from collectors.quality.test_coverage import TestCoverageCollector
-                collector = TestCoverageCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = TestCoverageCollector(GitHubForge(github_token))
                 sub_results["test_coverage"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Test coverage collection failed for {package['name']}: {e}")

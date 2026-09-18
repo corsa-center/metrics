@@ -2,14 +2,34 @@
 
 import asyncio
 import pytest
-from unittest.mock import patch
 from forge.base import COLLECTION_GAP
 from collectors.quality.accessibility import AccessibilityCollector
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.file_results = {}
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return AccessibilityCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return AccessibilityCollector(forge)
 
 
 class TestEmptyResult:
@@ -31,84 +51,68 @@ class TestCollectInvalidUrl:
 
 
 class TestScan:
-    def _run_scan(self, collector, found_paths):
-        async def mock_exists(client, owner, repo, path):
-            return path in found_paths
+    def _run_scan(self, collector, forge, found_paths):
+        forge.file_results = {p: "http://x" for p in found_paths}
+        return asyncio.run(collector._scan(None, "MyPkg", "o/r"))
 
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan(client, "MyPkg", "owner", "repo")
-
-        return asyncio.run(run())
-
-    def test_dockerfile_only(self, collector):
-        result = self._run_scan(collector, {"Dockerfile"})
+    def test_dockerfile_only(self, collector, forge):
+        result = self._run_scan(collector, forge, {"Dockerfile"})
         assert result["has_container"] is True
         assert result["categories"]["containers"]["found"] == ["Docker"]
         assert result["categories"]["containers"]["count_found"] == 1
 
-    def test_cmake_and_dockerfile(self, collector):
-        result = self._run_scan(collector, {"Dockerfile", "CMakeLists.txt"})
+    def test_cmake_and_dockerfile(self, collector, forge):
+        result = self._run_scan(collector, forge, {"Dockerfile", "CMakeLists.txt"})
         assert result["has_container"] is True
         assert result["has_portable_build_system"] is True
         assert "CMake" in result["categories"]["build_systems"]["found"]
 
-    def test_nothing_found(self, collector):
-        result = self._run_scan(collector, set())
+    def test_nothing_found(self, collector, forge):
+        result = self._run_scan(collector, forge, set())
         assert result["has_container"] is False
         assert result["has_portable_build_system"] is False
         assert result["overall_score"]["percentage"] == 0.0
 
-    def test_overall_score_increases_with_matches(self, collector):
-        none = self._run_scan(collector, set())
-        some = self._run_scan(collector, {"Dockerfile", "CMakeLists.txt", "pyproject.toml"})
+    def test_overall_score_increases_with_matches(self, collector, forge):
+        none = self._run_scan(collector, forge, set())
+        some = self._run_scan(collector, forge, {"Dockerfile", "CMakeLists.txt", "pyproject.toml"})
         assert some["overall_score"]["percentage"] > none["overall_score"]["percentage"]
 
-    def test_singularity_detected(self, collector):
-        result = self._run_scan(collector, {"Singularity"})
+    def test_singularity_detected(self, collector, forge):
+        result = self._run_scan(collector, forge, {"Singularity"})
         assert result["has_container"] is True
         assert "Singularity / Apptainer" in result["categories"]["containers"]["found"]
 
-    def test_spack_detected(self, collector):
-        result = self._run_scan(collector, {"package.py"})
+    def test_spack_detected(self, collector, forge):
+        result = self._run_scan(collector, forge, {"package.py"})
         assert result["has_portable_build_system"] is True
         assert "Spack" in result["categories"]["build_systems"]["found"]
 
 
 class TestScanGapHandling:
-    def _run_scan(self, collector, responses):
-        async def mock_exists(client, owner, repo, path):
-            return responses.get(path, None)
+    def _run_scan(self, collector, forge, responses):
+        forge.file_results = responses
+        return asyncio.run(collector._scan(None, "MyPkg", "o/r"))
 
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan(client, "MyPkg", "owner", "repo")
-
-        return asyncio.run(run())
-
-    def test_gapped_item_is_not_collected_not_a_confirmed_missing(self, collector):
-        result = self._run_scan(collector, {"Dockerfile": COLLECTION_GAP})
+    def test_gapped_item_is_not_collected_not_a_confirmed_missing(self, collector, forge):
+        result = self._run_scan(collector, forge, {"Dockerfile": COLLECTION_GAP})
         containers = result["categories"]["containers"]
         assert "Docker" not in containers["missing"]
         assert "Docker" in containers["not_collected"]
 
-    def test_found_item_survives_a_gap_on_a_sibling_candidate(self, collector):
-        result = self._run_scan(collector, {"CMakeLists.txt": "http://x"})
+    def test_found_item_survives_a_gap_on_a_sibling_candidate(self, collector, forge):
+        result = self._run_scan(collector, forge, {"CMakeLists.txt": "http://x"})
         assert "CMake" in result["categories"]["build_systems"]["found"]
 
-    def test_category_fully_gapped_reports_no_percentage(self, collector):
+    def test_category_fully_gapped_reports_no_percentage(self, collector, forge):
         responses = {"INSTALL": COLLECTION_GAP, "INSTALL.md": COLLECTION_GAP,
                      "INSTALL.rst": COLLECTION_GAP, "INSTALL.txt": COLLECTION_GAP}
-        result = self._run_scan(collector, responses)
+        result = self._run_scan(collector, forge, responses)
         install_docs = result["categories"]["install_docs"]
         assert install_docs["percentage"] is None
         assert install_docs["count_total"] == 0
 
-    def test_everything_gapped_reports_not_collected_overall(self, collector):
+    def test_everything_gapped_reports_not_collected_overall(self, collector, forge):
         all_paths = {p for items in [
             "Dockerfile", "docker/Dockerfile", ".docker/Dockerfile",
             "Singularity", "singularity/Singularity", "Apptainer", "apptainer/Apptainer", "*.def",
@@ -119,7 +123,7 @@ class TestScanGapHandling:
             "INSTALL", "INSTALL.md", "INSTALL.rst", "INSTALL.txt",
         ] for p in [items]}
         responses = {p: COLLECTION_GAP for p in all_paths}
-        result = self._run_scan(collector, responses)
+        result = self._run_scan(collector, forge, responses)
         assert result["overall_score"]["score"] is None
         assert result["overall_score"]["max_score"] == 0
         assert result["overall_score"]["percentage"] is None
