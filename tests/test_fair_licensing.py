@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP
 from collectors.ecosystem.fair_licensing import (
     FairLicensingCollector, _CITATION_FIELDS, _CODEMETA_PATHS,
 )

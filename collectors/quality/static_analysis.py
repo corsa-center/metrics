@@ -14,7 +14,8 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ _WORKFLOWS_DIR = ".github/workflows"
 _MAX_WORKFLOWS_TO_SCAN = 25
 
 
-class StaticAnalysisCollector(GitHubCollectorBase):
+class StaticAnalysisCollector(GitHubForge):
     """Detects CodeQL / static analysis security scanning (Section 4.3.1)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

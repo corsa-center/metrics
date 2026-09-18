@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP
 from collectors.quality.reliability import (
     ReliabilityCollector, _ANALYSIS_WORKFLOW_HINT, _HARDENING_MARKERS,
     _FLAG_FILE_HINT, _DEFECT_LABELS, _ANALYSIS_CONFIGS, _FLAG_DIRECTORIES,

@@ -25,7 +25,8 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ _PROVENANCE_ASSET_HINTS = [
 _RELEASES_SAMPLE = 5
 
 
-class SupplyChainCollector(GitHubCollectorBase):
+class SupplyChainCollector(GitHubForge):
     """Collects supply-chain transparency indicators (CASS Report Section 4.3.8)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

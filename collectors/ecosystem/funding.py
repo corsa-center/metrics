@@ -30,7 +30,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ _AFFILIATION_SAMPLE = 25
 _NOISE_AFFILIATIONS = {"", "-", "none", "n/a", "freelance", "independent", "self", "self-employed"}
 
 
-class FundingCollector(GitHubCollectorBase):
+class FundingCollector(GitHubForge):
     """Collects funding and institutional-affiliation signals (4.2.8 and 4.2.9)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

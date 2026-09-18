@@ -15,12 +15,13 @@ import logging
 from typing import Dict, Any, Optional, List
 import re
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
 
-class LicensingCollector(GitHubCollectorBase):
+class LicensingCollector(GitHubForge):
     """Collects licensing metrics from GitHub repositories"""
 
     # Common license file patterns

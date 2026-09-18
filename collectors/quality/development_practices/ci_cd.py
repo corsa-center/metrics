@@ -20,7 +20,8 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import RetryingTransport, get_threshold
+from forge.base import RetryingTransport
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 

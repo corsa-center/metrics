@@ -25,7 +25,9 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,7 @@ _MAX_CONTRIBUTOR_PAGES = 5
 _MAX_COMMIT_PAGES = 10
 
 
-class OutreachCollector(GitHubCollectorBase):
+class OutreachCollector(GitHubForge):
     """Collects contributor-growth metrics (Section 4.2.5)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

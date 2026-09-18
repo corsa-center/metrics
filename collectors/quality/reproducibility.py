@@ -18,7 +18,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ _WEIGHTS = {
 }
 
 
-class ReproducibilityCollector(GitHubCollectorBase):
+class ReproducibilityCollector(GitHubForge):
     """Collects reproducibility indicators (CASS Report Section 4.3.3)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

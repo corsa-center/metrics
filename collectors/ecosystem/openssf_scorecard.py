@@ -11,14 +11,15 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport
+from forge.base import RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
 _SCORECARD_API = "https://api.securityscorecards.dev/projects/github.com/{owner}/{repo}"
 
 
-class OpenSSFScorecardCollector(GitHubCollectorBase):
+class OpenSSFScorecardCollector(GitHubForge):
     """Collects OpenSSF Scorecard metrics via the public Scorecard API."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP
 from collectors.quality.development_practices.dev_tooling import (
     DevToolingCollector, _TESTING_PATHS, _TOOLING_PATHS,
 )

@@ -25,7 +25,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +67,7 @@ _ZENODO_PATHS = [".zenodo.json", "zenodo.json"]
 _CITATION_FIELDS = ["title", "authors", "version", "license", "repository-code", "doi"]
 
 
-class FairLicensingCollector(GitHubCollectorBase):
+class FairLicensingCollector(GitHubForge):
     """Collects FAIR compliance and license-exception signals (Section 4.2.2)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
-from collectors.ecosystem.base import RetryingTransport
+from forge.base import RetryingTransport
 
 logger = logging.getLogger(__name__)
 

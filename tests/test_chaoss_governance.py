@@ -1,7 +1,7 @@
 """Unit tests for CHAOSSGovernanceCollector pure computation methods."""
 
 import pytest
-from collectors.ecosystem.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP
 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
 
 

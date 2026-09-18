@@ -15,14 +15,14 @@ import httpx
 import logging
 from typing import Any, Dict
 
-from collectors.ecosystem.base import GitHubCollectorBase
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
 _CODECOV_API = "https://api.codecov.io/api/v2/github/{owner}/repos/{repo}/"
 
 
-class TestCoverageCollector(GitHubCollectorBase):
+class TestCoverageCollector(GitHubForge):
     """Collects test coverage % via the public Codecov API (Section 4.3.1)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

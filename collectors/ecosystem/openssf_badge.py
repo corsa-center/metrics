@@ -15,12 +15,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
 
-class OpenSSFBadgeCollector(GitHubCollectorBase):
+class OpenSSFBadgeCollector(GitHubForge):
     """Collects OpenSSF Best Practices Badge metrics (Section 4.2.5)."""
 
     BADGE_SEARCH_URL = "https://bestpractices.coreinfrastructure.org/projects.json"

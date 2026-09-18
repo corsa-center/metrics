@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from collectors.ecosystem.base import COLLECTION_GAP, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
 from collectors.ecosystem.community_health import CommunityHealthCollector
 
 

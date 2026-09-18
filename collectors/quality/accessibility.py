@@ -18,7 +18,8 @@ import httpx
 import logging
 from typing import Any, Dict, List
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
 }
 
 
-class AccessibilityCollector(GitHubCollectorBase):
+class AccessibilityCollector(GitHubForge):
     """Detects portable build systems and container configs (Section 4.3.5)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

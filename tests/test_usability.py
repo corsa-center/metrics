@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP
 from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
 
 

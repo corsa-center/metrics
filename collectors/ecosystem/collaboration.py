@@ -33,7 +33,8 @@ from urllib.parse import quote
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, get_threshold
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
 _RATE_LIMIT_PAUSE_SECONDS = 2
 
 
-class CollaborationCollector(GitHubCollectorBase):
+class CollaborationCollector(GitHubForge):
     """Collects ecosystem integration metrics (Section 4.2.7)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

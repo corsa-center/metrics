@@ -17,7 +17,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ _PUBLIC_CHANNELS = {
 }
 
 
-class WelcomenessCollector(GitHubCollectorBase):
+class WelcomenessCollector(GitHubForge):
     """Collects decision-making visibility signals (Section 4.2.6)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

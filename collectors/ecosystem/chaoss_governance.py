@@ -23,7 +23,8 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def _bracket_score(value: float, brackets: list, default: int) -> int:
     return default
 
 
-class CHAOSSGovernanceCollector(GitHubCollectorBase):
+class CHAOSSGovernanceCollector(GitHubForge):
     """Collects CHAOSS-defined activity health indicators (Section 4.2.4)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

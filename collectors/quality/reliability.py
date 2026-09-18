@@ -30,7 +30,9 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,7 @@ _DEFECT_ISSUE_TYPES = ["Bug", "Defect"]
 _TREND_WINDOW_DAYS = 365
 
 
-class ReliabilityCollector(GitHubCollectorBase):
+class ReliabilityCollector(GitHubForge):
     """Collects static-analysis, hardening and defect-trend signals (Section 4.3.1)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

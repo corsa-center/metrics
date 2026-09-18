@@ -21,7 +21,9 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, get_threshold
+from forge.base import RetryingTransport
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +66,7 @@ def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
 _INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 
-class EngagementCollector(GitHubCollectorBase):
+class EngagementCollector(GitHubForge):
     """Collects engagement metrics from GitHub issues and PRs (§4.2.4)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

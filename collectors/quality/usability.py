@@ -22,7 +22,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.github import GitHubForge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _SETEXT_HEADING = re.compile(r"^\s{0,3}(\S.*)\n\s{0,3}[=-]{3,}\s*$", re.MULTILINE)
 
 
-class UsabilityCollector(GitHubCollectorBase):
+class UsabilityCollector(GitHubForge):
     """Collects documentation completeness signals (Section 4.3.4)."""
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

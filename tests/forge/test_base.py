@@ -1,13 +1,12 @@
-"""Unit tests for RetryingTransport and GitHubCollectorBase's GitHub helpers.
+"""Unit tests for RetryingTransport and the repo-info dedup cache.
 
 RetryingTransport is the single, shared fix for the incident where a GitHub
 secondary rate limit during a large concurrent collection run was silently
 treated as "no data" instead of retried -- the root cause of stars/forks/
 CHAOSS/governance metrics reading as zero or "not found" for the majority
-of tracked packages. _check_file_exists and _github_get used to each retry
-on their own; now that's the transport's job, so these tests split
-accordingly: the transport owns the retry-policy tests, the two helpers only
-need to prove they interpret a single response correctly.
+of tracked packages. Both are platform-agnostic (forge/base.py); GitHub- and
+GitLab-specific fetch-helper tests live in tests/forge/test_github.py and
+test_gitlab.py.
 """
 
 import asyncio
@@ -15,23 +14,13 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from collectors.ecosystem.base import (
-    COLLECTION_GAP,
-    GitHubCollectorBase,
-    RetryingTransport,
-    _repo_info_cache,
-)
-
-
-@pytest.fixture
-def collector():
-    return GitHubCollectorBase()
+from forge.base import RetryingTransport, _repo_info_cache
 
 
 @pytest.fixture(autouse=True)
 def _clear_shared_cache():
-    """The repo-info dedup cache is module-level by design (see base.py) so
-    it coalesces requests across different collector instances -- which
+    """The repo-info dedup cache is module-level by design (see forge/base.py)
+    so it coalesces requests across different collector instances -- which
     means it persists across tests too unless cleared."""
     _repo_info_cache.clear()
     yield
@@ -127,6 +116,19 @@ class TestRepoInfoDeduping:
         # _RETRY_ATTEMPTS=2 for the one real fetch, not 2 x 3 callers.
         assert wrapped.handle_async_request.call_count == 2
 
+    def test_gitlab_project_info_endpoint_is_also_deduped(self):
+        # _REPO_INFO_URL_RE covers GitLab's /api/v4/projects/{id} shape too,
+        # so the same dedup benefit applies once GitLabForge issues requests
+        # through this transport.
+        wrapped = AsyncMock()
+        wrapped.handle_async_request = AsyncMock(return_value=_resp(200, {"star_count": 5}))
+        transport = RetryingTransport(wrapped)
+
+        req = httpx.Request("GET", "https://gitlab.com/api/v4/projects/o%2Fr")
+        asyncio.run(transport.handle_async_request(req))
+        asyncio.run(transport.handle_async_request(req))
+        assert wrapped.handle_async_request.call_count == 1
+
 
 class TestRetryingTransport:
     def test_success_passes_through(self):
@@ -162,6 +164,8 @@ class TestRetryingTransport:
         # request volume past GitHub's 5,000/hour quota and caused a worse
         # outcome -- near-total data loss -- than the original bug. Requiring
         # Retry-After specifically is a stricter, cheaper signal on purpose.
+        # A GitLab 403 (always a real permission error, never a throttle)
+        # falls into this same "not retried" branch, which is correct there.
         wrapped = AsyncMock()
         wrapped.handle_async_request = AsyncMock(
             return_value=_resp(403, text="You have exceeded a secondary rate limit")
@@ -208,73 +212,3 @@ class TestRetryingTransport:
         response = asyncio.run(transport.handle_async_request(_request()))
         assert response.status_code == 403
         assert wrapped.handle_async_request.call_count == 2
-
-
-class TestCheckFileExists:
-    """With retries owned by the transport, this only needs to interpret one response."""
-
-    def _client(self, status_code, json_body=None):
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(status_code, json_body))
-        return client
-
-    def test_file_found(self, collector):
-        client = self._client(200, {"html_url": "https://github.com/o/r/blob/main/x"})
-        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
-        assert result == "https://github.com/o/r/blob/main/x"
-
-    def test_directory_found(self, collector):
-        client = self._client(200, [{"name": "a"}, {"name": "b"}])
-        result = asyncio.run(collector._check_file_exists(client, "o", "r", "dir"))
-        assert result == "https://github.com/o/r/tree/HEAD/dir"
-
-    def test_not_found(self, collector):
-        client = self._client(404)
-        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
-        assert result is None
-
-    def test_final_failure_after_transport_retries_is_a_gap_not_a_negative(self, collector):
-        # By the time this code sees the response, the transport has already
-        # retried and given up. A 403 here is unknown, not "confirmed
-        # absent" -- must not collapse into the same None a real 404 returns.
-        client = self._client(403)
-        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
-        assert result is COLLECTION_GAP
-        assert not result  # still falsy, so `if not result:` callers are unaffected
-
-    def test_network_exception_is_a_gap_not_a_negative(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
-        result = asyncio.run(collector._check_file_exists(client, "o", "r", "x"))
-        assert result is COLLECTION_GAP
-
-
-class TestGithubGet:
-    def test_success_returns_json(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(200, {"stargazers_count": 42}))
-        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
-        assert result == {"stargazers_count": 42}
-
-    def test_404_returns_none(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(404))
-        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
-        assert result is None
-
-    def test_params_forwarded(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(200, []))
-        asyncio.run(
-            collector._github_get(
-                client, "https://api.github.com/repos/o/r/issues", params={"state": "open"}
-            )
-        )
-        _, kwargs = client.get.call_args
-        assert kwargs["params"] == {"state": "open"}
-
-    def test_network_exception_is_a_gap_not_a_negative(self, collector):
-        client = AsyncMock()
-        client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
-        result = asyncio.run(collector._github_get(client, "https://api.github.com/repos/o/r"))
-        assert result is COLLECTION_GAP

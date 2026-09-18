@@ -5,7 +5,7 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP
 from collectors.quality.supply_chain import SupplyChainCollector, _SBOM_ROOT_FILES
 
 

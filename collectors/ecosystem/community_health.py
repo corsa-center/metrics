@@ -15,7 +15,8 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import re
 
-from collectors.ecosystem.base import COLLECTION_GAP, RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
