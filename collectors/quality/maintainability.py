@@ -75,24 +75,26 @@ _COMMIT_SAMPLE = 100
 _COMMIT_PAGES = 3
 
 
-class MaintainabilityCollector(GitHubForge):
+class MaintainabilityCollector:
     """Collects maintainability and understandability signals (Section 4.3.6)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting maintainability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
             tree, languages, refactor = await asyncio.gather(
-                self._get_tree(client, owner, repo),
-                self._get_languages(client, owner, repo),
-                self._get_refactor_activity(client, owner, repo),
+                self._get_tree(client, ref),
+                self._get_languages(client, ref),
+                self._get_refactor_activity(client, ref),
                 return_exceptions=True,
             )
 
@@ -112,8 +114,8 @@ class MaintainabilityCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "composition": composition,
             "refactoring": refactor,
             "overall_score": self._calculate_score(composition, refactor),
@@ -122,39 +124,21 @@ class MaintainabilityCollector(GitHubForge):
     # ------------------------------------------------------------------ fetch
 
     async def _get_tree(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
-        """Whole file layout in one call.
-
-        GitHub truncates the response for very large repositories; the flag is
-        carried through so downstream ratios can be reported as approximate
-        rather than silently wrong.
-        """
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1",
-            headers=self.github_headers,
-        )
-        if resp.status_code != 200:
+        data = await self.forge.repo_tree(client, ref)
+        if not data:
             return {"files": [], "truncated": False}
-        data = resp.json()
-        files = [
-            {"path": e["path"], "size": e.get("size", 0)}
-            for e in data.get("tree", [])
-            if e.get("type") == "blob"
-        ]
-        return {"files": files, "truncated": bool(data.get("truncated"))}
+        return data
 
     async def _get_languages(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, int]:
-        resp = await client.get(
-            f"https://api.github.com/repos/{owner}/{repo}/languages",
-            headers=self.github_headers,
-        )
-        return resp.json() if resp.status_code == 200 else {}
+        data = await self.forge.languages(client, ref)
+        return data if data else {}
 
     async def _get_refactor_activity(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Refactoring intent across the most recent commits.
 
@@ -164,19 +148,10 @@ class MaintainabilityCollector(GitHubForge):
         """
         subjects: List[str] = []
         for page in range(1, _COMMIT_PAGES + 1):
-            resp = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/commits"
-                f"?per_page={_COMMIT_SAMPLE}&page={page}",
-                headers=self.github_headers,
-            )
-            if resp.status_code != 200:
+            batch = await self.forge.commits(client, ref, per_page=_COMMIT_SAMPLE, page=page)
+            if not batch:
                 break
-            batch = resp.json()
-            if not isinstance(batch, list) or not batch:
-                break
-            subjects.extend(
-                (c.get("commit", {}).get("message") or "").split("\n")[0] for c in batch
-            )
+            subjects.extend(c["subject"] for c in batch)
         if not subjects:
             return {"sampled": 0, "refactor_commits": 0, "share": None}
 
@@ -308,7 +283,7 @@ class MaintainabilityCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "composition": comp,
             "refactoring": refactor,
             "overall_score": self._calculate_score(comp, refactor),

@@ -126,6 +126,66 @@ class TestRepoInfo:
         assert result is COLLECTION_GAP
 
 
+class TestCommits:
+    def _client(self, json_body):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, json_body))
+        return client
+
+    def test_unwraps_nested_commit_shape(self, forge):
+        client = self._client([{
+            "sha": "abc123",
+            "commit": {
+                "message": "Fix the thing\n\nLonger body here.",
+                "author": {"name": "Jane Doe", "date": "2026-01-01T00:00:00Z"},
+            },
+            "author": {"login": "janedoe"},
+        }])
+        result = asyncio.run(forge.commits(client, "o/r"))
+        assert result == [{
+            "sha": "abc123",
+            "message": "Fix the thing\n\nLonger body here.",
+            "subject": "Fix the thing",
+            "author_identity": "janedoe",
+            "date": "2026-01-01T00:00:00Z",
+        }]
+
+    def test_falls_back_to_commit_author_name_without_github_account(self, forge):
+        client = self._client([{
+            "sha": "abc123",
+            "commit": {"message": "x", "author": {"name": "Jane Doe", "date": "d"}},
+            "author": None,
+        }])
+        result = asyncio.run(forge.commits(client, "o/r"))
+        assert result[0]["author_identity"] == "Jane Doe"
+
+    def test_gap_passes_through(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(403))
+        result = asyncio.run(forge.commits(client, "o/r"))
+        assert result is COLLECTION_GAP
+
+
+class TestRepoTree:
+    def test_filters_to_blobs_and_carries_truncated_flag(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, {
+            "tree": [
+                {"path": "src/a.c", "type": "blob", "size": 100},
+                {"path": "src", "type": "tree"},
+            ],
+            "truncated": True,
+        }))
+        result = asyncio.run(forge.repo_tree(client, "o/r"))
+        assert result == {"files": [{"path": "src/a.c", "size": 100}], "truncated": True}
+
+    def test_gap_passes_through(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(403))
+        result = asyncio.run(forge.repo_tree(client, "o/r"))
+        assert result is COLLECTION_GAP
+
+
 class TestGithubGet:
     def test_success_returns_json(self, forge):
         client = AsyncMock()

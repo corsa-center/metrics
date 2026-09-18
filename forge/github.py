@@ -291,6 +291,76 @@ class GitHubForge:
             params={"per_page": per_page, "page": page},
         )
 
+    async def commits(
+        self, client: httpx.AsyncClient, ref: str, *,
+        per_page: int = 100, page: int = 1,
+        since: Optional[str] = None, until: Optional[str] = None,
+    ):
+        """List commits (newest first), or None/COLLECTION_GAP.
+
+        Each item: {sha, message, subject (first line), author_identity,
+        date} -- unwraps GitHub's nested commit.author.{name,date} /
+        top-level author.login (when the committer has a GitHub account)
+        into one identity field, matching GitLab's flatter commit shape
+        (author_name/authored_date at the top level) so callers don't
+        branch on platform.
+        """
+        params: Dict[str, Any] = {"per_page": per_page, "page": page}
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/commits", params=params
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        out = []
+        for c in data:
+            commit = c.get("commit") or {}
+            message = commit.get("message") or ""
+            author = c.get("author") or {}
+            commit_author = commit.get("author") or {}
+            out.append({
+                "sha": c.get("sha"),
+                "message": message,
+                "subject": message.split("\n")[0],
+                "author_identity": author.get("login") or commit_author.get("name"),
+                "date": commit_author.get("date"),
+            })
+        return out
+
+    async def repo_tree(self, client: httpx.AsyncClient, ref: str):
+        """Whole file layout in one call: {"files": [{"path", "size"}, ...],
+        "truncated": bool}, or None/COLLECTION_GAP.
+
+        GitHub truncates the response for very large repositories --
+        `truncated` is carried through so callers can report ratios as
+        approximate rather than silently wrong.
+        """
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/git/trees/HEAD",
+            params={"recursive": 1},
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        files = [
+            {"path": e["path"], "size": e.get("size", 0)}
+            for e in data.get("tree", [])
+            if e.get("type") == "blob"
+        ]
+        return {"files": files, "truncated": bool(data.get("truncated"))}
+
+    async def languages(self, client: httpx.AsyncClient, ref: str):
+        """Language -> relative size, or None/COLLECTION_GAP.
+
+        GitHub reports byte counts; GitLab reports percentages. Comparable
+        for ranking within one platform's response (what every current
+        caller uses this for), not as an absolute value or across
+        platforms.
+        """
+        return await self._github_get(client, f"https://api.github.com/repos/{ref}/languages")
+
     def pages_url(self, ref: str) -> str:
         """Predictable Pages URL for `ref`, regardless of whether Pages is
         actually enabled -- check `repo_info(...)["has_pages"]` first."""
