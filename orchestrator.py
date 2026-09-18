@@ -832,7 +832,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "static_analysis", package):
             try:
                 from collectors.quality.static_analysis import StaticAnalysisCollector
-                collector = StaticAnalysisCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = StaticAnalysisCollector(GitHubForge(github_token))
                 sub_results["static_analysis"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
