@@ -577,6 +577,21 @@ class GitHubForge:
             logger.error(f"Error fetching deployment statuses: {e}")
         return False
 
+    async def pr_reviews(
+        self, client: httpx.AsyncClient, ref: str, number: int, *, per_page: int = 1
+    ):
+        """Reviews left on a pull request, or None/COLLECTION_GAP.
+
+        Raw pass-through -- no caller reads individual review fields yet,
+        only presence/count. GitLab's nearest equivalent (MR approvals) is
+        a materially different review model, not a field rename; left for
+        real design work when GitLab support needs it.
+        """
+        return await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/pulls/{number}/reviews",
+            params={"per_page": per_page},
+        )
+
     async def community_profile(self, client: httpx.AsyncClient, ref: str):
         """GitHub's aggregated community-health-file report, or {}/COLLECTION_GAP.
 

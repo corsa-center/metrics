@@ -821,7 +821,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "dev_tooling", package):
             try:
                 from collectors.quality.development_practices.dev_tooling import DevToolingCollector
-                collector = DevToolingCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = DevToolingCollector(GitHubForge(github_token))
                 sub_results["dev_tooling"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Dev tooling collection failed for {package['name']}: {e}")

@@ -51,24 +51,26 @@ _TOOLING_PATHS = {
 _PR_SAMPLE_SIZE = 50
 
 
-class DevToolingCollector(GitHubForge):
+class DevToolingCollector:
     """Collects testing, review and tooling practices (Section 4.3.2)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting development tooling metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             testing, tooling, review = await asyncio.gather(
-                self._scan(client, owner, repo, _TESTING_PATHS),
-                self._scan(client, owner, repo, _TOOLING_PATHS),
-                self._analyze_review_coverage(client, owner, repo),
+                self._scan(client, ref, _TESTING_PATHS),
+                self._scan(client, ref, _TOOLING_PATHS),
+                self._analyze_review_coverage(client, ref),
                 return_exceptions=True,
             )
 
@@ -85,8 +87,8 @@ class DevToolingCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "testing": testing,
             "tooling": tooling,
             "code_review": review,
@@ -94,14 +96,14 @@ class DevToolingCollector(GitHubForge):
         }
 
     async def _scan(
-        self, client: httpx.AsyncClient, owner: str, repo: str, groups: Dict[str, List[str]]
+        self, client: httpx.AsyncClient, ref: str, groups: Dict[str, List[str]]
     ) -> Dict[str, Any]:
         """Check each group, recording the first matching path."""
 
         async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
             saw_gap = False
             for path in paths:
-                url = await self._check_file_exists(client, owner, repo, path)
+                url = await self.forge.file_exists(client, ref, path)
                 if url is COLLECTION_GAP:
                     saw_gap = True
                     continue
@@ -124,7 +126,7 @@ class DevToolingCollector(GitHubForge):
         return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
 
     async def _analyze_review_coverage(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Share of recently merged PRs that received at least one review.
 
@@ -132,11 +134,9 @@ class DevToolingCollector(GitHubForge):
         and distinguishing them would need per-review author comparison against
         the PR author for every sampled PR.
         """
-        url = (
-            f"https://api.github.com/repos/{owner}/{repo}/pulls"
-            f"?state=closed&per_page={_PR_SAMPLE_SIZE}&sort=updated&direction=desc"
+        prs = await self.forge.pull_requests(
+            client, ref, state="closed", per_page=_PR_SAMPLE_SIZE, sort="updated", direction="desc",
         )
-        prs = await self._github_get(client, url)
         if prs is COLLECTION_GAP:
             return {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
 
@@ -145,10 +145,7 @@ class DevToolingCollector(GitHubForge):
             return {"sampled": 0, "reviewed": 0, "coverage_pct": None}
 
         async def has_review(number: int):
-            reviews = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews",
-                params={"per_page": 1},
-            )
+            reviews = await self.forge.pr_reviews(client, ref, number, per_page=1)
             if reviews is COLLECTION_GAP:
                 return COLLECTION_GAP
             return bool(reviews)
@@ -228,7 +225,7 @@ class DevToolingCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "testing": empty,
             "tooling": empty,
             "code_review": {"sampled": 0, "reviewed": 0, "coverage_pct": None},
