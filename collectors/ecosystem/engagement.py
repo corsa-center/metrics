@@ -21,7 +21,7 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from forge.base import RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.github import GitHubForge
 from collectors.ecosystem.base import get_threshold
 
@@ -32,11 +32,6 @@ _SAMPLE = 30
 # reach 30 issues even when ~87% of recent activity is PRs, as on HDF5.
 _MAX_ISSUE_PAGES = 4
 _MAINTAINER_ROLES = {"COLLABORATOR", "MEMBER", "OWNER"}
-_API = "https://api.github.com/repos/{owner}/{repo}"
-
-
-def _is_bot(login: str) -> bool:
-    return login.endswith("[bot]") or login.endswith("-bot")
 
 
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
@@ -61,38 +56,33 @@ def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
 # arithmetic than about the project. The absolute question — does everyone
 # get an answer, or only some people — is what the report is actually asking.
 
-# Share of issues and PRs opened by people outside the maintainer group.
-# GitHub's author_association marks OWNER / MEMBER / COLLABORATOR as inside.
-_INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
-
-
-class EngagementCollector(GitHubForge):
+class EngagementCollector:
     """Collects engagement metrics from GitHub issues and PRs (§4.2.4)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Collecting engagement metrics for {owner}/{repo}")
-
-        base = _API.format(owner=owner, repo=repo)
+        logger.info(f"Collecting engagement metrics for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             issues_raw, prs_raw, repo_info = await asyncio.gather(
-                self._fetch_issues(client, base),
-                self._fetch_prs(client, base),
-                self._fetch_repo_info(client, base),
+                self._fetch_issues(client, ref),
+                self._fetch_prs(client, ref),
+                self._fetch_repo_info(client, ref),
             )
 
             # Fetch first comments for each issue concurrently (bot-filtered).
             first_responses = await asyncio.gather(
-                *[self._first_response_hours(client, base, i) for i in issues_raw]
+                *[self._first_response_hours(client, ref, i) for i in issues_raw]
             )
 
         issue_stats = self._compute_issue_stats(issues_raw, list(first_responses))
@@ -102,8 +92,8 @@ class EngagementCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "issue_stats": issue_stats,
             "pr_stats": pr_stats,
             "backlog": backlog,
@@ -115,92 +105,58 @@ class EngagementCollector(GitHubForge):
     # ------------------------------------------------------------------ #
 
     async def _fetch_issues(
-        self, client: httpx.AsyncClient, base: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict]:
-        """Fetch a real sample of issues, paging past pull requests.
+        """Fetch a real sample of issues.
 
-        The issues endpoint returns PRs as well and offers no way to exclude
-        them, so a single page of _SAMPLE items yields almost no issues on a
+        A single page of _SAMPLE items yields almost no issues on a
         PR-heavy repository — HDF5's most recent 30 entries are 26 PRs and 4
-        issues, which is far too small a sample for a median to mean anything.
-        Pages of 100 are pulled until _SAMPLE issues are in hand.
+        issues, which is far too small a sample for a median to mean
+        anything. Pages of 100 are pulled until _SAMPLE issues are in hand.
+        (GitHubForge.issues already excludes pull requests.)
         """
         issues: List[Dict] = []
-        try:
-            for page in range(1, _MAX_ISSUE_PAGES + 1):
-                resp = await client.get(
-                    f"{base}/issues",
-                    headers=self.github_headers,
-                    params={
-                        "state": "all", "per_page": 100, "page": page,
-                        "sort": "updated", "direction": "desc",
-                    },
-                )
-                resp.raise_for_status()
-                batch = resp.json()
-                if not batch:
-                    break
-                # Exclude pull requests (GitHub issues API returns both)
-                issues.extend(i for i in batch if "pull_request" not in i)
-                if len(issues) >= _SAMPLE:
-                    break
-            return issues[:_SAMPLE]
-        except Exception as e:
-            logger.warning(f"Issues fetch failed: {e}")
-            return []
+        for page in range(1, _MAX_ISSUE_PAGES + 1):
+            batch = await self.forge.issues(
+                client, ref, state="all", per_page=100, page=page,
+                sort="updated", direction="desc",
+            )
+            if batch is COLLECTION_GAP or not batch:
+                break
+            issues.extend(batch)
+            if len(issues) >= _SAMPLE:
+                break
+        return issues[:_SAMPLE]
 
     async def _fetch_prs(
-        self, client: httpx.AsyncClient, base: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict]:
-        try:
-            resp = await client.get(
-                f"{base}/pulls",
-                headers=self.github_headers,
-                params={"state": "closed", "per_page": _SAMPLE, "sort": "updated", "direction": "desc"},
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.warning(f"PRs fetch failed: {e}")
-            return []
+        data = await self.forge.pull_requests(
+            client, ref, state="closed", per_page=_SAMPLE,
+            sort="updated", direction="desc",
+        )
+        return [] if data is COLLECTION_GAP or data is None else data
 
     async def _fetch_repo_info(
-        self, client: httpx.AsyncClient, base: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict:
-        try:
-            resp = await client.get(base, headers=self.github_headers)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.warning(f"Repo info fetch failed: {e}")
-            return {}
+        data = await self.forge.repo_info(client, ref)
+        return {} if data is COLLECTION_GAP or data is None else data
 
     async def _first_response_hours(
-        self, client: httpx.AsyncClient, base: str, issue: Dict
+        self, client: httpx.AsyncClient, ref: str, issue: Dict
     ) -> Optional[float]:
         """Return hours from issue creation to first non-bot comment, or None."""
         if issue.get("comments", 0) == 0:
             return None
-        number = issue["number"]
         created = _parse_dt(issue.get("created_at"))
         if not created:
             return None
-        try:
-            resp = await client.get(
-                f"{base}/issues/{number}/comments",
-                headers=self.github_headers,
-                params={"per_page": 10},
-            )
-            resp.raise_for_status()
-            for comment in resp.json():
-                login = comment.get("user", {}).get("login", "")
-                if _is_bot(login):
-                    continue
-                first_comment_dt = _parse_dt(comment.get("created_at"))
-                return _hours(created, first_comment_dt)
-        except Exception as e:
-            logger.debug(f"Comment fetch failed for issue {number}: {e}")
-        return None
+        comments = await self.forge.issue_comments(client, ref, issue["number"], per_page=10)
+        first_human = next((c for c in comments if not c["is_bot"]), None)
+        if not first_human:
+            return None
+        return _hours(created, _parse_dt(first_human["created_at"]))
 
     # ------------------------------------------------------------------ #
     # Statistics                                                           #
@@ -236,10 +192,7 @@ class EngagementCollector(GitHubForge):
             timely = sum(1 for t in valid_responses if t <= response_window_hours)
             timely_share = round(timely / len(issues), 3)
 
-        outside = sum(
-            1 for i in issues
-            if i.get("author_association") not in _INSIDE_ASSOCIATIONS
-        )
+        outside = sum(1 for i in issues if i.get("is_outsider"))
 
         return {
             "sample_size": len(issues),
@@ -265,10 +218,7 @@ class EngagementCollector(GitHubForge):
             else:
                 closed_no_merge += 1
 
-        outside = sum(
-            1 for pr in prs
-            if pr.get("author_association") not in _INSIDE_ASSOCIATIONS
-        )
+        outside = sum(1 for pr in prs if pr.get("is_outsider"))
 
         total = merged + closed_no_merge
         return {
@@ -409,7 +359,7 @@ class EngagementCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "issue_stats": {},
             "pr_stats": {},
             "backlog": {},

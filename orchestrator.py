@@ -596,7 +596,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "engagement", package):
             try:
                 from collectors.ecosystem.engagement import EngagementCollector
-                collector = EngagementCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = EngagementCollector(GitHubForge(github_token))
                 sub_results["engagement"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Engagement collection failed for {package['name']}: {e}")

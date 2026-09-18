@@ -21,11 +21,22 @@ import re
 import httpx
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from forge.base import COLLECTION_GAP
 
 logger = logging.getLogger(__name__)
+
+# GitHub's author_association values that count as "part of the project"
+# rather than an outside contributor. Used to compute the normalized
+# `is_outsider` flag -- GitLab has no author_association equivalent, so
+# GitLabForge derives the same flag from a project members lookup instead;
+# either way collectors read `is_outsider`, never the raw platform field.
+_INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+
+def _is_bot_login(login: str) -> bool:
+    return login.endswith("[bot]") or login.endswith("-bot")
 
 
 class GitHubForge:
@@ -144,3 +155,84 @@ class GitHubForge:
     def get_timestamp(self) -> str:
         """Public alias of `_get_timestamp` for composition-based callers."""
         return self._get_timestamp()
+
+    def _normalize_issue_like(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """Add normalized fields to a raw GitHub issue or PR object in place.
+
+        Collectors should read `is_outsider` and the other raw fields
+        (state/created_at/closed_at/merged_at/comments are already the same
+        names and "open"/"closed" values GitLab uses) rather than
+        `author_association`, so the same collector code works once
+        GitLabForge starts returning its own normalized items here too.
+        """
+        item["is_outsider"] = item.get("author_association") not in _INSIDE_ASSOCIATIONS
+        return item
+
+    async def issues(
+        self, client: httpx.AsyncClient, ref: str, *,
+        state: str = "all", per_page: int = 100, page: int = 1,
+        sort: Optional[str] = None, direction: Optional[str] = None,
+    ):
+        """List issues (pull requests excluded), or None/COLLECTION_GAP.
+
+        GitHub's /issues endpoint returns pull requests too, with no way to
+        exclude them server-side; filtered out here so every caller gets
+        real issues only, matching what "issues" means on GitLab (which has
+        a genuinely separate endpoint).
+        """
+        params: Dict[str, Any] = {"state": state, "per_page": per_page, "page": page}
+        if sort:
+            params["sort"] = sort
+        if direction:
+            params["direction"] = direction
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/issues", params=params
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [self._normalize_issue_like(i) for i in data if "pull_request" not in i]
+
+    async def pull_requests(
+        self, client: httpx.AsyncClient, ref: str, *,
+        state: str = "all", per_page: int = 100, page: int = 1,
+        sort: Optional[str] = None, direction: Optional[str] = None,
+    ):
+        """List pull requests, or None/COLLECTION_GAP."""
+        params: Dict[str, Any] = {"state": state, "per_page": per_page, "page": page}
+        if sort:
+            params["sort"] = sort
+        if direction:
+            params["direction"] = direction
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/pulls", params=params
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [self._normalize_issue_like(pr) for pr in data]
+
+    async def issue_comments(
+        self, client: httpx.AsyncClient, ref: str, number: int, *, per_page: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Normalized comments on an issue or PR: [{author, created_at, is_bot}, ...].
+
+        Returns [] on any failure (including a gap) -- callers of this
+        method only ever use it to find the first non-bot comment, so there
+        is no meaningful distinction for them between "confirmed no
+        comments" and "couldn't check"; both mean "no first-response time
+        available."
+        """
+        data = await self._github_get(
+            client,
+            f"https://api.github.com/repos/{ref}/issues/{number}/comments",
+            params={"per_page": per_page},
+        )
+        if data is COLLECTION_GAP or data is None:
+            return []
+        return [
+            {
+                "author": c.get("user", {}).get("login", ""),
+                "created_at": c.get("created_at"),
+                "is_bot": _is_bot_login(c.get("user", {}).get("login", "")),
+            }
+            for c in data
+        ]

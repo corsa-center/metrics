@@ -2,12 +2,22 @@
 
 import asyncio
 import pytest
-from collectors.ecosystem.engagement import EngagementCollector, _is_bot, _hours, _parse_dt
+from collectors.ecosystem.engagement import EngagementCollector, _hours, _parse_dt
+
+
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge, for the invalid-URL path."""
+
+    def extract_ref(self, repo_url):
+        return None if repo_url in (None, "", "not-a-url") else "o/r"
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
 
 
 @pytest.fixture
 def collector():
-    return EngagementCollector()
+    return EngagementCollector(FakeForge())
 
 
 # ------------------------------------------------------------------ #
@@ -15,15 +25,6 @@ def collector():
 # ------------------------------------------------------------------ #
 
 class TestHelpers:
-    def test_is_bot_github_actions(self):
-        assert _is_bot("github-actions[bot]") is True
-
-    def test_is_bot_renovate(self):
-        assert _is_bot("renovate-bot") is True
-
-    def test_is_bot_human(self):
-        assert _is_bot("octocat") is False
-
     def test_parse_dt_z_suffix(self):
         dt = _parse_dt("2024-01-15T10:00:00Z")
         assert dt is not None
@@ -215,7 +216,8 @@ class TestIssueStats:
     """Regression cover for the sampling and consistency computations."""
 
     def _issues(self, n, comments=0, assoc="MEMBER"):
-        return [{"comments": comments, "author_association": assoc,
+        is_outsider = assoc not in {"OWNER", "MEMBER", "COLLABORATOR"}
+        return [{"comments": comments, "is_outsider": is_outsider,
                  "created_at": None, "closed_at": None} for _ in range(n)]
 
     def test_maintainer_associations_are_not_outside(self, collector):
@@ -238,7 +240,7 @@ class TestIssueStats:
         assert stats["timely_response_share"] == 0.5
 
     def test_median_comments(self, collector):
-        issues = [{"comments": c, "author_association": "NONE",
+        issues = [{"comments": c, "is_outsider": True,
                    "created_at": None, "closed_at": None} for c in [0, 4, 6]]
         assert collector._compute_issue_stats(issues, [None] * 3)["median_comments"] == 4
 

@@ -11,12 +11,23 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from forge.base import COLLECTION_GAP
-from forge.github import GitHubForge
+from forge.github import GitHubForge, _is_bot_login
 
 
 @pytest.fixture
 def forge():
     return GitHubForge()
+
+
+class TestIsBotLogin:
+    def test_github_actions(self):
+        assert _is_bot_login("github-actions[bot]") is True
+
+    def test_renovate(self):
+        assert _is_bot_login("renovate-bot") is True
+
+    def test_human(self):
+        assert _is_bot_login("octocat") is False
 
 
 def _resp(status_code, json_body=None, headers=None, text=""):
