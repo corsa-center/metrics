@@ -793,7 +793,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "reliability", package):
             try:
                 from collectors.quality.reliability import ReliabilityCollector
-                collector = ReliabilityCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = ReliabilityCollector(GitHubForge(github_token))
                 sub_results["reliability"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Reliability collection failed for {package['name']}: {e}")

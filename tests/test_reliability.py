@@ -2,7 +2,6 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from forge.base import COLLECTION_GAP
 from collectors.quality.reliability import (
@@ -11,9 +10,38 @@ from collectors.quality.reliability import (
 )
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.file_results = {}
+        self.dir_listing_results = {}
+        self.search_result = 0
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    async def dir_listing(self, client, ref, path):
+        return self.dir_listing_results.get(path, [])
+
+    async def search_issues(self, client, query, *, per_page=1):
+        return self.search_result
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return ReliabilityCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return ReliabilityCollector(forge)
 
 
 class TestWorkflowSelection:
@@ -158,79 +186,59 @@ class TestScoringGapHandling:
 
 
 class TestFindAnalysisToolsGapHandling:
-    def _run(self, collector, responses, workflows=None):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+    def _run(self, collector, forge, responses, workflows=None):
+        forge.file_results = responses
+        return asyncio.run(collector._find_analysis_tools(None, "o/r", workflows or []))
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_analysis_tools(None, "o", "r", workflows or [])
-
-        return asyncio.run(go())
-
-    def test_gapped_config_check_with_no_finds_reports_gap(self, collector):
+    def test_gapped_config_check_with_no_finds_reports_gap(self, collector, forge):
         responses = {p: COLLECTION_GAP for paths in _ANALYSIS_CONFIGS.values() for p in paths}
-        tools, saw_gap = self._run(collector, responses)
+        tools, saw_gap = self._run(collector, forge, responses)
         assert tools == []
         assert saw_gap is True
 
-    def test_found_tool_survives_gaps_on_others(self, collector):
+    def test_found_tool_survives_gaps_on_others(self, collector, forge):
         responses = {p: COLLECTION_GAP for paths in _ANALYSIS_CONFIGS.values() for p in paths}
         responses[".clang-tidy"] = "http://x"
-        tools, saw_gap = self._run(collector, responses)
+        tools, saw_gap = self._run(collector, forge, responses)
         assert tools == ["clang-tidy"]
 
-    def test_ci_text_match_does_not_need_file_probe(self, collector):
+    def test_ci_text_match_does_not_need_file_probe(self, collector, forge):
         responses = {p: COLLECTION_GAP for paths in _ANALYSIS_CONFIGS.values() for p in paths}
-        tools, saw_gap = self._run(collector, responses, workflows=["run: cppcheck ."])
+        tools, saw_gap = self._run(collector, forge, responses, workflows=["run: cppcheck ."])
         assert "Cppcheck" in tools
 
 
 class TestFindFlagFilesGapHandling:
-    def _run(self, collector, responses):
-        async def go():
-            client = MagicMock()
+    def _run(self, collector, forge, responses):
+        forge.dir_listing_results = {
+            d: (COLLECTION_GAP if responses.get(d) is COLLECTION_GAP else [])
+            for d in _FLAG_DIRECTORIES
+        }
+        return asyncio.run(collector._find_flag_files(None, "o/r"))
 
-            async def fake_github_get(c, url, params=None):
-                for directory in _FLAG_DIRECTORIES:
-                    if url.endswith(f"/contents/{directory}"):
-                        return responses.get(directory, None)
-                return None
-
-            with patch.object(collector, "_github_get", side_effect=fake_github_get):
-                return await collector._find_flag_files(client, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gapped_directory_listing_is_tracked(self, collector):
+    def test_gapped_directory_listing_is_tracked(self, collector, forge):
         responses = {_FLAG_DIRECTORIES[0]: COLLECTION_GAP}
-        paths, saw_gap = self._run(collector, responses)
+        paths, saw_gap = self._run(collector, forge, responses)
         assert saw_gap is True
 
-    def test_confirmed_missing_directory_is_not_a_gap(self, collector):
+    def test_confirmed_missing_directory_is_not_a_gap(self, collector, forge):
         responses = {d: None for d in _FLAG_DIRECTORIES}
-        paths, saw_gap = self._run(collector, responses)
+        paths, saw_gap = self._run(collector, forge, responses)
         assert paths == []
         assert saw_gap is False
 
 
 class TestDefectTrendGapHandling:
-    def _run(self, collector, search_side_effect):
-        async def go():
-            client = MagicMock()
-            with patch("collectors.quality.reliability.search_get", side_effect=search_side_effect):
-                return await collector._defect_trend(client, "o", "r")
+    def _run(self, collector, forge, search_result):
+        forge.search_result = search_result
+        return asyncio.run(collector._defect_trend(None, "o/r"))
 
-        return asyncio.run(go())
-
-    def test_search_failure_is_not_collected_not_a_confirmed_zero(self, collector):
-        result = self._run(collector, AsyncMock(return_value=None))
+    def test_search_failure_is_not_collected_not_a_confirmed_zero(self, collector, forge):
+        result = self._run(collector, forge, None)
         assert result["not_collected"] is True
         assert result["measurable"] is False
 
-    def test_confirmed_low_volume_is_a_real_unmeasurable_not_a_gap(self, collector):
-        resp = MagicMock()
-        resp.json.return_value = {"total_count": 0}
-        result = self._run(collector, AsyncMock(return_value=resp))
+    def test_confirmed_low_volume_is_a_real_unmeasurable_not_a_gap(self, collector, forge):
+        result = self._run(collector, forge, 0)
         assert result["measurable"] is False
         assert "not_collected" not in result

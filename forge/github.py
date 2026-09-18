@@ -24,7 +24,9 @@ import httpx
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
+from collectors.rate_limit import search_get
 from forge.base import COLLECTION_GAP
 
 logger = logging.getLogger(__name__)
@@ -591,6 +593,29 @@ class GitHubForge:
             client, f"https://api.github.com/repos/{ref}/pulls/{number}/reviews",
             params={"per_page": per_page},
         )
+
+    async def search_issues(self, client: httpx.AsyncClient, query: str, *, per_page: int = 1):
+        """Total count of issues/PRs matching a GitHub search query, or None
+        if the search couldn't be completed (rate limited after retries, or
+        a network error) -- deliberately not the same as a confirmed 0.
+
+        `query` is the raw GitHub search qualifier string (e.g.
+        'repo:o/r is:issue label:bug created:2026-01-01..2026-02-01'),
+        URL-encoded here. Uses the shared cross-collector search rate
+        limiter in collectors/rate_limit.py -- GitHub's search API has a
+        much tighter budget (30/min) than its core REST API, and that
+        limiter is process-wide on purpose, not per-forge-instance.
+        GitLab's search API has different semantics entirely and may be
+        disabled instance-wide on self-hosted installs -- no attempt at
+        parity here yet.
+        """
+        resp = await search_get(
+            client, f"https://api.github.com/search/issues?q={quote(query)}&per_page={per_page}",
+            self.github_headers,
+        )
+        if resp is None:
+            return None
+        return resp.json().get("total_count", 0)
 
     async def community_profile(self, client: httpx.AsyncClient, ref: str):
         """GitHub's aggregated community-health-file report, or {}/COLLECTION_GAP.

@@ -20,16 +20,13 @@ reporting a meaningless 0 vs 0.
 """
 
 import asyncio
-import base64
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
 
 import httpx
 
-from collectors.rate_limit import search_get
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.github import GitHubForge
 from collectors.ecosystem.base import get_threshold
@@ -101,25 +98,27 @@ _DEFECT_ISSUE_TYPES = ["Bug", "Defect"]
 _TREND_WINDOW_DAYS = 365
 
 
-class ReliabilityCollector(GitHubForge):
+class ReliabilityCollector:
     """Collects static-analysis, hardening and defect-trend signals (Section 4.3.1)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting reliability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            workflows, workflows_gap = await self._read_analysis_workflows(client, owner, repo)
+            workflows, workflows_gap = await self._read_analysis_workflows(client, ref)
             results = await asyncio.gather(
-                self._find_analysis_tools(client, owner, repo, workflows),
-                self._find_hardening(client, owner, repo, workflows),
-                self._defect_trend(client, owner, repo),
+                self._find_analysis_tools(client, ref, workflows),
+                self._find_hardening(client, ref, workflows),
+                self._defect_trend(client, ref),
                 return_exceptions=True,
             )
 
@@ -147,8 +146,8 @@ class ReliabilityCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "analysis_tools": tools,
             "hardening": hardening,
             "defect_trend": trend,
@@ -158,7 +157,7 @@ class ReliabilityCollector(GitHubForge):
     # ------------------------------------------------------------------ fetch
 
     async def _find_analysis_tools(
-        self, client: httpx.AsyncClient, owner: str, repo: str,
+        self, client: httpx.AsyncClient, ref: str,
         workflows: List[str],
     ) -> tuple:
         """Defect-finding tools, from config files and analysis-shaped workflows.
@@ -173,7 +172,7 @@ class ReliabilityCollector(GitHubForge):
         async def check(tool: str, paths: List[str]) -> tuple:
             gap = False
             for path in paths:
-                result = await self._check_file_exists(client, owner, repo, path)
+                result = await self.forge.file_exists(client, ref, path)
                 if result is COLLECTION_GAP:
                     gap = True
                     continue
@@ -195,38 +194,30 @@ class ReliabilityCollector(GitHubForge):
         return sorted(found), saw_gap
 
     async def _read_analysis_workflows(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Text of the workflows whose names suggest they run analysis, and
         whether the directory listing (or any candidate read) gapped.
         """
-        entries = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contents/.github/workflows",
-        )
+        entries = await self.forge.dir_listing(client, ref, ".github/workflows")
         if entries is COLLECTION_GAP:
             return [], True
-        if not isinstance(entries, list):
-            return [], False
         candidates = [
             e for e in entries
             if e.get("name", "").endswith((".yml", ".yaml"))
-            and e.get("download_url")
             and _ANALYSIS_WORKFLOW_HINT.search(e["name"])
         ][:_MAX_ANALYSIS_WORKFLOWS]
 
-        async def read(url: str) -> Optional[str]:
-            try:
-                r = await client.get(url)
-                return r.text if r.status_code == 200 else None
-            except Exception:
-                return None
+        async def read(path: str) -> Optional[str]:
+            text = await self.forge.file_content(client, ref, path)
+            return text if text and text is not COLLECTION_GAP else None
 
-        texts = await asyncio.gather(*[read(e["download_url"]) for e in candidates])
+        texts = await asyncio.gather(*[read(e["path"]) for e in candidates])
         saw_gap = any(t is None for t in texts)
         return [t for t in texts if t], saw_gap
 
     async def _find_hardening(
-        self, client: httpx.AsyncClient, owner: str, repo: str,
+        self, client: httpx.AsyncClient, ref: str,
         workflows: List[str],
     ) -> tuple:
         """Secure-coding practice indicators in the build files and in CI.
@@ -240,16 +231,12 @@ class ReliabilityCollector(GitHubForge):
         """
 
         async def read(path: str):
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-            )
-            if data is COLLECTION_GAP:
+            text = await self.forge.file_content(client, ref, path)
+            if text is COLLECTION_GAP:
                 return COLLECTION_GAP
-            if data is None:
-                return ""
-            return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+            return text or ""
 
-        flag_paths, flag_gap = await self._find_flag_files(client, owner, repo)
+        flag_paths, flag_gap = await self._find_flag_files(client, ref)
         texts = await asyncio.gather(
             *[read(p) for p in _BUILD_FILES + flag_paths]
         )
@@ -264,20 +251,16 @@ class ReliabilityCollector(GitHubForge):
         ], saw_gap
 
     async def _find_flag_files(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Paths of build-configuration files whose names suggest compiler
         flags, and whether any directory listing gapped.
         """
 
         async def listing(directory: str) -> tuple:
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{directory}"
-            )
+            data = await self.forge.dir_listing(client, ref, directory)
             if data is COLLECTION_GAP:
                 return [], True
-            if not isinstance(data, list):
-                return [], False
             return [
                 e["path"] for e in data
                 if e.get("type") == "file" and _FLAG_FILE_HINT.search(e.get("name", ""))
@@ -292,7 +275,7 @@ class ReliabilityCollector(GitHubForge):
         return paths[:_MAX_FLAG_FILES], saw_gap
 
     async def _defect_trend(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Defect reports opened in the last year against the year before.
 
@@ -312,17 +295,13 @@ class ReliabilityCollector(GitHubForge):
         )
 
         async def count(qualifier: str, date_range: str) -> tuple:
-            q = f'repo:{owner}/{repo} is:issue {qualifier} created:{date_range}'
-            r = await search_get(
-                client,
-                f"https://api.github.com/search/issues?q={quote(q)}&per_page=1",
-                self.github_headers,
-            )
-            if r is None:
+            q = f'repo:{ref} is:issue {qualifier} created:{date_range}'
+            total = await self.forge.search_issues(client, q)
+            if total is None:
                 # Exhausted retries or a non-200: we don't know the real
                 # count, so this is not the same as a confirmed 0.
                 return 0, True
-            return r.json().get("total_count", 0), False
+            return total, False
 
         recent_range = f"{recent_start}..{today}"
         prev_range = f"{prev_start}..{recent_start}"
@@ -442,7 +421,7 @@ class ReliabilityCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "analysis_tools": [],
             "hardening": [],
             "defect_trend": trend,
