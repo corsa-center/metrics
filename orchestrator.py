@@ -812,7 +812,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "deployment_environments", package):
             try:
                 from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
-                collector = DeploymentEnvironmentCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = DeploymentEnvironmentCollector(GitHubForge(github_token))
                 sub_results["deployment_environments"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Deployment environment collection failed for {package['name']}: {e}")

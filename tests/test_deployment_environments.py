@@ -7,9 +7,19 @@ from collectors.quality.deployment_environments import (
 )
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "nope" else "o/r"
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
 def collector():
-    return DeploymentEnvironmentCollector()
+    return DeploymentEnvironmentCollector(FakeForge())
 
 
 def _families(text):

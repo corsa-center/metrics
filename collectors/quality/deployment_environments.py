@@ -20,7 +20,6 @@ ubuntu-24.04 covers one environment, not two.
 """
 
 import asyncio
-import base64
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -72,23 +71,25 @@ _PLATFORM_DOC_TERMS = {
 _MAX_WORKFLOW_FILES = 25
 
 
-class DeploymentEnvironmentCollector(GitHubForge):
+class DeploymentEnvironmentCollector:
     """Detects the OS families a project's CI exercises (Section 4.3.5)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting deployment environment metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             files, doc_text = await asyncio.gather(
-                self._list_workflows(client, owner, repo),
-                self._read_platform_docs(client, owner, repo),
+                self._list_workflows(client, ref),
+                self._read_platform_docs(client, ref),
                 return_exceptions=True,
             )
             if isinstance(files, Exception):
@@ -99,7 +100,7 @@ class DeploymentEnvironmentCollector(GitHubForge):
                 doc_text = ""
 
             contents = await asyncio.gather(
-                *[self._read_workflow(client, f["url"]) for f in files[:_MAX_WORKFLOW_FILES]],
+                *[self._read_workflow(client, ref, f["path"]) for f in files[:_MAX_WORKFLOW_FILES]],
                 return_exceptions=True,
             ) if files else []
 
@@ -122,8 +123,8 @@ class DeploymentEnvironmentCollector(GitHubForge):
         )
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "workflow_count": len(files),
             "workflows_scanned": min(len(files), _MAX_WORKFLOW_FILES),
             "os_families": detected,
@@ -133,51 +134,29 @@ class DeploymentEnvironmentCollector(GitHubForge):
         }
 
     async def _read_platform_docs(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> str:
         """README text, used to see which platforms the project claims to support."""
-        try:
-            resp = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/readme",
-                headers=self.github_headers,
-            )
-            if resp.status_code != 200:
-                return ""
-            import base64
-            return base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
-        except Exception as e:
-            logger.debug(f"Could not read README: {e}")
-            return ""
+        text = await self.forge.readme(client, ref)
+        return text or ""
 
     async def _list_workflows(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict[str, str]]:
         """Workflow definition files in .github/workflows."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{_WORKFLOWS_DIR}"
-        try:
-            resp = await client.get(url, headers=self.github_headers)
-            if resp.status_code != 200:
-                return []
-            entries = resp.json()
-            if not isinstance(entries, list):
-                return []
-            return [
-                {"name": e["name"], "url": e["download_url"]}
-                for e in entries
-                if e.get("name", "").endswith((".yml", ".yaml")) and e.get("download_url")
-            ]
-        except Exception as e:
-            logger.debug(f"Could not list workflows: {e}")
+        entries = await self.forge.dir_listing(client, ref, _WORKFLOWS_DIR)
+        if not entries:
             return []
+        return [
+            {"name": e["name"], "path": e["path"]}
+            for e in entries
+            if e.get("name", "").endswith((".yml", ".yaml"))
+        ]
 
-    async def _read_workflow(self, client: httpx.AsyncClient, url: str) -> Optional[str]:
+    async def _read_workflow(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
         """Fetch a workflow file's raw text."""
-        try:
-            resp = await client.get(url)
-            return resp.text if resp.status_code == 200 else None
-        except Exception as e:
-            logger.debug(f"Could not read workflow {url}: {e}")
-            return None
+        text = await self.forge.file_content(client, ref, path)
+        return text or None
 
     def _calculate_score(
         self,
@@ -245,7 +224,7 @@ class DeploymentEnvironmentCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": repository,
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "workflow_count": 0,
             "workflows_scanned": 0,
             "os_families": {},
