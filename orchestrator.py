@@ -587,7 +587,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "openssf_badge", package):
             try:
                 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
-                collector = OpenSSFBadgeCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = OpenSSFBadgeCollector(GitHubForge(github_token))
                 sub_results["openssf_badge"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
@@ -652,7 +653,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "openssf_scorecard", package):
             try:
                 from collectors.ecosystem.openssf_scorecard import OpenSSFScorecardCollector
-                collector = OpenSSFScorecardCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = OpenSSFScorecardCollector(GitHubForge(github_token))
                 sub_results["openssf_scorecard"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")

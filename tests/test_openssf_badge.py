@@ -1,7 +1,7 @@
 """Unit tests for OpenSSFBadgeCollector pure computation methods."""
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -9,9 +9,32 @@ from forge.base import COLLECTION_GAP
 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    host = "github.com"
+
+    def __init__(self):
+        self.file_results = {}
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def file_exists(self, client, ref, path):
+        return self.file_results.get(path)
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return OpenSSFBadgeCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return OpenSSFBadgeCollector(forge)
 
 
 # ------------------------------------------------------------------ #
@@ -111,7 +134,7 @@ class TestCollectWithBadge:
             "badge_percentage_0": 100,
             "id": 42,
         }
-        result = collector._collect_with_badge("MyPkg", "owner", "repo", badge_data)
+        result = collector._collect_with_badge("MyPkg", "owner/repo", badge_data)
         assert result["badge_exists"] is True
         assert result["badge_status"]["level"] == "passing"
         assert result["badge_status"]["progress_percentage"] == 100
@@ -120,7 +143,7 @@ class TestCollectWithBadge:
 
     def test_in_progress_badge(self, collector):
         badge_data = {"badge_level": None, "badge_percentage_0": 65, "id": 7}
-        result = collector._collect_with_badge("Pkg", "o", "r", badge_data)
+        result = collector._collect_with_badge("Pkg", "o/r", badge_data)
         assert result["badge_status"]["in_progress"] is True
         assert result["overall_score"]["status"] == "in_progress"
 
@@ -131,38 +154,31 @@ class TestScanFilesGapHandling:
     must not be silently folded into "missing".
     """
 
-    def _run(self, collector, file_map, responses):
-        """responses: dict[pattern] -> return value for _check_file_exists."""
-        async def fake_check(client, owner, repo, pattern):
-            return responses.get(pattern, None)
+    def _run(self, collector, forge, file_map, responses):
+        forge.file_results = responses
+        return asyncio.run(collector._scan_files(None, "o/r", file_map))
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_check):
-                return await collector._scan_files(None, "o", "r", file_map)
-
-        return asyncio.run(go())
-
-    def test_gapped_criterion_is_not_collected_not_missing(self, collector):
+    def test_gapped_criterion_is_not_collected_not_missing(self, collector, forge):
         file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
-        result = self._run(collector, file_map, {"CODE_OF_CONDUCT.md": COLLECTION_GAP})
+        result = self._run(collector, forge, file_map, {"CODE_OF_CONDUCT.md": COLLECTION_GAP})
         assert result["missing"] == []
         assert result["not_collected"] == ["code_of_conduct"]
 
-    def test_confirmed_absent_is_still_a_real_miss(self, collector):
+    def test_confirmed_absent_is_still_a_real_miss(self, collector, forge):
         file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
-        result = self._run(collector, file_map, {"CODE_OF_CONDUCT.md": None})
+        result = self._run(collector, forge, file_map, {"CODE_OF_CONDUCT.md": None})
         assert result["missing"] == ["code_of_conduct"]
         assert result["not_collected"] == []
 
-    def test_all_gapped_reports_no_percentage(self, collector):
+    def test_all_gapped_reports_no_percentage(self, collector, forge):
         file_map = {"a": ["A.md"], "b": ["B.md"]}
-        result = self._run(collector, file_map, {"A.md": COLLECTION_GAP, "B.md": COLLECTION_GAP})
+        result = self._run(collector, forge, file_map, {"A.md": COLLECTION_GAP, "B.md": COLLECTION_GAP})
         assert result["percentage"] is None
         assert result["count_total"] == 0
 
-    def test_mixed_gap_and_confirmed_renormalizes_percentage(self, collector):
+    def test_mixed_gap_and_confirmed_renormalizes_percentage(self, collector, forge):
         file_map = {"found_one": ["F.md"], "gapped": ["G.md"]}
-        result = self._run(collector, file_map, {"F.md": "http://x", "G.md": COLLECTION_GAP})
+        result = self._run(collector, forge, file_map, {"F.md": "http://x", "G.md": COLLECTION_GAP})
         # gapped criterion excluded from the denominator entirely
         assert result["count_total"] == 1
         assert result["percentage"] == 100.0
@@ -171,13 +187,13 @@ class TestScanFilesGapHandling:
 class TestCollectWithoutBadgeGapHandling:
     def test_one_category_fully_gapped_renormalizes_overall(self, collector):
         async def go():
-            async def fake_scan(client, owner, repo, file_map):
+            async def fake_scan(client, ref, file_map):
                 if file_map is collector.GOVERNANCE_FILES:
                     return {"percentage": None}  # totally gapped
                 return {"percentage": 100.0}
 
             with patch.object(collector, "_scan_files", side_effect=fake_scan):
-                return await collector._collect_without_badge(None, "Pkg", "o", "r")
+                return await collector._collect_without_badge(None, "Pkg", "o/r")
 
         result = asyncio.run(go())
         # If the gap silently counted as 0%, this would be 60% (0.3+0.3 of 100).
@@ -185,11 +201,11 @@ class TestCollectWithoutBadgeGapHandling:
 
     def test_everything_gapped_reports_not_collected_status(self, collector):
         async def go():
-            async def fake_scan(client, owner, repo, file_map):
+            async def fake_scan(client, ref, file_map):
                 return {"percentage": None}
 
             with patch.object(collector, "_scan_files", side_effect=fake_scan):
-                return await collector._collect_without_badge(None, "Pkg", "o", "r")
+                return await collector._collect_without_badge(None, "Pkg", "o/r")
 
         result = asyncio.run(go())
         assert result["overall_score"]["score"] is None

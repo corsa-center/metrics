@@ -21,10 +21,13 @@ from forge.github import GitHubForge
 logger = logging.getLogger(__name__)
 
 
-class OpenSSFBadgeCollector(GitHubForge):
+class OpenSSFBadgeCollector:
     """Collects OpenSSF Best Practices Badge metrics (Section 4.2.5)."""
 
     BADGE_SEARCH_URL = "https://bestpractices.coreinfrastructure.org/projects.json"
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     # File patterns checked when no badge exists.
     # These overlap intentionally with CommunityHealthCollector — OpenSSF uses
@@ -96,28 +99,26 @@ class OpenSSFBadgeCollector(GitHubForge):
 
         logger.info(f"Collecting OpenSSF Badge metrics for {repo_name}")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            badge_data = await self._search_badge(client, owner, repo, repo_url)
+            badge_data = await self._search_badge(client, ref, repo_url)
             if badge_data:
                 logger.info(f"Badge found — level: {badge_data.get('badge_level')}, progress: {badge_data.get('badge_percentage_0', 0)}%")
-                return self._collect_with_badge(repo_name, owner, repo, badge_data)
+                return self._collect_with_badge(repo_name, ref, badge_data)
             else:
                 logger.info("No badge found — scanning repository for requirements")
-                return await self._collect_without_badge(client, repo_name, owner, repo)
+                return await self._collect_without_badge(client, repo_name, ref)
 
     # ------------------------------------------------------------------ #
     # Badge vs. scan paths                                                 #
     # ------------------------------------------------------------------ #
 
     def _collect_with_badge(
-        self, repo_name: str, owner: str, repo: str, badge_data: Dict[str, Any]
+        self, repo_name: str, ref: str, badge_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         badge_level = self._get_badge_level(badge_data)
         badge_percentage = badge_data.get("badge_percentage_0", 0)
@@ -126,8 +127,8 @@ class OpenSSFBadgeCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "badge_exists": True,
             "badge_status": {
                 "level": badge_level,
@@ -150,11 +151,11 @@ class OpenSSFBadgeCollector(GitHubForge):
         }
 
     async def _collect_without_badge(
-        self, client: httpx.AsyncClient, repo_name: str, owner: str, repo: str
+        self, client: httpx.AsyncClient, repo_name: str, ref: str
     ) -> Dict[str, Any]:
-        governance = await self._scan_files(client, owner, repo, self.GOVERNANCE_FILES)
-        security = await self._scan_files(client, owner, repo, self.SECURITY_FILES)
-        quality = await self._scan_files(client, owner, repo, self.QUALITY_FILES)
+        governance = await self._scan_files(client, ref, self.GOVERNANCE_FILES)
+        security = await self._scan_files(client, ref, self.SECURITY_FILES)
+        quality = await self._scan_files(client, ref, self.QUALITY_FILES)
 
         # A category whose percentage is None means every one of its
         # criteria gapped (see _scan_files) -- drop it from the blend and
@@ -170,8 +171,8 @@ class OpenSSFBadgeCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "badge_exists": False,
             "badge_status": {
                 "level": "none",
@@ -200,7 +201,7 @@ class OpenSSFBadgeCollector(GitHubForge):
     # ------------------------------------------------------------------ #
 
     async def _search_badge(
-        self, client: httpx.AsyncClient, owner: str, repo: str, repo_url: str
+        self, client: httpx.AsyncClient, ref: str, repo_url: str
     ) -> Optional[Dict[str, Any]]:
         headers = {"Accept": "application/json", "User-Agent": "CASS-Metrics-Collector"}
         try:
@@ -210,11 +211,11 @@ class OpenSSFBadgeCollector(GitHubForge):
                 if results:
                     return results[0]
 
-            for query in [f"github.com/{owner}/{repo}", f"{owner}/{repo}"]:
+            for query in [f"{self.forge.host}/{ref}", ref]:
                 response = await client.get(self.BADGE_SEARCH_URL, params={"q": query}, headers=headers, follow_redirects=True)
                 if response.status_code == 200:
                     for result in response.json():
-                        if f"{owner}/{repo}".lower() in result.get("repo_url", "").lower():
+                        if ref.lower() in result.get("repo_url", "").lower():
                             return result
         except Exception as e:
             logger.debug(f"Error searching for badge: {e}")
@@ -223,8 +224,7 @@ class OpenSSFBadgeCollector(GitHubForge):
     async def _scan_files(
         self,
         client: httpx.AsyncClient,
-        owner: str,
-        repo: str,
+        ref: str,
         file_map: Dict[str, List[str]],
     ) -> Dict[str, Any]:
         """Check each criterion in file_map against the repository.
@@ -245,7 +245,7 @@ class OpenSSFBadgeCollector(GitHubForge):
         for criterion, patterns in file_map.items():
             saw_gap = False
             for pattern in patterns:
-                html_url = await self._check_file_exists(client, owner, repo, pattern)
+                html_url = await self.forge.file_exists(client, ref, pattern)
                 if html_url is COLLECTION_GAP:
                     saw_gap = True
                     continue
@@ -333,7 +333,7 @@ class OpenSSFBadgeCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "badge_exists": False,
             "badge_status": {"level": "none", "id": None, "url": None, "progress_percentage": 0, "in_progress": False, "started": False},
             "governance_criteria": {"found": [], "missing": [], "percentage": 0},

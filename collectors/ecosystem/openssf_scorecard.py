@@ -16,35 +16,36 @@ from forge.github import GitHubForge
 
 logger = logging.getLogger(__name__)
 
-_SCORECARD_API = "https://api.securityscorecards.dev/projects/github.com/{owner}/{repo}"
+_SCORECARD_API = "https://api.securityscorecards.dev/projects/{host}/{ref}"
 
 
-class OpenSSFScorecardCollector(GitHubForge):
+class OpenSSFScorecardCollector:
     """Collects OpenSSF Scorecard metrics via the public Scorecard API."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Fetching OpenSSF Scorecard for {owner}/{repo}")
+        logger.info(f"Fetching OpenSSF Scorecard for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            return await self._fetch_scorecard(client, repo_name, owner, repo)
+            return await self._fetch_scorecard(client, repo_name, ref)
 
     async def _fetch_scorecard(
         self,
         client: httpx.AsyncClient,
         repo_name: str,
-        owner: str,
-        repo: str,
+        ref: str,
     ) -> Dict[str, Any]:
-        url = _SCORECARD_API.format(owner=owner, repo=repo)
+        url = _SCORECARD_API.format(host=self.forge.host, ref=ref)
         try:
             response = await client.get(
                 url,
@@ -52,15 +53,15 @@ class OpenSSFScorecardCollector(GitHubForge):
                 follow_redirects=True,
             )
             if response.status_code == 404:
-                logger.info(f"No Scorecard found for {owner}/{repo}")
-                return self._no_scorecard_result(repo_name, owner, repo)
+                logger.info(f"No Scorecard found for {ref}")
+                return self._no_scorecard_result(repo_name, ref)
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as e:
-            logger.warning(f"Scorecard API error for {owner}/{repo}: {e}")
+            logger.warning(f"Scorecard API error for {ref}: {e}")
             return self._empty_result(repo_name)
         except Exception as e:
-            logger.error(f"Scorecard fetch failed for {owner}/{repo}: {e}")
+            logger.error(f"Scorecard fetch failed for {ref}: {e}")
             return self._empty_result(repo_name)
 
         score: float = data.get("score", 0.0)
@@ -86,8 +87,8 @@ class OpenSSFScorecardCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "scorecard_exists": True,
             "score": round(score, 1),
             "max_score": 10.0,
@@ -96,16 +97,16 @@ class OpenSSFScorecardCollector(GitHubForge):
             "checks_passed": passed,
             "checks_na": na,
             "checks": check_details,
-            "scorecard_url": f"https://scorecard.dev/viewer/?uri=github.com/{owner}/{repo}",
+            "scorecard_url": f"https://scorecard.dev/viewer/?uri={self.forge.host}/{ref}",
         }
 
     def _no_scorecard_result(
-        self, repo_name: str, owner: str, repo: str
+        self, repo_name: str, ref: str
     ) -> Dict[str, Any]:
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "scorecard_exists": False,
             "score": None,
             "max_score": 10.0,
@@ -115,14 +116,14 @@ class OpenSSFScorecardCollector(GitHubForge):
             "checks_na": 0,
             "checks": {},
             "scorecard_url": None,
-            "recommendation": f"Run Scorecard via: https://scorecard.dev/viewer/?uri=github.com/{owner}/{repo}",
+            "recommendation": f"Run Scorecard via: https://scorecard.dev/viewer/?uri={self.forge.host}/{ref}",
         }
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "scorecard_exists": False,
             "score": None,
             "max_score": 10.0,

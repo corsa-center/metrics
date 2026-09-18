@@ -43,11 +43,17 @@ def _is_bot_login(login: str) -> bool:
 class GitHubForge:
     """Provides shared GitHub API utilities for ecosystem/quality collectors."""
 
-    #: Short platform identifier some external services (Codecov, OpenSSF
-    #: Scorecard) key their own URLs by, independent of this forge's own
-    #: API shape. Collectors that call such a service read this instead of
-    #: assuming "github" themselves.
+    #: Short platform identifier some external services (Codecov) key their
+    #: own URLs by, independent of this forge's own API shape. Collectors
+    #: that call such a service read this instead of assuming "github".
     platform = "github"
+
+    #: The code-hosting website's hostname -- distinct from the API host
+    #: (api.github.com), needed by external services (OpenSSF Scorecard)
+    #: that key their URLs by it. GitLab's web and API hosts are normally
+    #: the same value; GitHub's are not, hence keeping this separate from
+    #: api_base rather than deriving one from the other.
+    host = "github.com"
 
     def __init__(self, github_token: Optional[str] = None):
         if github_token:
