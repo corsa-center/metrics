@@ -17,7 +17,6 @@ project as unlicensed.
 """
 
 import asyncio
-import base64
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -67,26 +66,28 @@ _ZENODO_PATHS = [".zenodo.json", "zenodo.json"]
 _CITATION_FIELDS = ["title", "authors", "version", "license", "repository-code", "doi"]
 
 
-class FairLicensingCollector(GitHubForge):
+class FairLicensingCollector:
     """Collects FAIR compliance and license-exception signals (Section 4.2.2)."""
+
+    def __init__(self, forge: GitHubForge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting FAIR and licensing detail for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
-                self._get_license(client, owner, repo),
-                self._get_citation(client, owner, repo),
-                self._any_exists(client, owner, repo, _CODEMETA_PATHS),
-                self._any_exists(client, owner, repo, _ZENODO_PATHS),
-                self._has_releases(client, owner, repo),
+                self._get_license(client, ref),
+                self._get_citation(client, ref),
+                self._any_exists(client, ref, _CODEMETA_PATHS),
+                self._any_exists(client, ref, _ZENODO_PATHS),
+                self._has_releases(client, ref),
                 return_exceptions=True,
             )
 
@@ -121,8 +122,8 @@ class FairLicensingCollector(GitHubForge):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "license_exceptions": exceptions,
             "citation_metadata": metadata,
             "fair": fair,
@@ -132,25 +133,22 @@ class FairLicensingCollector(GitHubForge):
     # ------------------------------------------------------------------ fetch
 
     async def _get_license(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """SPDX id from the API plus the raw licence text. Returns (data, saw_gap)."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/license")
+        data = await self.forge.license(client, ref)
         if data is COLLECTION_GAP:
             return {"spdx_id": None, "text": ""}, True
         if data is None:
             return {"spdx_id": None, "text": ""}, False
-        text = ""
-        if data.get("content"):
-            text = base64.b64decode(data["content"]).decode("utf-8", "replace")
         return {
-            "spdx_id": (data.get("license") or {}).get("spdx_id"),
-            "name": (data.get("license") or {}).get("name"),
-            "text": text,
+            "spdx_id": data["spdx_id"],
+            "name": data["name"],
+            "text": data["text"],
         }, False
 
     async def _get_citation(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Parsed CITATION.cff, or an empty dict if absent or unparseable.
 
@@ -158,16 +156,13 @@ class FairLicensingCollector(GitHubForge):
         """
         saw_gap = False
         for path in _CITATION_PATHS:
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-            )
-            if data is COLLECTION_GAP:
+            text = await self.forge.file_content(client, ref, path)
+            if text is COLLECTION_GAP:
                 saw_gap = True
                 continue
-            if data is None:
+            if text is None:
                 continue
             try:
-                text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
                 parsed = yaml.safe_load(text)
                 if isinstance(parsed, dict):
                     return parsed, saw_gap
@@ -176,12 +171,12 @@ class FairLicensingCollector(GitHubForge):
         return {}, saw_gap
 
     async def _any_exists(
-        self, client: httpx.AsyncClient, owner: str, repo: str, paths: List[str]
+        self, client: httpx.AsyncClient, ref: str, paths: List[str]
     ) -> tuple:
         """Returns (found, saw_gap)."""
         saw_gap = False
         for path in paths:
-            result = await self._check_file_exists(client, owner, repo, path)
+            result = await self.forge.file_exists(client, ref, path)
             if result is COLLECTION_GAP:
                 saw_gap = True
                 continue
@@ -190,13 +185,10 @@ class FairLicensingCollector(GitHubForge):
         return False, saw_gap
 
     async def _has_releases(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Returns (has_releases, saw_gap)."""
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
-            params={"per_page": 1},
-        )
+        data = await self.forge.releases(client, ref, per_page=1)
         if data is COLLECTION_GAP:
             return False, True
         return bool(data), False
@@ -423,7 +415,7 @@ class FairLicensingCollector(GitHubForge):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "license_exceptions": exceptions,
             "citation_metadata": metadata,
             "fair": fair,

@@ -221,7 +221,9 @@ class GitHubForge:
         """Detected license metadata, or None (no detected license) /
         COLLECTION_GAP.
 
-        Keys: file_path, html_url, size, download_url, spdx_id, key, name.
+        Keys: file_path, html_url, size, download_url, spdx_id, key, name,
+        text (decoded file content, already included in GitHub's response
+        at no extra request -- '' if absent for some reason).
         Distinct from repo_info()'s license sub-dict, which comes from a
         cheaper call but lacks file location/size -- this one is for
         collectors that need to fetch the license file's own content.
@@ -234,6 +236,9 @@ class GitHubForge:
         if data is COLLECTION_GAP or data is None:
             return data
         license_data = data.get("license") or {}
+        text = ""
+        if data.get("content"):
+            text = base64.b64decode(data["content"]).decode("utf-8", "replace")
         return {
             "file_path": data.get("name", "LICENSE"),
             "html_url": data.get("html_url", ""),
@@ -242,7 +247,18 @@ class GitHubForge:
             "spdx_id": license_data.get("spdx_id"),
             "key": license_data.get("key", "unknown"),
             "name": license_data.get("name", "Unknown"),
+            "text": text,
         }
+
+    async def file_content(self, client: httpx.AsyncClient, ref: str, path: str):
+        """Decoded text content of an arbitrary file, or None (confirmed
+        absent, including a path that's actually a directory) / COLLECTION_GAP."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{ref}/contents/{path}")
+        if data is COLLECTION_GAP:
+            return COLLECTION_GAP
+        if data is None or isinstance(data, list):
+            return None
+        return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
     async def readme(self, client: httpx.AsyncClient, ref: str):
         """Decoded README text, or None (confirmed absent) / COLLECTION_GAP."""

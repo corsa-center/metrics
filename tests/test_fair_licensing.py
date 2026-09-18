@@ -2,7 +2,6 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from forge.base import COLLECTION_GAP
 from collectors.ecosystem.fair_licensing import (
@@ -10,9 +9,42 @@ from collectors.ecosystem.fair_licensing import (
 )
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.license_result = None
+        self.file_content_results = {}
+        self.file_exists_results = {}
+        self.releases_result = []
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def license(self, client, ref):
+        return self.license_result
+
+    async def file_content(self, client, ref, path):
+        return self.file_content_results.get(path)
+
+    async def file_exists(self, client, ref, path):
+        return self.file_exists_results.get(path)
+
+    async def releases(self, client, ref, *, per_page=30, page=1):
+        return self.releases_result
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return FairLicensingCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return FairLicensingCollector(forge)
 
 
 HDF5_LICENSE = """Copyright Notice and License Terms for HDF5
@@ -285,52 +317,31 @@ class TestScoringGapHandling:
 
 
 class TestFetchGapHandling:
-    def test_get_license_gap_is_tracked(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_license(None, "o", "r")
-
-        data, saw_gap = asyncio.run(go())
+    def test_get_license_gap_is_tracked(self, collector, forge):
+        forge.license_result = COLLECTION_GAP
+        data, saw_gap = asyncio.run(collector._get_license(None, "o/r"))
         assert saw_gap is True
 
-    def test_get_citation_gap_with_no_find_is_tracked(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_citation(None, "o", "r")
-
-        citation, saw_gap = asyncio.run(go())
+    def test_get_citation_gap_with_no_find_is_tracked(self, collector, forge):
+        forge.file_content_results = {"CITATION.cff": COLLECTION_GAP}
+        citation, saw_gap = asyncio.run(collector._get_citation(None, "o/r"))
         assert citation == {}
         assert saw_gap is True
 
-    def test_any_exists_gap_with_no_find_is_tracked(self, collector):
-        async def fake_exists(client, owner, repo, path):
-            return COLLECTION_GAP
-
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._any_exists(None, "o", "r", _CODEMETA_PATHS)
-
-        found, saw_gap = asyncio.run(go())
+    def test_any_exists_gap_with_no_find_is_tracked(self, collector, forge):
+        forge.file_exists_results = {p: COLLECTION_GAP for p in _CODEMETA_PATHS}
+        found, saw_gap = asyncio.run(collector._any_exists(None, "o/r", _CODEMETA_PATHS))
         assert found is False
         assert saw_gap is True
 
-    def test_any_exists_found_does_not_need_gap_flag(self, collector):
-        async def fake_exists(client, owner, repo, path):
-            return "http://x"
-
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._any_exists(None, "o", "r", _CODEMETA_PATHS)
-
-        found, saw_gap = asyncio.run(go())
+    def test_any_exists_found_does_not_need_gap_flag(self, collector, forge):
+        forge.file_exists_results = {p: "http://x" for p in _CODEMETA_PATHS}
+        found, saw_gap = asyncio.run(collector._any_exists(None, "o/r", _CODEMETA_PATHS))
         assert found is True
         assert saw_gap is False
 
-    def test_has_releases_gap_is_tracked(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._has_releases(None, "o", "r")
-
-        has_releases, saw_gap = asyncio.run(go())
+    def test_has_releases_gap_is_tracked(self, collector, forge):
+        forge.releases_result = COLLECTION_GAP
+        has_releases, saw_gap = asyncio.run(collector._has_releases(None, "o/r"))
         assert has_releases is False
         assert saw_gap is True

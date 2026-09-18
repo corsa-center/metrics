@@ -608,7 +608,8 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "fair_licensing", package):
             try:
                 from collectors.ecosystem.fair_licensing import FairLicensingCollector
-                collector = FairLicensingCollector(github_token=github_token)
+                from forge.github import GitHubForge
+                collector = FairLicensingCollector(GitHubForge(github_token))
                 sub_results["fair_licensing"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"FAIR licensing collection failed for {package['name']}: {e}")
