@@ -1,0 +1,32 @@
+tests/test_cicd.py
+  s_72fde105c4df10::t_8ece81ad030817 4-5
+  s_72fde105c4df10::t_b62c01ed11f462 134-161
+tests/test_dev_tooling.py
+  s_72fde105c4df10::t_4b636d2184b153 149-156
+collectors/quality/accessibility.py
+  s_72fde105c4df10::t_782b8795204ad6 48
+collectors/quality/development_practices/ci_cd.py
+  s_72fde105c4df10::t_3640923cd73a6a 53
+  s_72fde105c4df10::t_cd7c502877fed0 398-415
+tests/test_accessibility.py
+  s_72fde105c4df10::t_3bbcda8914d13f 79-85
+  s_72fde105c4df10::t_0ee1459e6e5618 125
+collectors/quality/development_practices/dev_tooling.py
+  s_72fde105c4df10::t_82aec7df222284 26-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8cb02a81dee51fd8a9be4677b799cea1ddc5e381",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
