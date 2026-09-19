@@ -71,6 +71,15 @@ class TestCaseInsensitiveDetection:
         assert out["exists"] is False
         assert "not_collected" not in out
 
+    def test_rst_governance_doc_is_found(self, collector):
+        # github.com/AMReX-Codes/amrex documents governance at GOVERNANCE.rst
+        # (root of the repo) rather than .md -- an .md/.txt-only pattern
+        # list read this as "no governance doc" even though one exists.
+        index = {"governance.rst": _entry("GOVERNANCE.rst")}
+        out = collector._match_pattern(index, collector.GOVERNANCE_PATTERNS, "AMReX-Codes", "amrex")
+        assert out["exists"] is True
+        assert out["file_path"] == "GOVERNANCE.rst"
+
 
 class TestKeywordGroups:
     def _groups(self, collector, text):

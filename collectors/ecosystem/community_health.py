@@ -27,6 +27,7 @@ class CommunityHealthCollector:
     COC_PATTERNS = [
         "CODE_OF_CONDUCT.md",
         "CODE_OF_CONDUCT.txt",
+        "CODE_OF_CONDUCT.rst",
         "CODE-OF-CONDUCT.md",
         "code_of_conduct.md",
         "code-of-conduct.md",
@@ -34,15 +35,20 @@ class CommunityHealthCollector:
         "CoC.md",
         "CODE_OF_CONDUCT",
         "docs/CODE_OF_CONDUCT.md",
+        "docs/CODE_OF_CONDUCT.rst",
         ".github/CODE_OF_CONDUCT.md",
     ]
 
     GOVERNANCE_PATTERNS = [
         "GOVERNANCE.md",
         "GOVERNANCE.txt",
+        "GOVERNANCE.rst",
         "governance.md",
+        "governance.rst",
         "docs/GOVERNANCE.md",
         "docs/governance.md",
+        "docs/GOVERNANCE.rst",
+        "docs/governance.rst",
         ".github/GOVERNANCE.md",
         "GOVERNANCE",
         "project-governance.md",
@@ -52,10 +58,12 @@ class CommunityHealthCollector:
     CONTRIBUTING_PATTERNS = [
         "CONTRIBUTING.md",
         "CONTRIBUTING.txt",
+        "CONTRIBUTING.rst",
         "contributing.md",
         "CONTRIBUTING",
         "docs/CONTRIBUTING.md",
         "docs/contributing.md",
+        "docs/CONTRIBUTING.rst",
         ".github/CONTRIBUTING.md",
         "CONTRIBUTE.md",
         "contribute.md",
