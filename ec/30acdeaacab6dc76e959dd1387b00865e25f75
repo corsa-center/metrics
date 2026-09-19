@@ -1,0 +1,21 @@
+collectors/ecosystem/community_health.py
+  s_72fde105c4df10::t_9796344d471fbd 30,38,45,47,50-51,61,66
+tests/test_governance_analysis.py
+  s_72fde105c4df10::t_40652efebabcbe 74-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ec30acdeaacab6dc76e959dd1387b00865e25f75",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
