@@ -45,7 +45,7 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
             "environment.yaml",
         ],
         "Autoconf": ["configure.ac", "configure.in"],
-        "Makefile": ["Makefile", "makefile", "GNUmakefile"],
+        "Makefile": ["Makefile", "makefile", "GNUmakefile", "Makefile.in", "GNUmakefile.in"],
     },
     "python_packaging": {
         "pyproject.toml": ["pyproject.toml"],

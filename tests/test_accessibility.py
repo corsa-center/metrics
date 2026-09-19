@@ -76,6 +76,13 @@ class TestScan:
         assert result["has_portable_build_system"] is True
         assert "Spack" in result["categories"]["build_systems"]["found"]
 
+    def test_gnumakefile_in_template_detected(self, collector):
+        # AMReX-Codes/amrex ships GNUmakefile.in (a template for its custom
+        # GNU Make build) rather than a literal GNUmakefile/Makefile.
+        result = self._run_scan(collector, {"GNUmakefile.in"})
+        assert result["has_portable_build_system"] is True
+        assert "Makefile" in result["categories"]["build_systems"]["found"]
+
 
 class TestScanGapHandling:
     def _run_scan(self, collector, responses):
@@ -115,6 +122,7 @@ class TestScanGapHandling:
             "CMakeLists.txt", "package.py", "spack/package.py",
             "meta.yaml", "conda/meta.yaml", "recipe/meta.yaml", "environment.yml", "environment.yaml",
             "configure.ac", "configure.in", "Makefile", "makefile", "GNUmakefile",
+            "Makefile.in", "GNUmakefile.in",
             "pyproject.toml", "setup.py", "setup.cfg",
             "INSTALL", "INSTALL.md", "INSTALL.rst", "INSTALL.txt",
         ] for p in [items]}

@@ -1,6 +1,8 @@
 """Unit tests for CICDMetricsCollector pure computation methods."""
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
+
 from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
 
 
@@ -129,3 +131,31 @@ class TestCalculateScore:
         result = collector._calculate_score(r)
         assert result["score"] == result["max_score"]
         assert result["percentage"] == 100.0
+
+
+# ------------------------------------------------------------------ #
+# _get_default_branch                                                  #
+# ------------------------------------------------------------------ #
+
+class TestGetDefaultBranch:
+    @pytest.mark.asyncio
+    async def test_uses_repo_default_branch(self, collector):
+        # AMReX-Codes/amrex works on "development" and has zero workflow
+        # runs on a branch literally named "main" -- a hardcoded "main"
+        # default silently read that as "no CI data".
+        client = MagicMock()
+        response = MagicMock()
+        response.json.return_value = {"default_branch": "development"}
+        response.raise_for_status = MagicMock()
+        client.get = AsyncMock(return_value=response)
+
+        branch = await collector._get_default_branch(client, "https://api.github.com/repos/AMReX-Codes/amrex")
+        assert branch == "development"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_main_on_error(self, collector):
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=Exception("network error"))
+
+        branch = await collector._get_default_branch(client, "https://api.github.com/repos/o/r")
+        assert branch == "main"

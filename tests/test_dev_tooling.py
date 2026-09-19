@@ -146,6 +146,14 @@ class TestScanGapHandling:
         result = self._run(collector, responses)
         assert "pytest configuration" in result["found"]
 
+    def test_capitalized_tests_directory_is_found(self, collector):
+        # GitHub's Contents API is case-sensitive; AMReX-Codes/amrex's test
+        # directory is "Tests" (capitalized), which lowercase-only patterns
+        # never match even though a real test suite is right there.
+        responses = {"Tests": "http://x"}
+        result = self._run(collector, responses)
+        assert "Test suite directory" in result["found"]
+
 
 class TestAnalyzeReviewCoverageGapHandling:
     def _run(self, collector, github_get_side_effect):

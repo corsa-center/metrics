@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 
 # Test layout and framework configuration, grouped so any variant counts once.
 _TESTING_PATHS = {
-    "Test suite directory": ["test", "tests", "testing", "src/test"],
+    # GitHub's Contents API is case-sensitive, so both casings are listed
+    # explicitly -- AMReX-Codes/amrex's top-level directory is "Tests"
+    # (capitalized), which "tests" alone never matches.
+    "Test suite directory": ["test", "tests", "Test", "Tests", "testing", "Testing", "src/test"],
     "CTest / CMake testing": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
     "pytest configuration": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
     "Test framework vendored": [

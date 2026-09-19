@@ -46,11 +46,11 @@ class CICDMetricsCollector:
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """Collect all CI/CD metrics for a package and return a scored result."""
         repo_url = self._parse_repo_url(package.get("repo_url", ""))
-        branch = package.get("repo_branch", "main")
 
         logger.info(f"Beginning CI/CD metric collection for {package.get('name')}")
 
         async with httpx.AsyncClient(transport=RetryingTransport()) as client:
+            branch = package.get("repo_branch") or await self._get_default_branch(client, repo_url)
             (
                 exec_time,
                 workflow_success,
@@ -394,6 +394,24 @@ class CICDMetricsCollector:
         except Exception as e:
             logger.error(f"Error fetching workflow runs: {e}")
             return []
+
+    async def _get_default_branch(self, client: httpx.AsyncClient, repo_url: str) -> str:
+        """The repo's actual default branch, falling back to "main" only if
+        it can't be determined.
+
+        Workflow-run queries scoped to a hardcoded "main" silently return
+        zero runs for any repo whose default branch is named something else
+        -- AMReX-Codes/amrex, for one, works on "development" and has zero
+        runs on a branch literally named "main", which read as "no CI data"
+        instead of the ~64k real runs it actually has.
+        """
+        try:
+            resp = await client.get(repo_url, headers=self.headers)
+            resp.raise_for_status()
+            return resp.json().get("default_branch") or "main"
+        except Exception as e:
+            logger.error(f"Error fetching default branch for {repo_url}: {e}")
+            return "main"
 
     def _parse_repo_url(self, repo_url: str) -> str:
         """Return the GitHub REST API base URL for a repository.
