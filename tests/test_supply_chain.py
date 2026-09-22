@@ -7,7 +7,10 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
-from collectors.quality.supply_chain import SupplyChainCollector, _parse_pinned_pypi_deps
+from collectors.quality.supply_chain import (
+    SupplyChainCollector, _parse_pinned_pypi_deps, _parse_uv_lock,
+    _parse_poetry_lock, _parse_cargo_lock,
+)
 
 
 @pytest.fixture
@@ -265,7 +268,7 @@ class TestQueryOsvBatch:
 
     def test_no_vulnerabilities_returns_empty(self, collector):
         client = self._client(200, {"results": [{}]})
-        result = asyncio.run(collector._query_osv_batch(client, [("numpy", "1.24.0")]))
+        result = asyncio.run(collector._query_osv_batch(client, [("PyPI", "numpy", "1.24.0")]))
         assert result == []
 
     def test_vulnerable_dependency_returned(self, collector):
@@ -273,18 +276,24 @@ class TestQueryOsvBatch:
             {"vulns": [{"id": "GHSA-xxxx"}]},
             {},
         ]})
-        deps = [("requests", "2.6.0"), ("numpy", "1.24.0")]
+        deps = [("PyPI", "requests", "2.6.0"), ("PyPI", "numpy", "1.24.0")]
         result = asyncio.run(collector._query_osv_batch(client, deps))
-        assert result == [("requests", "2.6.0")]
+        assert result == [("PyPI", "requests", "2.6.0")]
+
+    def test_multiple_ecosystems_in_one_batch(self, collector):
+        client = self._client(200, {"results": [{}, {"vulns": [{"id": "GHSA-yyyy"}]}]})
+        deps = [("PyPI", "numpy", "1.24.0"), ("crates.io", "serde", "1.0.0")]
+        result = asyncio.run(collector._query_osv_batch(client, deps))
+        assert result == [("crates.io", "serde", "1.0.0")]
 
     def test_non_200_is_a_gap(self, collector):
         client = self._client(500)
-        result = asyncio.run(collector._query_osv_batch(client, [("numpy", "1.24.0")]))
+        result = asyncio.run(collector._query_osv_batch(client, [("PyPI", "numpy", "1.24.0")]))
         assert result is COLLECTION_GAP
 
     def test_network_exception_is_a_gap(self, collector):
         client = self._client(None, side_effect=httpx.ConnectError("boom"))
-        result = asyncio.run(collector._query_osv_batch(client, [("numpy", "1.24.0")]))
+        result = asyncio.run(collector._query_osv_batch(client, [("PyPI", "numpy", "1.24.0")]))
         assert result is COLLECTION_GAP
 
     def test_empty_deps_list(self, collector):
@@ -300,13 +309,13 @@ class TestCheckDependencyVulnerabilities:
         )
         assert result["not_collected"] is True
 
-    def test_no_requirements_txt_passes(self, collector):
+    def test_no_lockfile_passes(self, collector):
         tree = RepoTree("o", "r", ["README.md"], truncated=False)
         result = asyncio.run(
             collector._check_dependency_vulnerabilities(None, "o", "r", tree)
         )
         assert result["passing"] is True
-        assert "No requirements.txt" in result["value"]
+        assert "No dependency lockfile" in result["value"]
 
     def test_nested_requirements_txt_not_matched(self, collector):
         # docs/requirements.txt is Sphinx tooling, not the project's own
@@ -316,7 +325,7 @@ class TestCheckDependencyVulnerabilities:
             collector._check_dependency_vulnerabilities(None, "o", "r", tree)
         )
         assert result["passing"] is True
-        assert "No requirements.txt" in result["value"]
+        assert "No dependency lockfile" in result["value"]
 
     def test_clean_scan_passes(self, collector):
         tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
@@ -344,7 +353,7 @@ class TestCheckDependencyVulnerabilities:
             return {"content": content}
 
         async def fake_batch(client, deps):
-            return [("requests", "2.6.0")]
+            return [("PyPI", "requests", "2.6.0")]
 
         with patch.object(collector, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
@@ -352,7 +361,7 @@ class TestCheckDependencyVulnerabilities:
                 collector._check_dependency_vulnerabilities(None, "o", "r", tree)
             )
         assert result["passing"] is False
-        assert result["detail"] == ["requests==2.6.0"]
+        assert result["detail"] == ["requests==2.6.0 (PyPI)"]
 
     def test_no_pinned_deps_still_passes(self, collector):
         tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
@@ -366,7 +375,7 @@ class TestCheckDependencyVulnerabilities:
                 collector._check_dependency_vulnerabilities(None, "o", "r", tree)
             )
         assert result["passing"] is True
-        assert "no exactly-pinned dependencies" in result["value"]
+        assert "no exactly-pinned/registry dependencies" in result["value"]
 
     def test_content_fetch_gap_is_not_collected(self, collector):
         tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
@@ -396,3 +405,166 @@ class TestCheckDependencyVulnerabilities:
                 collector._check_dependency_vulnerabilities(None, "o", "r", tree)
             )
         assert result["not_collected"] is True
+
+    def test_multiple_lockfiles_merged_into_one_query(self, collector):
+        # A repo can pin dependencies more than one way -- Python bindings
+        # via requirements.txt alongside a Rust component's Cargo.lock.
+        tree = RepoTree("o", "r", ["requirements.txt", "Cargo.lock"], truncated=False)
+        py_content = base64.b64encode(b"numpy==1.24.0\n").decode()
+        cargo_content = base64.b64encode(
+            b'[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+            b'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        ).decode()
+
+        async def fake_get(client, url, params=None):
+            if "requirements.txt" in url:
+                return {"content": py_content}
+            return {"content": cargo_content}
+
+        seen = []
+
+        async def fake_batch(client, deps):
+            seen.extend(deps)
+            return []
+
+        with patch.object(collector, "_github_get", side_effect=fake_get), \
+             patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        assert result["passing"] is True
+        assert set(seen) == {("PyPI", "numpy", "1.24.0"), ("crates.io", "serde", "1.0.0")}
+
+    def test_a_positive_finding_stands_despite_a_gap_on_another_lockfile(self, collector):
+        tree = RepoTree("o", "r", ["requirements.txt", "Cargo.lock"], truncated=False)
+        py_content = base64.b64encode(b"requests==2.6.0\n").decode()
+
+        async def fake_get(client, url, params=None):
+            if "requirements.txt" in url:
+                return {"content": py_content}
+            return COLLECTION_GAP  # Cargo.lock content fetch fails
+
+        async def fake_batch(client, deps):
+            return [("PyPI", "requests", "2.6.0")]
+
+        with patch.object(collector, "_github_get", side_effect=fake_get), \
+             patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        assert result["passing"] is False
+        assert "not_collected" not in result
+
+    def test_clean_result_with_a_gap_on_another_lockfile_is_not_collected(self, collector):
+        tree = RepoTree("o", "r", ["requirements.txt", "Cargo.lock"], truncated=False)
+        py_content = base64.b64encode(b"numpy==1.24.0\n").decode()
+
+        async def fake_get(client, url, params=None):
+            if "requirements.txt" in url:
+                return {"content": py_content}
+            return COLLECTION_GAP
+
+        async def fake_batch(client, deps):
+            return []
+
+        with patch.object(collector, "_github_get", side_effect=fake_get), \
+             patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        # A clean scan of requirements.txt alone can't stand in for the
+        # Cargo.lock that couldn't be read -- it might have held the issue.
+        assert result["not_collected"] is True
+
+
+class TestParseUvLock:
+    def test_registry_sourced_package_included(self):
+        text = (
+            '[[package]]\nname = "requests"\nversion = "2.31.0"\n'
+            'source = { registry = "https://pypi.org/simple" }\n'
+        )
+        assert _parse_uv_lock(text) == [("requests", "2.31.0")]
+
+    def test_path_sourced_package_excluded(self):
+        text = (
+            '[[package]]\nname = "mypkg"\nversion = "0.1.0"\n'
+            'source = { editable = "." }\n'
+        )
+        assert _parse_uv_lock(text) == []
+
+    def test_git_sourced_package_excluded(self):
+        text = (
+            '[[package]]\nname = "mypkg"\nversion = "0.1.0"\n'
+            'source = { git = "https://github.com/foo/bar" }\n'
+        )
+        assert _parse_uv_lock(text) == []
+
+    def test_invalid_toml_returns_empty(self):
+        assert _parse_uv_lock("not valid toml {{{") == []
+
+    def test_no_package_table_returns_empty(self):
+        assert _parse_uv_lock("version = 1\n") == []
+
+
+class TestParsePoetryLock:
+    def test_default_source_is_a_registry_package(self):
+        # poetry.lock only records [package.source] for git/url/directory/
+        # file dependencies -- its ABSENCE means a normal PyPI package.
+        text = '[[package]]\nname = "requests"\nversion = "2.31.0"\n'
+        assert _parse_poetry_lock(text) == [("requests", "2.31.0")]
+
+    def test_legacy_index_source_still_included(self):
+        text = (
+            '[[package]]\nname = "requests"\nversion = "2.31.0"\n'
+            '[package.source]\ntype = "legacy"\nurl = "https://example.com/simple"\n'
+        )
+        assert _parse_poetry_lock(text) == [("requests", "2.31.0")]
+
+    def test_git_source_excluded(self):
+        text = (
+            '[[package]]\nname = "mypkg"\nversion = "0.1.0"\n'
+            '[package.source]\ntype = "git"\nurl = "https://github.com/foo/bar"\n'
+        )
+        assert _parse_poetry_lock(text) == []
+
+    def test_directory_source_excluded(self):
+        text = (
+            '[[package]]\nname = "mypkg"\nversion = "0.1.0"\n'
+            '[package.source]\ntype = "directory"\nurl = "./local"\n'
+        )
+        assert _parse_poetry_lock(text) == []
+
+    def test_invalid_toml_returns_empty(self):
+        assert _parse_poetry_lock("not valid toml {{{") == []
+
+
+class TestParseCargoLock:
+    def test_registry_sourced_package_included(self):
+        text = (
+            '[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+            'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        )
+        assert _parse_cargo_lock(text) == [("serde", "1.0.0")]
+
+    def test_workspace_crate_with_no_source_excluded(self):
+        # The workspace's own crates have no source field at all.
+        text = '[[package]]\nname = "my-local-crate"\nversion = "0.1.0"\n'
+        assert _parse_cargo_lock(text) == []
+
+    def test_git_sourced_package_excluded(self):
+        text = (
+            '[[package]]\nname = "mycrate"\nversion = "0.1.0"\n'
+            'source = "git+https://github.com/foo/bar#abc123"\n'
+        )
+        assert _parse_cargo_lock(text) == []
+
+    def test_invalid_toml_returns_empty(self):
+        assert _parse_cargo_lock("not valid toml {{{") == []
+
+    def test_multiple_packages(self):
+        text = (
+            '[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+            'source = "registry+https://github.com/rust-lang/crates.io-index"\n\n'
+            '[[package]]\nname = "local-crate"\nversion = "0.1.0"\n'
+        )
+        assert _parse_cargo_lock(text) == [("serde", "1.0.0")]

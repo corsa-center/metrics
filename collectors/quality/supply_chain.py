@@ -9,20 +9,19 @@ distribution pipeline:
   - Build Provenance              : a SLSA / in-toto attestation published
                                      alongside a release
   - Dependency Vulnerability Posture : known vulnerabilities in the
-                                     project's own pinned Python
-                                     dependencies, via OSV.dev's free batch
-                                     query API -- no Dependabot alert access
-                                     needed on the target repo, unlike
-                                     GitHub's own vulnerability-alerts API.
-                                     Coverage is real but narrow: only
-                                     requirements.txt-pinned PyPI packages
-                                     with an exact == version are checked.
-                                     Other ecosystems (Cargo.lock,
-                                     poetry.lock, go.sum, ...) aren't parsed
-                                     yet -- requirements.txt alone covers
-                                     the most of this portfolio (25 of 71
-                                     tracked repos have one; 9 pin it at the
-                                     repository root).
+                                     project's own pinned dependencies, via
+                                     OSV.dev's free batch query API -- no
+                                     Dependabot alert access needed on the
+                                     target repo, unlike GitHub's own
+                                     vulnerability-alerts API. Reads four
+                                     lockfile shapes, root-level only:
+                                     requirements.txt (PyPI, exact == pins
+                                     only), uv.lock and poetry.lock (PyPI,
+                                     registry-sourced packages), and
+                                     Cargo.lock (crates.io, registry+
+                                     sourced packages). go.sum, Pipfile.lock
+                                     and package-lock.json aren't parsed
+                                     yet. See _LOCKFILE_SPECS.
 
 Dependency Freshness (libyears) is not collected here: it needs a
 machine-readable dependency manifest with enough history to compute a lag,
@@ -41,6 +40,7 @@ import base64
 import httpx
 import logging
 import re
+import tomllib
 from typing import Any, Dict, List, Optional, Tuple
 
 from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
@@ -69,6 +69,9 @@ _RELEASES_SAMPLE = 5
 # elsewhere, since flagging a stale Sphinx theme pin as a "supply chain"
 # finding would be noise, not signal.
 _REQUIREMENTS_TXT_PATHS = ["requirements.txt", "requirements/requirements.txt"]
+_UV_LOCK_PATHS = ["uv.lock"]
+_POETRY_LOCK_PATHS = ["poetry.lock"]
+_CARGO_LOCK_PATHS = ["Cargo.lock"]
 
 # An exactly-pinned PyPI requirement line: name[extras]==version, with an
 # optional environment marker or comment already stripped by the caller.
@@ -97,6 +100,79 @@ def _parse_pinned_pypi_deps(text: str) -> List[Tuple[str, str]]:
         if match:
             deps.append((match.group(1), match.group(2)))
     return deps
+
+
+def _parse_uv_lock(text: str) -> List[Tuple[str, str]]:
+    """(name, version) pairs for uv.lock packages sourced from a plain PyPI
+    registry. uv.lock records `source = { registry = "..." }` for a normal
+    published package and `{ path = ... }` / `{ git = ... }` / `{ editable =
+    ... }` / `{ virtual = ... }` for anything else -- only the registry
+    shape names a real, queryable release.
+    """
+    try:
+        data = tomllib.loads(text)
+    except Exception as e:
+        logger.debug(f"Could not parse uv.lock: {e}")
+        return []
+    deps = []
+    for pkg in data.get("package", []):
+        name, version, source = pkg.get("name"), pkg.get("version"), pkg.get("source")
+        if name and version and isinstance(source, dict) and "registry" in source:
+            deps.append((name, version))
+    return deps
+
+
+def _parse_poetry_lock(text: str) -> List[Tuple[str, str]]:
+    """(name, version) pairs for poetry.lock packages from a standard (or
+    legacy custom-index) PyPI source. Unlike uv.lock, poetry.lock only
+    records a [package.source] table at all for git/url/directory/file
+    dependencies -- its *absence* is what marks a normal registry package,
+    the reverse of uv.lock's convention.
+    """
+    try:
+        data = tomllib.loads(text)
+    except Exception as e:
+        logger.debug(f"Could not parse poetry.lock: {e}")
+        return []
+    deps = []
+    for pkg in data.get("package", []):
+        name, version = pkg.get("name"), pkg.get("version")
+        source_type = pkg.get("source", {}).get("type")
+        if name and version and source_type not in {"git", "url", "directory", "file"}:
+            deps.append((name, version))
+    return deps
+
+
+def _parse_cargo_lock(text: str) -> List[Tuple[str, str]]:
+    """(name, version) pairs for Cargo.lock packages from the public
+    crates.io registry. A path or git dependency (or one of the workspace's
+    own crates) has no "registry+" source string -- either a different
+    source form or no source field at all -- and is skipped.
+    """
+    try:
+        data = tomllib.loads(text)
+    except Exception as e:
+        logger.debug(f"Could not parse Cargo.lock: {e}")
+        return []
+    deps = []
+    for pkg in data.get("package", []):
+        name, version, source = pkg.get("name"), pkg.get("version"), pkg.get("source")
+        if name and version and isinstance(source, str) and source.startswith("registry+"):
+            deps.append((name, version))
+    return deps
+
+
+# (OSV ecosystem, root-level candidate paths, parser) for every lockfile
+# shape this checks. All four happen to overlap with reproducibility.py's
+# own "dependency_pinning" candidates, but each needs its own parser --
+# requirements.txt is line-oriented, the rest are TOML with three different
+# conventions for telling a registry package apart from a git/path/url one.
+_LOCKFILE_SPECS: List[Tuple[str, List[str], Any]] = [
+    ("PyPI", _REQUIREMENTS_TXT_PATHS, _parse_pinned_pypi_deps),
+    ("PyPI", _UV_LOCK_PATHS, _parse_uv_lock),
+    ("PyPI", _POETRY_LOCK_PATHS, _parse_poetry_lock),
+    ("crates.io", _CARGO_LOCK_PATHS, _parse_cargo_lock),
+]
 
 
 class SupplyChainCollector(GitHubCollectorBase):
@@ -192,67 +268,92 @@ class SupplyChainCollector(GitHubCollectorBase):
         self, client: httpx.AsyncClient, owner: str, repo: str, tree
     ) -> Dict[str, Any]:
         """Dependency Vulnerability Posture: known vulnerabilities in the
-        project's exactly-pinned PyPI dependencies, via OSV.dev's free,
-        unauthenticated batch query API -- no Dependabot alert access needed
-        on the target repo, unlike GitHub's own vulnerability-alerts API.
+        project's own pinned dependencies, via OSV.dev's free, unauthenticated
+        batch query API -- no Dependabot alert access needed on the target
+        repo, unlike GitHub's own vulnerability-alerts API.
+
+        Every lockfile shape in _LOCKFILE_SPECS present at the repository
+        root is read and merged into one query; a repo can have more than
+        one (Python bindings pinned via requirements.txt alongside a Rust
+        component's Cargo.lock, say). A gap fetching one file doesn't lose
+        the ones that were read successfully -- same "a positive finding
+        stands regardless of gaps elsewhere" convention as everywhere else
+        in this codebase -- but if nothing was found across the files that
+        DID come back clean, and something else gapped, that's reported as
+        not_collected rather than a confident "no vulnerabilities".
         """
         if tree is COLLECTION_GAP:
             return {"label": "Dependency Vulnerability Posture", "value": None,
                     "passing": False, "not_collected": True}
 
-        path = tree.match(_REQUIREMENTS_TXT_PATHS)
-        if not path:
+        found_files: List[str] = []
+        all_deps: List[Tuple[str, str, str]] = []
+        saw_gap = False
+        for ecosystem, paths, parser in _LOCKFILE_SPECS:
+            path = tree.match(paths)
+            if not path:
+                continue
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+            )
+            if data is COLLECTION_GAP:
+                saw_gap = True
+                continue
+            if data is None:
+                continue
+            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+            found_files.append(path)
+            all_deps.extend((ecosystem, name, version) for name, version in parser(text))
+
+        if not found_files:
+            if saw_gap:
+                return {"label": "Dependency Vulnerability Posture", "value": None,
+                        "passing": False, "not_collected": True}
             return {
                 "label": "Dependency Vulnerability Posture", "passing": True,
-                "value": "No requirements.txt at the repository root",
+                "value": "No dependency lockfile found at the repository root",
             }
 
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        )
-        if data is COLLECTION_GAP:
+        if not all_deps:
+            return {
+                "label": "Dependency Vulnerability Posture", "passing": True,
+                "value": f"{', '.join(found_files)} has no exactly-pinned/registry "
+                         f"dependencies to check",
+                "detail": found_files,
+            }
+
+        vulnerable = await self._query_osv_batch(client, all_deps)
+        if vulnerable is COLLECTION_GAP:
             return {"label": "Dependency Vulnerability Posture", "value": None,
                     "passing": False, "not_collected": True}
-        if data is None:
-            return {
-                "label": "Dependency Vulnerability Posture", "passing": True,
-                "value": "No requirements.txt at the repository root",
-            }
-
-        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
-        deps = _parse_pinned_pypi_deps(text)
-        if not deps:
-            return {
-                "label": "Dependency Vulnerability Posture", "passing": True,
-                "value": f"{path} has no exactly-pinned dependencies to check",
-                "detail": path,
-            }
-
-        vulnerable = await self._query_osv_batch(client, deps)
-        if vulnerable is COLLECTION_GAP:
+        if not vulnerable and saw_gap:
+            # Confirmed clean among what was read, but another lockfile's
+            # content fetch failed -- it could be hiding the real answer.
             return {"label": "Dependency Vulnerability Posture", "value": None,
                     "passing": False, "not_collected": True}
 
         return {
             "label": "Dependency Vulnerability Posture",
             "passing": not vulnerable,
-            "value": f"{len(vulnerable)} of {len(deps)} pinned dependencies "
+            "value": f"{len(vulnerable)} of {len(all_deps)} pinned dependencies "
                      f"have a known vulnerability",
-            "detail": sorted(f"{name}=={version}" for name, version in vulnerable) or None,
+            "detail": sorted(f"{name}=={version} ({ecosystem})" for ecosystem, name, version in vulnerable)
+                      or None,
         }
 
     async def _query_osv_batch(
-        self, client: httpx.AsyncClient, deps: List[Tuple[str, str]]
+        self, client: httpx.AsyncClient, deps: List[Tuple[str, str, str]]
     ):
-        """(name, version) pairs with at least one known OSV vulnerability,
-        or COLLECTION_GAP if the query itself failed. A dep absent from the
-        result had a confirmed-clean scan, same as every other pair not
-        returned. Severity isn't fetched -- OSV.dev's batch endpoint returns
-        only vulnerability IDs, and a second round of per-ID lookups for
-        detail isn't worth it for a boolean pass/fail sub-metric.
+        """(ecosystem, name, version) triples with at least one known OSV
+        vulnerability, or COLLECTION_GAP if the query itself failed. A dep
+        absent from the result had a confirmed-clean scan, same as every
+        other triple not returned. Severity isn't fetched -- OSV.dev's batch
+        endpoint returns only vulnerability IDs, and a second round of
+        per-ID lookups for detail isn't worth it for a boolean pass/fail
+        sub-metric.
         """
-        queries = [{"package": {"name": name, "ecosystem": "PyPI"}, "version": version}
-                   for name, version in deps]
+        queries = [{"package": {"name": name, "ecosystem": ecosystem}, "version": version}
+                   for ecosystem, name, version in deps]
         try:
             resp = await client.post(_OSV_BATCH_URL, json={"queries": queries})
         except Exception as e:

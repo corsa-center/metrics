@@ -446,7 +446,7 @@ All ten require running benchmarks on target hardware, profiling
 |---|---|---|---|
 | SBOM Detection and Validation | ✅ | an SPDX/CycloneDX-named file found at the repo root, or among the last 5 releases' assets | filename matching only — no SBOM content is parsed or validated |
 | Build Provenance Assessment | ✅ | a SLSA/in-toto-attestation-named file found among the last 5 releases' assets | filename matching only |
-| Dependency Vulnerability Posture | ✅ | no exactly-`==`-pinned dependency in `requirements.txt` has a known OSV.dev vulnerability | [OSV.dev](https://osv.dev) batch query API — free, unauthenticated, no Dependabot alert access needed on the target repo |
+| Dependency Vulnerability Posture | ✅ | no pinned dependency in `requirements.txt`, `uv.lock`, `poetry.lock`, or `Cargo.lock` has a known OSV.dev vulnerability | [OSV.dev](https://osv.dev) batch query API — free, unauthenticated, no Dependabot alert access needed on the target repo |
 | Dependency Freshness (libyears) | 🔲 | — | needs a machine-readable dependency manifest with enough history to compute a lag, not just pinned versions |
 | Badge and Scorecard Level | ✅ | not independently scored — display-only, read from the 4.2 OpenSSF Badge / Scorecard collectors | passthrough, not re-fetched |
 
@@ -462,20 +462,34 @@ small hint list (`sbom`, `spdx`, `cyclonedx`, `intoto`, `slsa`, `.sigstore`,
 …) — no SBOM/attestation content is parsed or validated against the
 SPDX/CycloneDX/SLSA specs.
 
-**Dependency Vulnerability Posture's coverage is real but narrow.** Only a
-root-level `requirements.txt` is read, and only lines pinned with an exact
-`==` are checked — OSV.dev's query API takes a single version, not a range,
-so `numpy>=1.20` names a real dependency the check can't evaluate. Nested
-`requirements.txt` files (`docs/requirements.txt`, CI-tooling pins,
-test-only pins) are deliberately not matched, since a stale Sphinx theme
-version isn't a supply-chain finding the way a stale runtime dependency is.
-Lockfiles for other ecosystems (`Cargo.lock`, `poetry.lock`, `go.sum`, …)
-aren't parsed yet. Of the 71 tracked repositories, 25 have a
-`requirements.txt` somewhere and 9 pin it at the repository root — this
-check found a real, currently unpatched **CRITICAL** remote-code-execution
-vulnerability
+**Dependency Vulnerability Posture's coverage is real but narrow.** Four
+lockfile shapes are read, all at the repository root only, all resolved
+against `RepoTree`: `requirements.txt` (PyPI, only exact `==` pins — OSV.dev's
+query API takes a single version, not a range, so `numpy>=1.20` names a real
+dependency the check can't evaluate), `uv.lock` (PyPI, packages sourced from
+a plain registry), `poetry.lock` (PyPI, everything except a recorded
+git/url/directory/file source), and `Cargo.lock` (crates.io, only
+`registry+`-sourced packages). A repo with more than one is fully supported —
+findings are merged into a single query. Nested lockfiles anywhere other than
+the root (`docs/requirements.txt`, a sub-package's own `poetry.lock`,
+CI-tooling pins) are deliberately not matched, since a stale doc-theme or
+sub-tool pin isn't a supply-chain finding the way a stale runtime dependency
+is. Other ecosystems (`go.sum`, `Pipfile.lock`, `package-lock.json`, …) aren't
+parsed yet.
+
+Of the 71 tracked repositories, 9 pin `requirements.txt` at the repository
+root and 1 has a root-level `uv.lock` — this check found two real, currently
+unpatched vulnerabilities during development: a **CRITICAL**
+remote-code-execution in `torch==2.2.0+cu118`
 ([GHSA-53q9-r3pm-6pq6](https://github.com/advisories/GHSA-53q9-r3pm-6pq6))
-in one of those 9 during development.
+pinned via `requirements.txt`, and 3 vulnerable packages (`pillow`,
+`setuptools`, `torch`) pinned via `uv.lock`. No portfolio repository
+currently has a root-level `Cargo.lock` or `poetry.lock` — both parsers are
+verified against real, unmodified files from other projects
+(`python-poetry/poetry`'s own `poetry.lock`, 69 packages; a Rust tool
+bundled in `StanfordLegion/legion`'s `Cargo.lock`, 659 packages) rather than
+synthetic fixtures, so the capability is ready the moment a tracked project
+adopts either format at its root.
 
 ### 4.1.1 / 4.2.7 additions: downloads and reverse dependencies
 
