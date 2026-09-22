@@ -157,6 +157,15 @@ class TestFindDocDirectoryGapHandling:
         assert path == "docs"
         assert saw_gap is False
 
+    def test_capitalized_docs_directory_is_found(self, collector):
+        # AMReX-Codes/amrex ships "Docs" (capital D, lowercase rest); the
+        # waiver could never fire for it since only "Documentation" and
+        # "docs"/"doc"/"documentation" were listed. Reported in
+        # corsa-center/metrics#54.
+        path, saw_gap = self._run(collector, {"Docs": "http://x"})
+        assert path == "Docs"
+        assert saw_gap is False
+
 
 class TestFindDocumentationSiteGapHandling:
     def _run(self, collector):

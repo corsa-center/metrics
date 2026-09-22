@@ -66,6 +66,32 @@ class TestSemanticVersioning:
         assert result["uses_semver"] is True
         assert result["semver_count"] == 2
 
+    def test_calendar_versioning_counts(self, collector):
+        # AMReX tags 26.09 monthly on schedule; strict three-component semver
+        # read that as no versioning discipline. corsa-center/metrics#53.
+        client = self._mock_releases(["26.09", "26.08", "26.07"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
+        assert result["uses_semver"] is True
+        assert result["semver_count"] == 3
+        assert result["scheme"] == "calver"
+
+    def test_four_digit_calendar_versioning_counts(self, collector):
+        client = self._mock_releases(["2024.05", "2024.02"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
+        assert result["uses_semver"] is True
+        assert result["scheme"] == "calver"
+
+    def test_semver_still_reports_as_semver(self, collector):
+        client = self._mock_releases(["v1.2.3"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
+        assert result["scheme"] == "semver"
+
     def test_no_releases_falls_back_to_tags(self, collector):
         mock_resp = MagicMock()
         mock_resp.status_code = 200

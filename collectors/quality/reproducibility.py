@@ -6,7 +6,8 @@ checking for:
   - Containers       : Dockerfile, docker-compose, Singularity / Apptainer
   - Dependency locks : pip lock files, Poetry, Conda-lock, Cargo, Go, etc.
   - FAIR4RS metadata : CITATION.cff, codemeta.json, .zenodo.json
-  - Semantic versioning: whether GitHub releases follow semver (x.y.z)
+  - Release versioning: whether GitHub releases follow semver (x.y.z) or
+                       calendar versioning (26.09, 2024.05)
 
 Semantic versioning is the one "Moderate" step — it requires a GitHub
 releases API call rather than a simple file-existence check.
@@ -23,6 +24,21 @@ from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, Retry
 logger = logging.getLogger(__name__)
 
 _SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+
+# Calendar versioning (YY.MM or YYYY.MM, optional patch), which several CASS
+# projects release on -- AMReX tags 26.09 monthly on schedule. Strict
+# three-component semver read that as no versioning discipline at all.
+_CALVER_RE = re.compile(r"^v?(\d{2}|\d{4})\.(\d{1,2})(?:\.\d+)?(?:[-+].*)?$")
+
+
+def _versioning_scheme(tag: str) -> Optional[str]:
+    """"semver", "calver", or None for a tag that follows neither."""
+    if _SEMVER_RE.match(tag):
+        return "semver"
+    if _CALVER_RE.match(tag):
+        return "calver"
+    return None
+
 
 # File-presence categories: label -> candidate paths
 _FILE_CHECKS: Dict[str, Dict[str, List[str]]] = {
@@ -205,15 +221,7 @@ class ReproducibilityCollector(GitHubCollectorBase):
             return await self._check_tags(client, owner, repo, sample)
 
         tags = [r.get("tag_name", "") for r in releases]
-        semver_tags = [t for t in tags if _SEMVER_RE.match(t)]
-        uses_semver = len(semver_tags) > 0
-
-        return {
-            "uses_semver": uses_semver,
-            "releases_checked": len(tags),
-            "semver_count": len(semver_tags),
-            "example_tags": tags[:3],
-        }
+        return self._summarize_tags(tags)
 
     async def _check_tags(
         self, client: httpx.AsyncClient, owner: str, repo: str, sample: int
@@ -229,12 +237,22 @@ class ReproducibilityCollector(GitHubCollectorBase):
             }
 
         tags = [t.get("name", "") for t in tags_data or []]
-        semver_tags = [t for t in tags if _SEMVER_RE.match(t)]
+        return self._summarize_tags(tags)
 
+    @staticmethod
+    def _summarize_tags(tags: List[str]) -> Dict[str, Any]:
+        """Whether the tags follow a recognized release-versioning scheme.
+
+        The `uses_semver`/`semver_count` keys are kept as-is for the
+        dashboard, but now count calendar versioning too; `scheme` says which
+        one was actually seen.
+        """
+        schemes = [s for s in (_versioning_scheme(t) for t in tags) if s]
         return {
-            "uses_semver": len(semver_tags) > 0,
+            "uses_semver": len(schemes) > 0,
             "releases_checked": len(tags),
-            "semver_count": len(semver_tags),
+            "semver_count": len(schemes),
+            "scheme": schemes[0] if schemes else None,
             "example_tags": tags[:3],
         }
 

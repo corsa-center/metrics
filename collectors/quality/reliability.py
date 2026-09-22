@@ -326,7 +326,7 @@ class ReliabilityCollector(GitHubCollectorBase):
         prev_range = f"{prev_start}..{recent_start}"
 
         # Issue types first, since a project using them generally does not also
-        # label defects; fall back to labels only when types yield nothing.
+        # label defects.
         type_expr = ",".join(_DEFECT_ISSUE_TYPES)
         (recent, recent_gap), (previous, previous_gap) = await asyncio.gather(
             count(f"type:{type_expr}", recent_range),
@@ -335,17 +335,28 @@ class ReliabilityCollector(GitHubCollectorBase):
         saw_gap = recent_gap or previous_gap
         source = "issue type"
 
-        if recent + previous == 0:
+        # Fall back to labels whenever types alone can't carry the comparison,
+        # not only when they return exactly zero. A single natively-typed
+        # issue used to suppress the fallback entirely: AMReX has one typed
+        # issue and 35 bug-labelled ones, and reported "does not record defect
+        # reports by type or label" on the strength of that one. Projects
+        # migrating to issue types have both conventions in play at once.
+        min_volume = get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume")
+        if recent + previous < min_volume:
             # Comma-separated values in a label: qualifier are ORed, so one
             # query covers every convention in _DEFECT_LABELS. Attempted even
             # if the type search gapped, since it's an independent query --
             # any gap it hits is merged into saw_gap below either way.
-            (recent, recent_gap), (previous, previous_gap) = await asyncio.gather(
+            (label_recent, recent_gap), (label_previous, previous_gap) = await asyncio.gather(
                 count(f"label:{labels}", recent_range),
                 count(f"label:{labels}", prev_range),
             )
             saw_gap = saw_gap or recent_gap or previous_gap
-            source = "label"
+            # Keep whichever convention actually carries the project's
+            # defects, rather than assuming the second query supersedes.
+            if label_recent + label_previous > recent + previous:
+                recent, previous = label_recent, label_previous
+                source = "label"
 
         if saw_gap:
             return {"measurable": False, "recent": recent, "previous": previous,

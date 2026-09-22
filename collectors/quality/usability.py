@@ -35,7 +35,7 @@ _README_SECTIONS = {
     "Support": r"(?:support|help|contact|community|questions|mailing list)",
 }
 
-_DOC_DIRECTORIES = ["docs", "doc", "documentation", "Documentation"]
+_DOC_DIRECTORIES = ["docs", "doc", "documentation", "Documentation", "Docs", "Doc"]
 
 # Markdown ATX headings and Setext underlines both appear in real READMEs.
 _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
