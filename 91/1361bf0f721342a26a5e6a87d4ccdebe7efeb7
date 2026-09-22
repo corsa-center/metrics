@@ -1,0 +1,43 @@
+METRIC_BLIND_SPOTS.md
+  s_72fde105c4df10::t_6ba7b1c594c9c6 270
+  s_72fde105c4df10::t_a6b2b89f3e5fc3 227
+  s_72fde105c4df10::t_0461fcf815ee9f 216
+  s_72fde105c4df10::t_23acfaeb072989 304-305
+tests/test_welcomeness.py
+  s_72fde105c4df10::t_038f6f0559bdd6 7
+  s_72fde105c4df10::t_b146c88f41b21d 8-10
+  s_72fde105c4df10::t_006f8df2ec73ad 107-108,112,116-117,125,127,134-135,141-146
+  s_72fde105c4df10::t_d091b520661759 109-111,114,119,121-124,128-133,136-140,147-151
+collectors/ecosystem/fair_licensing.py
+  s_72fde105c4df10::t_197f7643ef95ba 148,152-154,156-177,179-181
+  s_72fde105c4df10::t_07208fa07ff203 23
+  s_72fde105c4df10::t_6b9c3a35732f52 82,85,90,106-108
+  s_72fde105c4df10::t_54ffdf3ed5c7e1 28
+tests/test_fair_licensing.py
+  s_72fde105c4df10::t_a3cda0098459a3 296-297,301-304,307-312,314-321,326-327
+  s_72fde105c4df10::t_e107e7f77ffcfb 7
+collectors/ecosystem/welcomeness.py
+  s_72fde105c4df10::t_b818e21288ced3 32
+  s_72fde105c4df10::t_5ef7c7d99c2ed2 72,82,85
+  s_72fde105c4df10::t_f7dfeb41883cc4 110-115,118-123
+  s_72fde105c4df10::t_5e3e19ff8644d9 16,20
+  s_72fde105c4df10::t_f70523c29661a6 117,129-131,134-138,141
+  s_72fde105c4df10::t_030cb343f6944f 36-47
+  s_72fde105c4df10::t_da7bc6fbd1557a 127-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "911361bf0f721342a26a5e6a87d4ccdebe7efeb7",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
