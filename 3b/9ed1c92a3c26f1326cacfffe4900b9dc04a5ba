@@ -1,0 +1,27 @@
+METRIC_BLIND_SPOTS.md
+  s_72fde105c4df10::t_10be785d3d3ecf 386-392
+  s_72fde105c4df10::t_d11ad7b5c01c87 415
+  s_72fde105c4df10::t_725dbe9f328833 240
+  s_72fde105c4df10::t_5cb576b956bb7c 487
+  s_72fde105c4df10::t_1ab2b19337f405 403,405-414,416-427
+tests/test_reproducibility.py
+  s_72fde105c4df10::t_6b58cd1c82d20d 154-199
+collectors/quality/reproducibility.py
+  s_72fde105c4df10::t_5a49ef460f375f 255-268
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3b9ed1c92a3c26f1326cacfffe4900b9dc04a5ba",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
