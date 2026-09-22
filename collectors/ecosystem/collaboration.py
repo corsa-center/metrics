@@ -73,6 +73,7 @@ class CollaborationCollector(GitHubCollectorBase):
             spack = None
 
         registries = self._merge(by_repo + ([spack] if spack else []))
+        registries = self._drop_spurious_go_entries(registries, package.get("primary_language"))
         return {
             "package_name": repo_name,
             "repository": f"{owner}/{repo}",
@@ -153,6 +154,30 @@ class CollaborationCollector(GitHubCollectorBase):
             "downloads": p.get("downloads") or 0,
             "downloads_period": p.get("downloads_period"),
         }
+
+    @staticmethod
+    def _drop_spurious_go_entries(
+        registries: List[Dict[str, Any]], primary_language: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """Drop a "go" registry entry that carries zero dependents for a
+        repo whose own primary language isn't Go.
+
+        Go's decentralized module system lets any public repository path be
+        `go get`-ed without the project ever intending to publish a Go
+        module -- ecosyste.ms indexes AMReX-Codes/amrex (a C++ library)
+        under "go" with dependent_packages=0, dependent_repos=0, purely
+        because some tool once resolved that path. Left alone for a repo
+        whose primary language actually is Go (a real, young package can
+        legitimately have zero dependents yet), and left alone whenever the
+        primary language isn't known at all -- absence of information isn't
+        license to discard real data (corsa-center/metrics#50).
+        """
+        if not primary_language or primary_language.lower() == "go":
+            return registries
+        return [
+            r for r in registries
+            if not (r["ecosystem"] == "go" and r["dependent_packages"] == 0 and r["dependent_repos"] == 0)
+        ]
 
     @staticmethod
     def _merge(packages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

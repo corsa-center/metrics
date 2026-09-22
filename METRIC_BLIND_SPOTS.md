@@ -226,7 +226,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.5 | Good First Issue Effectiveness | ⚪ F6, F9 | label vocabulary; penalises promptly-fixed issues |
 | 4.2.6 | Decision-Making Visibility | ✅ fixed | roadmap/meeting-notes now regex-matched (CHIP-SPV, Viskores, petsc, llvm all confirmed live) |
 | 4.2.7 | **Collaboration Network Analysis** | 🔴 F8, F12 | **#50** — source-level coupling invisible to registries |
-| 4.2.7 | Advanced Dependency Analysis | 🔴 F12 | spurious `go` entries; conda-forge missing |
+| 4.2.7 | Advanced Dependency Analysis | ✅ fixed | spurious zero-dependent `go` entries dropped; conda-forge coverage unchanged |
 | 4.2.8 | Funding Documentation Analysis | ⚪ F2, F6 | award-number regex is DOE/NSF/NIH-shaped only |
 | 4.2.8 | Institutional Affiliation | ⚪ F10, F12 | top-25 sample; free-text `company` often blank |
 | 4.3.1 | **CERT Guidelines Compliance** | ✅ fixed | **#51** — flag-file scan whole-tree (`.cmake`); workflow read hinted-then-all, partial scans now honest |
@@ -468,12 +468,52 @@ Where the available signal genuinely does not measure the thing, the honest move
 is to mark it **not measurable** rather than publish a low score. The framework
 already has that convention for gaps; these are gaps.
 
-| Issue | Metric | Proposal |
+| Issue | Metric | Status |
 |---|---|---|
-| [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality | Exclude issues whose author *and* closer are both inside the maintainer group from the comment-count median — they are triage records, not conversations. |
-| [#48](https://github.com/corsa-center/metrics/issues/48) | Community Participation | Same exclusion applied to the denominator, so an internal tracker is not read as absent community. |
-| [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network | Add a source-level signal (GitHub code search for `AMREX_HOME`-style includes or submodule references), or mark registry-only measurement not applicable for source-included libraries. |
-| [#50](https://github.com/corsa-center/metrics/issues/50) | Advanced Dependency Analysis | Drop `go` ecosystem entries carrying zero dependents for non-Go projects; query conda-forge directly rather than relying on the ecosyste.ms index. |
+| [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality | ✅ Fixed |
+| [#48](https://github.com/corsa-center/metrics/issues/48) | Community Participation | ✅ Fixed |
+| [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network | 🔲 Todo |
+| [#50](https://github.com/corsa-center/metrics/issues/50) | Advanced Dependency Analysis | ✅ Fixed |
+
+**#48 — landed.** `engagement.py`'s `_compute_issue_stats` now excludes
+issues where the author is inside the maintainer group *and* the issue
+carries zero comments — a self-contained triage record (a defect ticket
+immediately closed by its own fixing PR), not a conversation. Used the
+author association alone rather than "author and closer both inside" as
+originally proposed: `closed_by` has no `author_association` field on the
+list endpoint, and neither the collaborators API (403s for a read-only
+token: "must have push access") nor a per-issue timeline lookup (one extra
+call per issue) were affordable ways to resolve it independently. Zero
+comments already captures the reported shape without needing to know who
+closed it — a real discussion, even one comment's worth, isn't silent
+triage regardless of who has the final word.
+
+Excluded only from the discussion-shaped metrics (comment-depth median,
+Community Participation's denominator) — not from close time or
+first-response time, which weren't reported as broken and would already
+look *better*, not worse, for a fast, silent close.
+
+**Verified live against `AMReX-Codes/amrex`, the reporting project**: 27 of
+its 30 sampled issues matched this exact shape, leaving a discussion sample
+of 3. Community Participation moved from a diluted, failing reading to
+`15% of 33 issues and PRs` (passing) once those 27 were removed from the
+denominator.
+
+**#50 is partly landed.** Advanced Dependency Analysis is fixed:
+`collaboration.py` now drops a `go` registry entry carrying zero dependents
+whenever the repo's own primary language isn't Go (kept whenever the
+primary language actually is Go, or isn't known at all — absence of
+information isn't license to discard real data). Verified live: AMReX's
+`ecosystems` list went from `["go", "spack"]` (several spurious `go`
+variants, in the original audit) down to `["spack"]`, its one real registry.
+
+Collaboration Network itself — the source-level-coupling half of #50 — is
+still open. It needs either a new source-level data signal (GitHub code
+search for `AMREX_HOME`-style includes or submodule references) or a
+decision to mark registry-only measurement not applicable for
+source-included libraries, and neither is a mechanical fix like the rest of
+this plan: it's a genuine scope/data-source decision this pass didn't
+attempt to make unilaterally.
 
 ### Phase 7 — Keep the probe, run it continuously
 
