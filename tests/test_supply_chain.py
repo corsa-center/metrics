@@ -5,8 +5,8 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
-from collectors.quality.supply_chain import SupplyChainCollector, _SBOM_ROOT_FILES
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.quality.supply_chain import SupplyChainCollector
 
 
 @pytest.fixture
@@ -129,44 +129,31 @@ class TestComputeOverall:
 
 
 class TestCheckRootSbom:
+    """_check_root_sbom now takes a RepoTree (or COLLECTION_GAP) directly --
+    see METRIC_BLIND_SPOTS.md class F1.
+    """
+
     def test_found(self, collector):
-        async def mock_exists(client, owner, repo, path):
-            return "https://github.com/o/r/blob/main/sbom.spdx.json" if path == "sbom.spdx.json" else None
-
-        async def run():
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._check_root_sbom(client, "o", "r")
-
-        url, saw_gap = asyncio.run(run())
+        tree = RepoTree("o", "r", ["sbom.spdx.json"], truncated=False)
+        url, saw_gap = collector._check_root_sbom(tree)
         assert url is not None
         assert saw_gap is False
 
     def test_not_found(self, collector):
-        async def mock_exists(client, owner, repo, path):
-            return None
-
-        async def run():
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._check_root_sbom(client, "o", "r")
-
-        url, saw_gap = asyncio.run(run())
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        url, saw_gap = collector._check_root_sbom(tree)
         assert url is None
         assert saw_gap is False
 
-    def test_gap_on_one_path_is_tracked_even_if_a_later_path_is_confirmed_absent(self, collector):
-        async def mock_exists(client, owner, repo, path):
-            return COLLECTION_GAP if path == _SBOM_ROOT_FILES[0] else None
-
-        async def run():
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._check_root_sbom(client, "o", "r")
-
-        url, saw_gap = asyncio.run(run())
+    def test_gapped_tree_is_tracked(self, collector):
+        url, saw_gap = collector._check_root_sbom(COLLECTION_GAP)
         assert url is None
         assert saw_gap is True
+
+    def test_match_is_case_insensitive(self, collector):
+        tree = RepoTree("o", "r", ["SBOM.SPDX.JSON"], truncated=False)
+        url, saw_gap = collector._check_root_sbom(tree)
+        assert url is not None
 
 
 class TestFetchReleaseAssets:

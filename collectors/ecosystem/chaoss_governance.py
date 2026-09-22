@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +74,10 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         owner, repo = owner_repo
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
             results = await asyncio.gather(
                 self._get_project_popularity(client, owner, repo),
-                self._get_documentation_usability(client, owner, repo),
+                self._get_documentation_usability(client, owner, repo, tree),
                 self._get_issue_metrics(client, owner, repo),
                 self._get_change_request_metrics(client, owner, repo),
                 self._get_release_frequency(client, owner, repo),
@@ -182,7 +183,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             return {}
 
     async def _get_documentation_usability(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree
     ) -> Dict[str, Any]:
         """CHAOSS: Documentation Usability — README quality and docs presence.
 
@@ -194,6 +195,12 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         the "don't report something collected that wasn't" rule -- a
         partially-known composite isn't a confident score, it's a gap with
         extra steps.
+
+        Contributing guide and docs folder are resolved against a RepoTree
+        (case-insensitive) rather than probed one literal path at a time --
+        AMReX's "Docs" and superlu's "DOC" directories, and ADIOS2's
+        "Contributing.md", all missed the old case-sensitive check (see
+        METRIC_BLIND_SPOTS.md class F1).
         """
         found_docs = []
         doc_details: Dict[str, Any] = {}
@@ -211,29 +218,24 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         else:
             doc_details["readme"] = {"exists": False, "quality_score": 0}
 
-        for pattern in ["CONTRIBUTING.md", ".github/CONTRIBUTING.md"]:
-            result = await self._check_file_exists(client, owner, repo, pattern)
-            if result is COLLECTION_GAP:
-                has_gap = True
-                continue
-            if result:
+        if tree is COLLECTION_GAP:
+            has_gap = True
+            doc_details["contributing"] = {"exists": False}
+            doc_details["docs_folder"] = {"exists": False}
+        else:
+            contributing_path = tree.match(["CONTRIBUTING.md", ".github/CONTRIBUTING.md"])
+            if contributing_path:
                 found_docs.append("contributing")
-                doc_details["contributing"] = {"exists": True, "file": pattern}
-                break
-        else:
-            doc_details.setdefault("contributing", {"exists": False})
+                doc_details["contributing"] = {"exists": True, "file": contributing_path}
+            else:
+                doc_details["contributing"] = {"exists": False}
 
-        for pattern in ["docs/", "documentation/", "doc/"]:
-            result = await self._check_file_exists(client, owner, repo, pattern)
-            if result is COLLECTION_GAP:
-                has_gap = True
-                continue
-            if result:
+            docs_dir = next((d for d in ("docs", "documentation", "doc") if tree.has_dir(d)), None)
+            if docs_dir:
                 found_docs.append("docs_folder")
-                doc_details["docs_folder"] = {"exists": True, "path": pattern}
-                break
-        else:
-            doc_details.setdefault("docs_folder", {"exists": False})
+                doc_details["docs_folder"] = {"exists": True, "path": docs_dir}
+            else:
+                doc_details["docs_folder"] = {"exists": False}
 
         has_wiki = await self._check_wiki_enabled(client, owner, repo)
         if has_wiki is COLLECTION_GAP:

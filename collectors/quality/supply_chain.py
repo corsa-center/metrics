@@ -25,7 +25,7 @@ import httpx
 import logging
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,11 @@ class SupplyChainCollector(GitHubCollectorBase):
         logger.info(f"Collecting supply chain metrics for {owner}/{repo}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            (release_assets, assets_gap), (root_sbom, root_gap) = await asyncio.gather(
+            (release_assets, assets_gap), tree = await asyncio.gather(
                 self._fetch_release_assets(client, owner, repo),
-                self._check_root_sbom(client, owner, repo),
+                RepoTree.fetch(client, self.github_headers, owner, repo),
             )
+        root_sbom, root_gap = self._check_root_sbom(tree)
 
         sbom = self._find_sbom(root_sbom, release_assets, root_gap or assets_gap)
         provenance = self._find_provenance(release_assets, assets_gap)
@@ -96,23 +97,14 @@ class SupplyChainCollector(GitHubCollectorBase):
     # Fetching                                                             #
     # ------------------------------------------------------------------ #
 
-    async def _check_root_sbom(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> tuple:
-        """Returns (html_url_or_None, saw_gap). A gap on one candidate path
-        doesn't stop the rest from being checked, but is tracked so a
-        resulting "not found" can be reported as not_collected rather than
-        a confirmed absence.
+    def _check_root_sbom(self, tree) -> tuple:
+        """Returns (html_url_or_None, saw_gap). Resolved against a RepoTree
+        (case-insensitive, single fetch) rather than probed one literal path
+        at a time -- see METRIC_BLIND_SPOTS.md class F1.
         """
-        saw_gap = False
-        for path in _SBOM_ROOT_FILES:
-            html_url = await self._check_file_exists(client, owner, repo, path)
-            if html_url is COLLECTION_GAP:
-                saw_gap = True
-                continue
-            if html_url:
-                return html_url, saw_gap
-        return None, saw_gap
+        if tree is COLLECTION_GAP:
+            return None, True
+        return tree.match_url(_SBOM_ROOT_FILES), False
 
     async def _fetch_release_assets(
         self, client: httpx.AsyncClient, owner: str, repo: str

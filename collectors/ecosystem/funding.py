@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +70,9 @@ class FundingCollector(GitHubCollectorBase):
         logger.info(f"Collecting funding and institutional metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
             results = await asyncio.gather(
-                self._find_funding_files(client, owner, repo),
+                self._find_funding_files(client, owner, repo, tree),
                 self._find_grant_references(client, owner, repo),
                 self._get_affiliations(client, owner, repo),
                 self._get_owner_type(client, owner),
@@ -118,20 +119,22 @@ class FundingCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ fetch
 
     async def _find_funding_files(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree
     ) -> Dict[str, Any]:
-        """Locate funding manifests and read the platforms they declare."""
+        """Locate funding manifests and read the platforms they declare.
+
+        Presence is resolved against a RepoTree (case-insensitive), rather
+        than probed one literal path at a time -- see METRIC_BLIND_SPOTS.md
+        class F1.
+        """
         found, platforms = [], []
-        saw_gap = False
-        for path in _FUNDING_FILES:
-            url = await self._check_file_exists(client, owner, repo, path)
-            if url is COLLECTION_GAP:
-                saw_gap = True
+        saw_gap = tree is COLLECTION_GAP
+        for path in ([] if saw_gap else _FUNDING_FILES):
+            real_path = tree.match([path])
+            if not real_path:
                 continue
-            if not url:
-                continue
-            found.append({"path": path, "url": url})
-            plats, plat_gap = await self._read_funding_platforms(client, owner, repo, path)
+            found.append({"path": real_path, "url": tree.match_url([path])})
+            plats, plat_gap = await self._read_funding_platforms(client, owner, repo, real_path)
             platforms.extend(plats)
             saw_gap = saw_gap or plat_gap
         # Preserve first-seen order while removing duplicates across files.

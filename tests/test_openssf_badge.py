@@ -1,11 +1,10 @@
 """Unit tests for OpenSSFBadgeCollector pure computation methods."""
 
-import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
 
 
@@ -128,69 +127,61 @@ class TestCollectWithBadge:
 class TestScanFilesGapHandling:
     """The no-badge path is already an admitted proxy ("estimated": True),
     but a gap is a different kind of uncertainty than that estimate and
-    must not be silently folded into "missing".
+    must not be silently folded into "missing". _scan_files now takes a
+    RepoTree (or COLLECTION_GAP) directly -- see METRIC_BLIND_SPOTS.md
+    class F1.
     """
 
-    def _run(self, collector, file_map, responses):
-        """responses: dict[pattern] -> return value for _check_file_exists."""
-        async def fake_check(client, owner, repo, pattern):
-            return responses.get(pattern, None)
-
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_check):
-                return await collector._scan_files(None, "o", "r", file_map)
-
-        return asyncio.run(go())
-
-    def test_gapped_criterion_is_not_collected_not_missing(self, collector):
+    def test_gapped_tree_is_not_collected_not_missing(self, collector):
         file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
-        result = self._run(collector, file_map, {"CODE_OF_CONDUCT.md": COLLECTION_GAP})
+        result = collector._scan_files(COLLECTION_GAP, file_map)
         assert result["missing"] == []
         assert result["not_collected"] == ["code_of_conduct"]
 
     def test_confirmed_absent_is_still_a_real_miss(self, collector):
         file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
-        result = self._run(collector, file_map, {"CODE_OF_CONDUCT.md": None})
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        result = collector._scan_files(tree, file_map)
         assert result["missing"] == ["code_of_conduct"]
         assert result["not_collected"] == []
 
+    def test_differently_cased_governance_doc_found(self, collector):
+        # AMReX-Codes/amrex ships GOVERNANCE.rst.
+        tree = RepoTree("o", "r", ["GOVERNANCE.rst"], truncated=False)
+        result = collector._scan_files(tree, collector.GOVERNANCE_FILES)
+        assert "governance" in result["found"]
+
     def test_all_gapped_reports_no_percentage(self, collector):
         file_map = {"a": ["A.md"], "b": ["B.md"]}
-        result = self._run(collector, file_map, {"A.md": COLLECTION_GAP, "B.md": COLLECTION_GAP})
+        result = collector._scan_files(COLLECTION_GAP, file_map)
         assert result["percentage"] is None
         assert result["count_total"] == 0
 
-    def test_mixed_gap_and_confirmed_renormalizes_percentage(self, collector):
-        file_map = {"found_one": ["F.md"], "gapped": ["G.md"]}
-        result = self._run(collector, file_map, {"F.md": "http://x", "G.md": COLLECTION_GAP})
-        # gapped criterion excluded from the denominator entirely
-        assert result["count_total"] == 1
-        assert result["percentage"] == 100.0
+    def test_mixed_confirmed_and_missing_computes_percentage(self, collector):
+        file_map = {"found_one": ["F.md"], "missing_one": ["G.md"]}
+        tree = RepoTree("o", "r", ["F.md"], truncated=False)
+        result = collector._scan_files(tree, file_map)
+        assert result["count_total"] == 2
+        assert result["percentage"] == 50.0
 
 
 class TestCollectWithoutBadgeGapHandling:
     def test_one_category_fully_gapped_renormalizes_overall(self, collector):
-        async def go():
-            async def fake_scan(client, owner, repo, file_map):
-                if file_map is collector.GOVERNANCE_FILES:
-                    return {"percentage": None}  # totally gapped
-                return {"percentage": 100.0}
+        def fake_scan(tree, file_map):
+            if file_map is collector.GOVERNANCE_FILES:
+                return {"percentage": None}  # totally gapped
+            return {"percentage": 100.0}
 
-            with patch.object(collector, "_scan_files", side_effect=fake_scan):
-                return await collector._collect_without_badge(None, "Pkg", "o", "r")
-
-        result = asyncio.run(go())
+        with patch.object(collector, "_scan_files", side_effect=fake_scan):
+            result = collector._collect_without_badge("Pkg", "o", "r", None)
         # If the gap silently counted as 0%, this would be 60% (0.3+0.3 of 100).
         assert result["overall_score"]["percentage"] == 100.0
 
     def test_everything_gapped_reports_not_collected_status(self, collector):
-        async def go():
-            async def fake_scan(client, owner, repo, file_map):
-                return {"percentage": None}
+        def fake_scan(tree, file_map):
+            return {"percentage": None}
 
-            with patch.object(collector, "_scan_files", side_effect=fake_scan):
-                return await collector._collect_without_badge(None, "Pkg", "o", "r")
-
-        result = asyncio.run(go())
+        with patch.object(collector, "_scan_files", side_effect=fake_scan):
+            result = collector._collect_without_badge("Pkg", "o", "r", None)
         assert result["overall_score"]["score"] is None
         assert result["overall_score"]["status"] == "not_collected"
