@@ -151,6 +151,52 @@ class TestVersioningSchemeNormalization:
         )
         assert result["uses_semver"] is True
 
+    def test_non_matching_releases_fall_back_to_tags(self, collector):
+        # Releases exist, but none of them carry a real version in the name
+        # (announcement-only releases) -- the project's raw tags are a
+        # superset and might still show a real scheme. Same fallback-
+        # suppression shape fixed for the defect trend in #52.
+        release_resp = MagicMock()
+        release_resp.status_code = 200
+        release_resp.json.return_value = [{"tag_name": "Initial release"}]
+        release_resp.raise_for_status = MagicMock()
+
+        tag_resp = MagicMock()
+        tag_resp.status_code = 200
+        tag_resp.json.return_value = [{"name": "v2.1.0"}]
+        tag_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[release_resp, tag_resp])
+
+        result = asyncio.run(
+            collector._check_semantic_versioning(mock_client, "owner", "repo")
+        )
+        assert result["uses_semver"] is True
+        assert result["example_tags"] == ["v2.1.0"]
+
+    def test_non_matching_releases_and_tags_report_the_release_sample(self, collector):
+        # Both sources checked, neither has a real version -- report the
+        # release-based (not_collected-free) result rather than the tags one.
+        release_resp = MagicMock()
+        release_resp.status_code = 200
+        release_resp.json.return_value = [{"tag_name": "Initial release"}]
+        release_resp.raise_for_status = MagicMock()
+
+        tag_resp = MagicMock()
+        tag_resp.status_code = 200
+        tag_resp.json.return_value = [{"name": "latest"}]
+        tag_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[release_resp, tag_resp])
+
+        result = asyncio.run(
+            collector._check_semantic_versioning(mock_client, "owner", "repo")
+        )
+        assert result["uses_semver"] is False
+        assert result["example_tags"] == ["Initial release"]
+
 
 class TestComputeOverall:
     def test_all_present(self, collector):

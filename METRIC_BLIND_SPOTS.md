@@ -237,7 +237,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.3.2 | Testing Framework Excellence | ✅ fixed | `Tests/`, `TESTING/`, `TEST/`, vendored frameworks all case-insensitive now |
 | 4.3.2 | Development Tool Integration | ⚪ F1, F2 | literal config paths at repo root |
 | 4.3.2 | Code Review Quality | ⚪ F10, F9 | last 50 PRs; self-merge conventions differ |
-| 4.3.3 | **Version Control Best Practices** | ✅ fixed | **#53** — CalVer, prefixed/normalized tags, major.minor, compact date; 15/16 flagged repos confirmed live |
+| 4.3.3 | **Version Control Best Practices** | ✅ fixed | **#53** — CalVer, prefixed/normalized tags, major.minor, compact date, release→tags fallback; 16/16 flagged repos confirmed live |
 | 4.3.3 | Environment Management | ◐ F1 fixed, F2 open | case-insensitive now; 23 repos still pin deps at an unenumerated nested path (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | Containerization Excellence | ◐ F1 fixed, F2 open | case-insensitive now; CI-only Dockerfiles deliberately still excluded (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | FAIR4RS / Reproducibility Docs | ⚪ F1, F2 | literal path lists |
@@ -383,12 +383,13 @@ portfolio rather than noise: **compact date** (`flang-compiler/flang` tags
 (`OpenACCUserGroup/OpenACCV-V` tags `v3.0`; `CODARcode/Chimbuko` tags `v7.0`)
 — a deliberate versioning discipline, just without a patch component.
 
-Verified against all 16 originally-flagged repos: 15 now resolve, each
-checked against its real tags via the live GitHub API. The one holdout,
-`sandialabs/Albany`, samples only `Old_master_support_end` in its last 5
-tags — genuinely not a version marker of any kind, not something a smarter
-regex can recover from; would need a larger tag sample or the project's own
-release process to actually use tags, neither of which this fix can supply.
+Verified against all 16 originally-flagged repos: 15 resolve directly, each
+checked against its real tags via the live GitHub API. The apparent
+holdout, `sandialabs/Albany` (whose GitHub Releases sample only
+`Old_master_support_end`, not a version marker of any kind), turned out to
+be fixed too — but by Phase 4 below, not by anything in this phase: its raw
+git tags (`e3sm-2023-02-21`, a different, date-shaped naming convention)
+carry a real scheme its *Releases* don't. 16 of 16.
 
 Checked for false positives against real non-version tags in the same
 portfolio (`main`, `nightly`, `latest`, `gex-stable`, `urp_rs_21`) — none
@@ -399,10 +400,31 @@ Deferred: auditing the other exact-format regexes for the same rigidity
 platform names in 4.3.5) — no measured exposure found for these yet, so
 this is speculative until a specific project trips one.
 
-### Phase 4 — Audit every `== 0` fallback guard
+### Phase 4 — Audit every `== 0` fallback guard — landed
 
-**Removes latent F7.** `grep -rn "== 0" collectors/` and check each one against
-"is this enough to answer the question?" rather than "is this empty?".
+**Removes latent F7.** Every `== 0` in `collectors/` (12 call sites) plus every
+comment mentioning "fallback" was checked against "is this enough to answer
+the question?" rather than "is this empty?".
+
+Eleven of twelve `== 0` guards were legitimate: division-by-zero protection,
+per-item bookkeeping, or (in `ci_cd.py`) an already-correct pattern that
+explicitly disambiguates a confirmed zero from "not applicable" via a second
+call — the opposite of the bug, not an instance of it.
+
+One more instance of the actual F7 shape turned up, structurally identical to
+issue #52 but gated by `if not releases:` instead of `== 0`:
+`reproducibility.py`'s `_check_semantic_versioning` only fell back from
+GitHub Releases to raw git tags when Releases were completely *absent* — not
+when they existed but didn't match any recognized scheme. Announcement-only
+releases (a real shape: a release with no version in its name) blocked the
+fallback to the project's actual tags, which are often a superset of what it
+published as a Release. Fixed to also try tags whenever the release sample
+comes up empty-handed, keeping whichever result actually found something.
+
+This retroactively fixed `sandialabs/Albany`, Phase 3's one remaining
+holdout: its Releases sample only `Old_master_support_end`, but its raw tags
+carry a real (if unusually-shaped) scheme. 16 of 16 originally-flagged repos
+for #53 are now fixed, between Phase 3 and this one.
 
 ### Phase 5 — Validate the catalog before every run
 
@@ -462,5 +484,5 @@ permanent:
 | [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network Analysis | F8, F12 | 6 | 🔲 Todo |
 | [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ✅ Fixed |
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
-| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ✅ Fixed (15/16; Albany has no real version tags to recover) |
+| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 + 4 | ✅ Fixed (16/16) |
 | [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs`/`DOC/` fixed; heading-regex rigidity (F6) pending |

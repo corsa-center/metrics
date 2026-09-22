@@ -252,7 +252,20 @@ class ReproducibilityCollector(GitHubCollectorBase):
             return await self._check_tags(client, owner, repo, sample)
 
         tags = [r.get("tag_name", "") for r in releases]
-        return self._summarize_tags(tags)
+        result = self._summarize_tags(tags)
+        if result["uses_semver"]:
+            return result
+        # Releases exist but none of the sampled ones matched a recognized
+        # scheme -- try raw tags too before concluding "no versioning
+        # discipline". A project's tags are often a superset of what it
+        # chose to publish as a GitHub Release (announcement-only releases
+        # with no real version in the name are a real shape, not a
+        # hypothetical), so stopping at an unhelpful release sample was the
+        # same "good enough but insufficient blocks the fallback" bug fixed
+        # for the defect-trend check in #52. Same METRIC_BLIND_SPOTS.md
+        # class F7.
+        tags_result = await self._check_tags(client, owner, repo, sample)
+        return tags_result if tags_result["uses_semver"] else result
 
     async def _check_tags(
         self, client: httpx.AsyncClient, owner: str, repo: str, sample: int
