@@ -515,18 +515,46 @@ source-included libraries, and neither is a mechanical fix like the rest of
 this plan: it's a genuine scope/data-source decision this pass didn't
 attempt to make unilaterally.
 
-### Phase 7 — Keep the probe, run it continuously
+### Phase 7 — Keep the probe, run it continuously — landed
 
 This analysis found more than the maintainers reported, because it tested the
-heuristics against reality instead of waiting for complaints. Make that
-permanent:
+heuristics against reality instead of waiting for complaints. Made that
+permanent: `tools/portfolio_probe.py`, run weekly by
+`.github/workflows/portfolio-probe.yml` over the live catalog.
 
-- promote the probe to `tools/portfolio_probe.py`;
-- run weekly in CI over the full catalog;
-- for every path- or format-matching heuristic, assert that the count of
-  repositories where *the concept is present but unmatched* stays at zero;
-- a new false-negative class then shows up as a failing check rather than as a
-  maintainer's issue.
+**Reuses the real collector code rather than re-deriving it** —
+`RepoTree`, `ReproducibilityCollector._check_semantic_versioning`,
+`_MAX_ANALYSIS_WORKFLOWS` — imported directly, so the probe stays in sync
+with the collectors automatically instead of drifting into its own,
+eventually-wrong idea of what they do. This wasn't hypothetical: a first
+draft reimplemented the version-scheme check as a simplified standalone
+helper, which immediately fell one Phase behind the real
+`_check_semantic_versioning` (missing its Phase 4 release→tags fallback)
+and wrongly re-flagged `sandialabs/Albany` as unresolved. Caught by running
+the probe against the live catalog before committing it, same as every
+other fix in this document.
+
+Three checks, not the "assert zero on every heuristic" originally sketched
+— narrower in scope, because most of what Phases 1-4 fixed (case
+sensitivity, finite path enumeration) has no ongoing signal to probe for
+once `RepoTree` handles it uniformly; there's no "count of repos where the
+concept is present but unmatched" left to watch once the matching itself is
+generic:
+
+1. **Catalog identity** (hard gate, exit 1). Confirmed live over the real
+   catalog: `paraview/paraview` and `vtk/vtk` still 404 today.
+2. **CI-workflow read coverage** (report only). Confirmed live: HDF5 (76),
+   llvm (62), and AMReX (30) all exceed the 25-workflow cap — expected and
+   accepted, not a bug, but worth watching if the share grows.
+3. **Version-scheme coverage** (report only). Confirmed live: 8 repos have
+   no releases and no tags at all (a different, legitimate finding from
+   "tags exist but don't match a scheme") — a worklist, not a pass/fail bar.
+
+Not attempted: probing #48/#50-shaped issues (deliberate-process
+misreadings, registry-index noise) continuously. Those needed a human
+reading an actual maintainer report to recognize the pattern in the first
+place; there's no mechanical "count of repos affected" to assert against
+zero the way there is for a path-matching heuristic.
 
 ---
 
