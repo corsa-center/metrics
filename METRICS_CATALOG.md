@@ -55,7 +55,7 @@ up yet.
 | 4.3.5 | Accessibility | 5/5 |
 | 4.3.6 | Maintainability and Understandability | 5/5 |
 | 4.3.7 | Performance and Efficiency | ⬜ 0/10 |
-| 4.3.8 | Software Supply Chain Integrity | 3/5 |
+| 4.3.8 | Software Supply Chain Integrity | 4/5 |
 
 A stub section renders nothing unless the package's `package_config/` file
 supplies overrides, in which case it renders those values against a 0/N score.
@@ -446,19 +446,36 @@ All ten require running benchmarks on target hardware, profiling
 |---|---|---|---|
 | SBOM Detection and Validation | ✅ | an SPDX/CycloneDX-named file found at the repo root, or among the last 5 releases' assets | filename matching only — no SBOM content is parsed or validated |
 | Build Provenance Assessment | ✅ | a SLSA/in-toto-attestation-named file found among the last 5 releases' assets | filename matching only |
-| Dependency Vulnerability Posture | 🔲 | — | needs Dependabot alert access this survey doesn't have on third-party repos |
-| Dependency Freshness (libyears) | 🔲 | — | needs a machine-readable dependency manifest most HPC C/C++ projects don't publish |
+| Dependency Vulnerability Posture | ✅ | no exactly-`==`-pinned dependency in `requirements.txt` has a known OSV.dev vulnerability | [OSV.dev](https://osv.dev) batch query API — free, unauthenticated, no Dependabot alert access needed on the target repo |
+| Dependency Freshness (libyears) | 🔲 | — | needs a machine-readable dependency manifest with enough history to compute a lag, not just pinned versions |
 | Badge and Scorecard Level | ✅ | not independently scored — display-only, read from the 4.2 OpenSSF Badge / Scorecard collectors | passthrough, not re-fetched |
 
-Score is out of 2 (SBOM + Build Provenance): the two not-collected rows are
-excluded from the denominator per §3.5 rather than scored as failures, and
-Badge/Scorecard is display-only context rather than an independently scored
-row, since this section explicitly "does not restate practices already
-assessed by the OpenSSF Best Practices Badge."
+Score is out of 3 (SBOM + Build Provenance + Dependency Vulnerability
+Posture): the one still-not-collected row is excluded from the denominator
+per §3.5 rather than scored as failure, and Badge/Scorecard is display-only
+context rather than an independently scored row, since this section
+explicitly "does not restate practices already assessed by the OpenSSF Best
+Practices Badge."
 
-Only file-presence and filename matching against a small hint list (`sbom`,
-`spdx`, `cyclonedx`, `intoto`, `slsa`, `.sigstore`, …) — no SBOM/attestation
-content is parsed or validated against the SPDX/CycloneDX/SLSA specs.
+SBOM/Build Provenance remain file-presence and filename matching against a
+small hint list (`sbom`, `spdx`, `cyclonedx`, `intoto`, `slsa`, `.sigstore`,
+…) — no SBOM/attestation content is parsed or validated against the
+SPDX/CycloneDX/SLSA specs.
+
+**Dependency Vulnerability Posture's coverage is real but narrow.** Only a
+root-level `requirements.txt` is read, and only lines pinned with an exact
+`==` are checked — OSV.dev's query API takes a single version, not a range,
+so `numpy>=1.20` names a real dependency the check can't evaluate. Nested
+`requirements.txt` files (`docs/requirements.txt`, CI-tooling pins,
+test-only pins) are deliberately not matched, since a stale Sphinx theme
+version isn't a supply-chain finding the way a stale runtime dependency is.
+Lockfiles for other ecosystems (`Cargo.lock`, `poetry.lock`, `go.sum`, …)
+aren't parsed yet. Of the 71 tracked repositories, 25 have a
+`requirements.txt` somewhere and 9 pin it at the repository root — this
+check found a real, currently unpatched **CRITICAL** remote-code-execution
+vulnerability
+([GHSA-53q9-r3pm-6pq6](https://github.com/advisories/GHSA-53q9-r3pm-6pq6))
+in one of those 9 during development.
 
 ### 4.1.1 / 4.2.7 additions: downloads and reverse dependencies
 

@@ -1,12 +1,13 @@
 """Unit tests for SupplyChainCollector (CASS Section 4.3.8)."""
 
 import asyncio
+import base64
 import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
-from collectors.quality.supply_chain import SupplyChainCollector
+from collectors.quality.supply_chain import SupplyChainCollector, _parse_pinned_pypi_deps
 
 
 @pytest.fixture
@@ -201,3 +202,197 @@ class TestFetchReleaseAssets:
         assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
         assert assets == []
         assert is_gap is True
+
+
+class TestParsePinnedPypiDeps:
+    """OSV.dev's query API takes a single version, not a range -- only an
+    exact == pin is a checkable dependency.
+    """
+
+    def test_exact_pin_parsed(self):
+        assert _parse_pinned_pypi_deps("numpy==1.24.0") == [("numpy", "1.24.0")]
+
+    def test_range_specifier_skipped(self):
+        assert _parse_pinned_pypi_deps("numpy>=1.20") == []
+
+    def test_bare_name_skipped(self):
+        assert _parse_pinned_pypi_deps("numpy") == []
+
+    def test_comment_and_blank_lines_ignored(self):
+        text = "# a comment\n\nnumpy==1.24.0\n"
+        assert _parse_pinned_pypi_deps(text) == [("numpy", "1.24.0")]
+
+    def test_pip_option_lines_skipped(self):
+        text = "-e .\n-r base.txt\n--index-url https://example.com\nnumpy==1.24.0"
+        assert _parse_pinned_pypi_deps(text) == [("numpy", "1.24.0")]
+
+    def test_extras_bracket_stripped(self):
+        assert _parse_pinned_pypi_deps("requests[security]==2.31.0") == [
+            ("requests", "2.31.0")
+        ]
+
+    def test_environment_marker_stripped(self):
+        text = 'numpy==1.24.0; python_version >= "3.8"'
+        assert _parse_pinned_pypi_deps(text) == [("numpy", "1.24.0")]
+
+    def test_inline_comment_stripped(self):
+        assert _parse_pinned_pypi_deps("numpy==1.24.0  # pinned for CI") == [
+            ("numpy", "1.24.0")
+        ]
+
+    def test_vcs_requirement_skipped(self):
+        text = "git+https://github.com/foo/bar.git@v1.0#egg=bar"
+        assert _parse_pinned_pypi_deps(text) == []
+
+    def test_multiple_lines(self):
+        text = "numpy==1.24.0\nscipy>=1.10\npandas==2.0.1\n"
+        assert _parse_pinned_pypi_deps(text) == [
+            ("numpy", "1.24.0"), ("pandas", "2.0.1"),
+        ]
+
+
+class TestQueryOsvBatch:
+    def _client(self, status_code, body=None, side_effect=None):
+        client = AsyncMock()
+        if side_effect:
+            client.post = AsyncMock(side_effect=side_effect)
+        else:
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = body or {}
+            client.post = AsyncMock(return_value=resp)
+        return client
+
+    def test_no_vulnerabilities_returns_empty(self, collector):
+        client = self._client(200, {"results": [{}]})
+        result = asyncio.run(collector._query_osv_batch(client, [("numpy", "1.24.0")]))
+        assert result == []
+
+    def test_vulnerable_dependency_returned(self, collector):
+        client = self._client(200, {"results": [
+            {"vulns": [{"id": "GHSA-xxxx"}]},
+            {},
+        ]})
+        deps = [("requests", "2.6.0"), ("numpy", "1.24.0")]
+        result = asyncio.run(collector._query_osv_batch(client, deps))
+        assert result == [("requests", "2.6.0")]
+
+    def test_non_200_is_a_gap(self, collector):
+        client = self._client(500)
+        result = asyncio.run(collector._query_osv_batch(client, [("numpy", "1.24.0")]))
+        assert result is COLLECTION_GAP
+
+    def test_network_exception_is_a_gap(self, collector):
+        client = self._client(None, side_effect=httpx.ConnectError("boom"))
+        result = asyncio.run(collector._query_osv_batch(client, [("numpy", "1.24.0")]))
+        assert result is COLLECTION_GAP
+
+    def test_empty_deps_list(self, collector):
+        client = self._client(200, {"results": []})
+        result = asyncio.run(collector._query_osv_batch(client, []))
+        assert result == []
+
+
+class TestCheckDependencyVulnerabilities:
+    def test_gapped_tree_is_not_collected(self, collector):
+        result = asyncio.run(
+            collector._check_dependency_vulnerabilities(None, "o", "r", COLLECTION_GAP)
+        )
+        assert result["not_collected"] is True
+
+    def test_no_requirements_txt_passes(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        result = asyncio.run(
+            collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+        )
+        assert result["passing"] is True
+        assert "No requirements.txt" in result["value"]
+
+    def test_nested_requirements_txt_not_matched(self, collector):
+        # docs/requirements.txt is Sphinx tooling, not the project's own
+        # dependency surface -- deliberately out of scope.
+        tree = RepoTree("o", "r", ["docs/requirements.txt"], truncated=False)
+        result = asyncio.run(
+            collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+        )
+        assert result["passing"] is True
+        assert "No requirements.txt" in result["value"]
+
+    def test_clean_scan_passes(self, collector):
+        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        content = base64.b64encode(b"numpy==1.24.0\n").decode()
+
+        async def fake_get(client, url, params=None):
+            return {"content": content}
+
+        async def fake_batch(client, deps):
+            return []
+
+        with patch.object(collector, "_github_get", side_effect=fake_get), \
+             patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        assert result["passing"] is True
+        assert "0 of 1" in result["value"]
+
+    def test_vulnerable_dependency_fails(self, collector):
+        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        content = base64.b64encode(b"requests==2.6.0\n").decode()
+
+        async def fake_get(client, url, params=None):
+            return {"content": content}
+
+        async def fake_batch(client, deps):
+            return [("requests", "2.6.0")]
+
+        with patch.object(collector, "_github_get", side_effect=fake_get), \
+             patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        assert result["passing"] is False
+        assert result["detail"] == ["requests==2.6.0"]
+
+    def test_no_pinned_deps_still_passes(self, collector):
+        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        content = base64.b64encode(b"numpy>=1.20\nscipy\n").decode()
+
+        async def fake_get(client, url, params=None):
+            return {"content": content}
+
+        with patch.object(collector, "_github_get", side_effect=fake_get):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        assert result["passing"] is True
+        assert "no exactly-pinned dependencies" in result["value"]
+
+    def test_content_fetch_gap_is_not_collected(self, collector):
+        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+
+        async def fake_get(client, url, params=None):
+            return COLLECTION_GAP
+
+        with patch.object(collector, "_github_get", side_effect=fake_get):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        assert result["not_collected"] is True
+
+    def test_osv_query_gap_is_not_collected(self, collector):
+        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        content = base64.b64encode(b"numpy==1.24.0\n").decode()
+
+        async def fake_get(client, url, params=None):
+            return {"content": content}
+
+        async def fake_batch(client, deps):
+            return COLLECTION_GAP
+
+        with patch.object(collector, "_github_get", side_effect=fake_get), \
+             patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
+            result = asyncio.run(
+                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            )
+        assert result["not_collected"] is True
