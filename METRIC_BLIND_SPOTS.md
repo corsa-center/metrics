@@ -229,9 +229,9 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.7 | Advanced Dependency Analysis | 🔴 F12 | spurious `go` entries; conda-forge missing |
 | 4.2.8 | Funding Documentation Analysis | ⚪ F2, F6 | award-number regex is DOE/NSF/NIH-shaped only |
 | 4.2.8 | Institutional Affiliation | ⚪ F10, F12 | top-25 sample; free-text `company` often blank |
-| 4.3.1 | **CERT Guidelines Compliance** | ◐ F3 fixed, F4 open | **#51** — flag-file scan now whole-tree (`.cmake`); workflow filename gate is Phase 2 |
+| 4.3.1 | **CERT Guidelines Compliance** | ✅ fixed | **#51** — flag-file scan whole-tree (`.cmake`); workflow read hinted-then-all, partial scans now honest |
 | 4.3.1 | **Reliability Trend Analysis** | 🔴 F7 | **#52** — fallback suppressed by one typed issue |
-| 4.3.1 | Advanced Static Analysis | 🟡 F2, F4 | config paths + the same workflow gate |
+| 4.3.1 | Advanced Static Analysis | ✅ fixed | config paths via RepoTree; workflow read now hinted-then-all |
 | 4.3.1 | Test Coverage Excellence | ⚪ F12 | Codecov-only; near-universally unmeasurable for HPC |
 | 4.3.2 | CI/CD Effectiveness | 🔴 F5, ⚪ F10 | fixed — was zeroing 71% of the portfolio |
 | 4.3.2 | Testing Framework Excellence | ✅ fixed | `Tests/`, `TESTING/`, `TEST/`, vendored frameworks all case-insensitive now |
@@ -333,16 +333,31 @@ first place. Worth remembering as a general risk when Phase 2 broadens the
 CI-workflow read the same way: a wider net needs a correspondingly tighter
 filter, or a small result cap silently fills with noise.
 
-### Phase 2 — Read every CI workflow
+### Phase 2 — Read every CI workflow — landed
 
-**Removes F4 — 62% of the portfolio.**
+**Removes F4 — was 62% of the portfolio.**
 
-- Drop `_ANALYSIS_WORKFLOW_HINT`; enumerate `.github/workflows/*` from the tree
-  (already available via `RepoTree.find(r"^\.github/workflows/.*\.ya?ml$")`).
-- Spend the read budget on the largest or most recently modified workflows
-  rather than name-matched ones.
-- Where a cap still binds, report a **partial scan** rather than a confident
-  absence — an `F11`-correct result.
+`reliability.py`'s `_read_analysis_workflows` no longer reads *only*
+keyword-matched workflow filenames. It now enumerates every workflow via
+`RepoTree.find(r"^\.github/workflows/.*\.ya?ml$")`, reads hinted ones first,
+then fills the remaining budget (raised from 8 to 25, matching
+`static_analysis.py`'s existing precedent) with whatever's left. AMReX went
+from reading 2 of 30 workflows to reading all 30; HDF5 went from 2 of 76 to
+25 of 76.
+
+**Where the cap still binds, the result is now a partial scan, not a
+confident absence** (the `F11`-correct behavior): if more workflows exist
+than fit the budget, an empty find is reported `not_collected` rather than
+"no tooling found" — HDF5's Advanced Static Analysis and CERT Guidelines
+Compliance now correctly read as unmeasured instead of a false 0, since 51 of
+its 76 workflows are still unread. A positive match still stands regardless
+of truncation, per the existing gap convention used everywhere else in the
+codebase.
+
+Kept simpler than originally proposed: prioritizing by file size or recency
+would need either the tree's per-blob size (not currently indexed) or a
+commit-history lookup per file (expensive at portfolio scale) for a benefit
+that hinted-first-then-fill already captures in practice.
 
 ### Phase 3 — Scheme detection instead of exact formats
 
@@ -423,7 +438,7 @@ permanent:
 | [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality / Community Participation | F9 | 6 | 🔲 Todo |
 | [#49](https://github.com/corsa-center/metrics/issues/49) | Onboarding Infrastructure | F1, F2 | 1 | ✅ Fixed |
 | [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network Analysis | F8, F12 | 6 | 🔲 Todo |
-| [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ◐ flag-file scan fixed (F3); workflow gate pending (F4) |
+| [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ✅ Fixed |
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
 | [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ◐ CalVer fixed; prefixed tags pending |
 | [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs`/`DOC/` fixed; heading-regex rigidity (F6) pending |
