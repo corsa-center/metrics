@@ -1,0 +1,32 @@
+METRIC_BLIND_SPOTS.md
+  s_72fde105c4df10::t_41ad67d3267d31 518,521-557
+tools/portfolio_probe.py
+  s_72fde105c4df10::t_c40535dd2dbfdf 10-17
+  s_72fde105c4df10::t_e3326e8179be2b 1-9,18-42,44-51,53-58,60-78,88-103,105-108,110-111,121-170
+  s_72fde105c4df10::t_aa526d9bc5c8ff 112-114,116-120
+  s_72fde105c4df10::t_60c691af0d1880 43
+  s_72fde105c4df10::t_bce24ea0bae63a 104,109
+  s_72fde105c4df10::t_e6f54539d4ffef 115
+  s_72fde105c4df10::t_f607c83e0b5fb4 52
+  s_72fde105c4df10::t_4f1f7f7279e0f4 59,79-87
+tests/test_portfolio_probe.py
+  s_72fde105c4df10::t_1550578d03674d 1-73
+.github/workflows/portfolio-probe.yml
+  s_72fde105c4df10::t_7b133975214a00 1-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5fe57f9af891cd1eec2192d4a9e6a40498abe9e8",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
