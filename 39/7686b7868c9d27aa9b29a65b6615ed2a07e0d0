@@ -1,0 +1,31 @@
+collectors/quality/reliability.py
+  s_72fde105c4df10::t_6af7d5eaf0d486 119-120
+  s_72fde105c4df10::t_078c822e6b57e8 187,189-198,200,202-205,212-216,218-220,222
+  s_72fde105c4df10::t_bb7f9330b33aa6 206-210,223
+  s_72fde105c4df10::t_a141ae7bd6915b 62-69,73
+  s_72fde105c4df10::t_dc6af52ba5f7d8 211
+METRIC_BLIND_SPOTS.md
+  s_72fde105c4df10::t_5e8d54d5af2e72 234
+  s_72fde105c4df10::t_f4798263440d4a 336,338,340-360
+  s_72fde105c4df10::t_d0eca4ce58a84e 441
+  s_72fde105c4df10::t_9d97234f68a0a6 232
+tests/test_reliability.py
+  s_72fde105c4df10::t_cbb803df659b13 36-93,111
+  s_72fde105c4df10::t_d1d03ccef55ebd 94-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "397686b7868c9d27aa9b29a65b6615ed2a07e0d0",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
