@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.supply_chain import (
     SupplyChainCollector, _parse_pinned_pypi_deps, _parse_uv_lock,
-    _parse_poetry_lock, _parse_cargo_lock,
+    _parse_poetry_lock, _parse_cargo_lock, _parse_go_sum, _parse_pipfile_lock,
 )
 
 
@@ -568,3 +568,72 @@ class TestParseCargoLock:
             '[[package]]\nname = "local-crate"\nversion = "0.1.0"\n'
         )
         assert _parse_cargo_lock(text) == [("serde", "1.0.0")]
+
+
+class TestParseGoSum:
+    def test_content_hash_line_included(self):
+        text = "github.com/gin-gonic/gin v1.7.0 h1:jGZM8QwSXvipzXW4gAG8AGN0nfp/1QLZC/QVjyGH5Ys=\n"
+        assert _parse_go_sum(text) == [("github.com/gin-gonic/gin", "v1.7.0")]
+
+    def test_go_mod_line_excluded(self):
+        # Each module also gets a "/go.mod h1:..." line -- a duplicate of
+        # the same (module, version) pair that must not be double-counted.
+        text = (
+            "github.com/gin-gonic/gin v1.7.0 h1:jGZM8QwSXvipzXW4gAG8AGN0nfp/1QLZC/QVjyGH5Ys=\n"
+            "github.com/gin-gonic/gin v1.7.0/go.mod h1:jD2toBW3GZUr5UMcdX21G4wIt0Zjuvcz/1BqRDwFdCU=\n"
+        )
+        assert _parse_go_sum(text) == [("github.com/gin-gonic/gin", "v1.7.0")]
+
+    def test_duplicate_content_hash_lines_deduped(self):
+        text = (
+            "github.com/gin-gonic/gin v1.7.0 h1:aaa=\n"
+            "github.com/gin-gonic/gin v1.7.0 h1:aaa=\n"
+        )
+        assert _parse_go_sum(text) == [("github.com/gin-gonic/gin", "v1.7.0")]
+
+    def test_malformed_lines_skipped(self):
+        assert _parse_go_sum("not a go.sum line at all\n") == []
+
+    def test_multiple_modules(self):
+        text = (
+            "github.com/gin-gonic/gin v1.7.0 h1:aaa=\n"
+            "github.com/gin-gonic/gin v1.7.0/go.mod h1:bbb=\n"
+            "golang.org/x/net v0.0.0-20210226172049-e18ecbb05110 h1:ccc=\n"
+        )
+        assert _parse_go_sum(text) == [
+            ("github.com/gin-gonic/gin", "v1.7.0"),
+            ("golang.org/x/net", "v0.0.0-20210226172049-e18ecbb05110"),
+        ]
+
+
+class TestParsePipfileLock:
+    def test_default_section_pinned_entry_included(self):
+        text = '{"default": {"requests": {"version": "==2.31.0"}}}'
+        assert _parse_pipfile_lock(text) == [("requests", "2.31.0")]
+
+    def test_develop_section_included(self):
+        # A dev/test-only dependency still runs in CI, so it's a real
+        # finding, not noise -- unlike the root-only lockfile-location rule.
+        text = '{"develop": {"pytest": {"version": "==7.4.0"}}}'
+        assert _parse_pipfile_lock(text) == [("pytest", "7.4.0")]
+
+    def test_both_sections_merged(self):
+        text = (
+            '{"default": {"requests": {"version": "==2.31.0"}}, '
+            '"develop": {"pytest": {"version": "==7.4.0"}}}'
+        )
+        assert _parse_pipfile_lock(text) == [
+            ("requests", "2.31.0"),
+            ("pytest", "7.4.0"),
+        ]
+
+    def test_non_pinned_entry_excluded(self):
+        text = '{"default": {"requests": {"version": "*"}}}'
+        assert _parse_pipfile_lock(text) == []
+
+    def test_vcs_entry_with_no_version_excluded(self):
+        text = '{"default": {"mypkg": {"git": "https://github.com/foo/bar"}}}'
+        assert _parse_pipfile_lock(text) == []
+
+    def test_invalid_json_returns_empty(self):
+        assert _parse_pipfile_lock("not valid json {{{") == []

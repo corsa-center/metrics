@@ -13,15 +13,17 @@ distribution pipeline:
                                      OSV.dev's free batch query API -- no
                                      Dependabot alert access needed on the
                                      target repo, unlike GitHub's own
-                                     vulnerability-alerts API. Reads four
+                                     vulnerability-alerts API. Reads six
                                      lockfile shapes, root-level only:
-                                     requirements.txt (PyPI, exact == pins
-                                     only), uv.lock and poetry.lock (PyPI,
-                                     registry-sourced packages), and
-                                     Cargo.lock (crates.io, registry+
-                                     sourced packages). go.sum, Pipfile.lock
-                                     and package-lock.json aren't parsed
-                                     yet. See _LOCKFILE_SPECS.
+                                     requirements.txt and Pipfile.lock
+                                     (PyPI, exact == pins), uv.lock and
+                                     poetry.lock (PyPI, registry-sourced
+                                     packages), Cargo.lock (crates.io,
+                                     registry+ sourced packages), and go.sum
+                                     (Go -- the module system IS the
+                                     registry, so every entry qualifies).
+                                     package-lock.json / yarn.lock aren't
+                                     parsed yet. See _LOCKFILE_SPECS.
 
 Dependency Freshness (libyears) is not collected here: it needs a
 machine-readable dependency manifest with enough history to compute a lag,
@@ -38,6 +40,7 @@ re-fetched.
 import asyncio
 import base64
 import httpx
+import json
 import logging
 import re
 import tomllib
@@ -72,6 +75,8 @@ _REQUIREMENTS_TXT_PATHS = ["requirements.txt", "requirements/requirements.txt"]
 _UV_LOCK_PATHS = ["uv.lock"]
 _POETRY_LOCK_PATHS = ["poetry.lock"]
 _CARGO_LOCK_PATHS = ["Cargo.lock"]
+_GO_SUM_PATHS = ["go.sum"]
+_PIPFILE_LOCK_PATHS = ["Pipfile.lock"]
 
 # An exactly-pinned PyPI requirement line: name[extras]==version, with an
 # optional environment marker or comment already stripped by the caller.
@@ -81,6 +86,13 @@ _CARGO_LOCK_PATHS = ["Cargo.lock"]
 _PYPI_PIN_RE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.+!_-]*)$"
 )
+
+# A go.sum content-hash line: "module version h1:hash". Each real
+# dependency also gets a second line for its bare go.mod file's hash
+# (version suffixed "/go.mod"), which this deliberately excludes --
+# requiring the version token to contain no "/" is what tells the two
+# apart, since a plain regex on "v\S+" would swallow "/go.mod" too.
+_GO_SUM_RE = re.compile(r"^(\S+)\s+(v[0-9][^\s/]*)\s+h1:")
 
 _OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 
@@ -162,16 +174,61 @@ def _parse_cargo_lock(text: str) -> List[Tuple[str, str]]:
     return deps
 
 
+def _parse_go_sum(text: str) -> List[Tuple[str, str]]:
+    """(module path, version) pairs from a go.sum file's content-hash
+    lines. The module path is used as-is as the OSV package name (Go's
+    module system IS the registry -- there's no separate package name), and
+    the version keeps its "v" prefix, since that's the literal tag Go
+    itself resolved and the form OSV's Go ecosystem expects.
+    """
+    deps = []
+    seen = set()
+    for line in text.splitlines():
+        match = _GO_SUM_RE.match(line.strip())
+        if match:
+            key = (match.group(1), match.group(2))
+            if key not in seen:
+                seen.add(key)
+                deps.append(key)
+    return deps
+
+
+def _parse_pipfile_lock(text: str) -> List[Tuple[str, str]]:
+    """(name, version) pairs from a Pipfile.lock's "default" and "develop"
+    sections. Unlike the root-only rule for *where* a lockfile is allowed
+    to live, a vulnerable entry inside one legitimate lockfile isn't
+    excluded just for being a dev/test dependency -- it still runs
+    somewhere, if only in CI, and a known vulnerability there is a real
+    finding, not noise. Only exactly-pinned ("==...") entries are usable,
+    same reasoning as requirements.txt.
+    """
+    try:
+        data = json.loads(text)
+    except Exception as e:
+        logger.debug(f"Could not parse Pipfile.lock: {e}")
+        return []
+    deps = []
+    for section in ("default", "develop"):
+        for name, info in (data.get(section) or {}).items():
+            version = info.get("version", "") if isinstance(info, dict) else ""
+            if isinstance(version, str) and version.startswith("=="):
+                deps.append((name, version[2:]))
+    return deps
+
+
 # (OSV ecosystem, root-level candidate paths, parser) for every lockfile
-# shape this checks. All four happen to overlap with reproducibility.py's
+# shape this checks. All six happen to overlap with reproducibility.py's
 # own "dependency_pinning" candidates, but each needs its own parser --
-# requirements.txt is line-oriented, the rest are TOML with three different
-# conventions for telling a registry package apart from a git/path/url one.
+# requirements.txt and go.sum are line-oriented, Pipfile.lock is JSON, and
+# the rest are TOML with three different conventions for telling a
+# registry package apart from a git/path/url one.
 _LOCKFILE_SPECS: List[Tuple[str, List[str], Any]] = [
     ("PyPI", _REQUIREMENTS_TXT_PATHS, _parse_pinned_pypi_deps),
     ("PyPI", _UV_LOCK_PATHS, _parse_uv_lock),
     ("PyPI", _POETRY_LOCK_PATHS, _parse_poetry_lock),
+    ("PyPI", _PIPFILE_LOCK_PATHS, _parse_pipfile_lock),
     ("crates.io", _CARGO_LOCK_PATHS, _parse_cargo_lock),
+    ("Go", _GO_SUM_PATHS, _parse_go_sum),
 ]
 
 
