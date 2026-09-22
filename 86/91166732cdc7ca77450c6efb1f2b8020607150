@@ -1,0 +1,94 @@
+tests/test_usability.py
+  s_72fde105c4df10::t_1379eb48292c4e 135-139,141-142,147-148,154-171
+  s_72fde105c4df10::t_73c4ad863f5a5f 5
+tests/test_reliability.py
+  s_72fde105c4df10::t_cb41ee162836df 7,10
+  s_72fde105c4df10::t_657718308831ba 160-163,165-166,170-172,174,176-180,182-186,189-194,196-198,201-203,207-220
+  s_72fde105c4df10::t_c6221f333563f2 222-235
+  s_72fde105c4df10::t_2bbe720384d6df 221
+tests/test_dev_tooling.py
+  s_72fde105c4df10::t_c1cb0714856a6f 126-129,131-132,136-138,140,143-147,150-153
+  s_72fde105c4df10::t_dc67b36b5f4ac7 7
+  s_72fde105c4df10::t_295448a9eaab58 154
+tests/test_reproducibility.py
+  s_72fde105c4df10::t_e0c3420d95a372 6
+  s_72fde105c4df10::t_66eb6be7e1ab8d 216
+  s_72fde105c4df10::t_5f673bc6de45c6 5
+  s_72fde105c4df10::t_4babf4fcc64e8a 197-199,201-202,205,209,213,217-219,221,228-229,231-233,236,240-245
+  s_72fde105c4df10::t_7f0e7c9d566f60 246
+tests/test_outreach.py
+  s_72fde105c4df10::t_3b6f22fe7c8a4a 7-8
+  s_72fde105c4df10::t_52345d75854ec0 178
+  s_72fde105c4df10::t_cdbd5ef0d0af0b 299-302,304-305,307,309-311,313-335
+collectors/quality/accessibility.py
+  s_72fde105c4df10::t_7934f6477ff5cb 20,24-25
+  s_72fde105c4df10::t_e69c4f360b2bd0 47-53
+  s_72fde105c4df10::t_2c17c2dd783742 82-83,85,87,92-94,106-112,117
+collectors/quality/development_practices/dev_tooling.py
+  s_72fde105c4df10::t_67fb9b0d50b98b 16,20,25-28,30
+  s_72fde105c4df10::t_a2f3fa7dfa4bbd 70-71,76-80
+  s_72fde105c4df10::t_cb7fa7a0888f95 95-100,102-107
+tests/test_accessibility.py
+  s_72fde105c4df10::t_5c02e07741ecd9 5,14-17,37-39,42,48,54,60-63,67,72,79,83-87,89-93,96-98,100,103-110,114,120
+collectors/ecosystem/base.py
+  s_72fde105c4df10::t_c437d34a716c7b 328-336,339-340,350-351
+  s_72fde105c4df10::t_db5444281d1f8f 353-357,359
+  s_72fde105c4df10::t_519ebe3e0a3453 263-292,303-327,337-338,341-349,352,358,360-376
+  s_72fde105c4df10::t_c33be8376d0d02 293-302
+collectors/quality/reproducibility.py
+  s_72fde105c4df10::t_cbd7f9909e0b80 22
+  s_72fde105c4df10::t_710b9b2d993fc0 122-123,127
+  s_72fde105c4df10::t_d6bda78783eb93 20
+  s_72fde105c4df10::t_1270ae37acb185 147-154,163-169,174
+collectors/ecosystem/outreach.py
+  s_72fde105c4df10::t_271fba8c4de53a 23
+  s_72fde105c4df10::t_c8154a3ebd1396 248-275
+  s_72fde105c4df10::t_9f7e35dbd3df82 87
+  s_72fde105c4df10::t_b7f205a25ceddb 411
+  s_72fde105c4df10::t_c38cd3ca0d59da 110,113
+  s_72fde105c4df10::t_6f44eb5df651a3 21,29,36-59
+collectors/quality/reliability.py
+  s_72fde105c4df10::t_932310e2cd4a34 217,221-227,240,254,260,269-270,275
+  s_72fde105c4df10::t_ea45dbe9903e16 33
+  s_72fde105c4df10::t_12a861b1a5c1d3 255-259,261-267,271-274
+  s_72fde105c4df10::t_16ae667327d0c9 115-118,120-121
+  s_72fde105c4df10::t_8d7bcdcea34a26 27
+  s_72fde105c4df10::t_6cf62ff3b6ec04 160,165-168,171-176
+  s_72fde105c4df10::t_a3a34b49aa5043 74-77
+tests/test_ecosystem_base.py
+  s_72fde105c4df10::t_2789bbdf45a4df 282-296,301-323,342-344,347-348,353-416
+  s_72fde105c4df10::t_53cb260ad5a7b0 324-341
+  s_72fde105c4df10::t_12a02f961f5da1 345-346,349-352
+  s_72fde105c4df10::t_2d9897683268ba 21
+  s_72fde105c4df10::t_8e5fac2eba4b54 297-300
+collectors/quality/usability.py
+  s_72fde105c4df10::t_f3fd11318fdcfc 38
+  s_72fde105c4df10::t_e8bec2142b23d7 25
+  s_72fde105c4df10::t_feabed732b2eda 59,61,65
+  s_72fde105c4df10::t_50d0abf1514a79 110,112-116,118-123
+METRIC_BLIND_SPOTS.md
+  s_72fde105c4df10::t_350d53285b3065 232
+  s_72fde105c4df10::t_7c6d8ce00a5dba 270,272-273,275-277,279-285,289,292,296-327,333-334
+  s_72fde105c4df10::t_d65362ccd8711a 266-268
+  s_72fde105c4df10::t_fbcf31889d0ec1 224
+  s_72fde105c4df10::t_17cef3ed384367 245
+  s_72fde105c4df10::t_3f63540873ec47 417,419,422
+  s_72fde105c4df10::t_12ca328ddadead 237
+  s_72fde105c4df10::t_359894f52932cf 241-242
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8691166732cdc7ca77450c6efb1f2b8020607150",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
