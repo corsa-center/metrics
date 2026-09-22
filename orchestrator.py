@@ -534,6 +534,39 @@ class MetricsOrchestrator:
         """
         return bool(repo_url) and "github.com/" not in repo_url
 
+    async def _confirm_repo_exists(self, repo_name: str) -> bool:
+        """Whether repo_name ("owner/repo") resolves to a real, accessible
+        GitHub repository.
+
+        A catalog entry can point at a renamed, deleted, or simply
+        mistranscribed repository -- RAJA-llnl/RAJA and vtk/vtk both 404;
+        the projects' actual current locations are LLNL/RAJA and
+        Kitware/VTK. Every collector still ran against the wrong path: each
+        one's own 404 on every path/API call it tried read as a *confirmed*
+        absence of that one file, adding up to a full battery of confident
+        zeros across every metric instead of one clear "this repository
+        doesn't exist." Checked once here instead, before any of that runs
+        (METRIC_BLIND_SPOTS.md class F13).
+
+        Fails open (returns True) on anything other than a clean 404 --
+        a network hiccup or rate limit here must not silently drop a
+        perfectly valid package from the run; the per-collector gap
+        handling is already the right tool for that uncertainty.
+        """
+        token = self._get_github_token()
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if token:
+            headers["Authorization"] = f"token {token}"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"https://api.github.com/repos/{repo_name}", headers=headers
+                )
+        except Exception as e:
+            logger.warning(f"Could not verify {repo_name} exists: {e!r} -- proceeding as if it does")
+            return True
+        return resp.status_code != 404
+
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
 
@@ -898,19 +931,7 @@ class MetricsOrchestrator:
         package["package_config"] = self._load_package_config(package["repository"])
         package["project_config"] = await self._fetch_project_config(package)
 
-        if not self._is_known_non_github_repo(package.get("repo_url", "")):
-            # Collect all 3 CASS dimensions in parallel
-            (
-                impact_metrics,
-                ecosystem_metrics,
-                quality_metrics,
-            ) = await asyncio.gather(
-                self.collect_impact_dimension(package),
-                self.collect_ecosystem_dimension(package),
-                self.collect_quality_dimension(package),
-                return_exceptions=True,
-            )
-        else:
+        if self._is_known_non_github_repo(package.get("repo_url", "")):
             # Every collector assumes GitHub; see _is_known_non_github_repo.
             # Leave all sub-metrics unset ("not yet collected" downstream)
             # rather than let each one silently 404 against the wrong host
@@ -922,6 +943,31 @@ class MetricsOrchestrator:
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+        elif not await self._confirm_repo_exists(package["repository"]):
+            # See _confirm_repo_exists: a stale catalog entry pointing at a
+            # renamed/deleted/mistranscribed repo must not be collected as
+            # if it were real -- every collector's own 404s would otherwise
+            # read as confirmed absence, not as "wrong repository entirely".
+            logger.error(
+                f"Skipping collection for {package['name']}: "
+                f"{package['repository']} does not exist on GitHub "
+                f"(catalog entry may be stale)"
+            )
+            impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
+            ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
+            quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+        else:
+            # Collect all 3 CASS dimensions in parallel
+            (
+                impact_metrics,
+                ecosystem_metrics,
+                quality_metrics,
+            ) = await asyncio.gather(
+                self.collect_impact_dimension(package),
+                self.collect_ecosystem_dimension(package),
+                self.collect_quality_dimension(package),
+                return_exceptions=True,
+            )
 
         # Handle exceptions
         if isinstance(impact_metrics, Exception):
