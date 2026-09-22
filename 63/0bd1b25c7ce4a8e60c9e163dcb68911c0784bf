@@ -1,0 +1,56 @@
+tests/test_funding.py
+  s_72fde105c4df10::t_feda296197b7f3 8
+  s_72fde105c4df10::t_05ac74f6a89207 174-177,179-180,184-185,191-192,198-201
+  s_72fde105c4df10::t_c0b44425f05659 7
+  s_72fde105c4df10::t_3f8af3c5f5abc1 202-203
+collectors/quality/supply_chain.py
+  s_72fde105c4df10::t_0225d9c50888e2 62,64,66
+  s_72fde105c4df10::t_26f740edc63a97 28
+  s_72fde105c4df10::t_ac0aa0f0f1cc8b 100-103,105-107
+collectors/ecosystem/funding.py
+  s_72fde105c4df10::t_82c0d699dd9405 33
+  s_72fde105c4df10::t_f3d3937916bc57 73,75
+  s_72fde105c4df10::t_6b1c3aeee6ee72 122,124-129,131-134,136-137
+collectors/ecosystem/openssf_badge.py
+  s_72fde105c4df10::t_fa9edc5454127f 113-114
+  s_72fde105c4df10::t_eace14070193f2 153-154,156-158
+  s_72fde105c4df10::t_d425bbb69199a3 18
+  s_72fde105c4df10::t_4a6404750e6cea 43
+  s_72fde105c4df10::t_9028dec7b090aa 224-225,230-232,240-252,254-255
+tests/test_chaoss_governance.py
+  s_72fde105c4df10::t_327eb29f982501 3-5,7,16-56
+  s_72fde105c4df10::t_e2841878ab9bcc 57-58
+collectors/ecosystem/chaoss_governance.py
+  s_72fde105c4df10::t_18cda326f0ffdf 77,80
+  s_72fde105c4df10::t_ceea24ff48d7f5 186,198-203,221-224,226-234,236-238
+  s_72fde105c4df10::t_89acf0cf5dd73b 26
+tests/test_supply_chain.py
+  s_72fde105c4df10::t_da16c6528838d7 8-9
+  s_72fde105c4df10::t_2cb68a88dbd610 132-134,136-138,143-144,148-149,153-156
+  s_72fde105c4df10::t_ac5b0821b5a14a 157
+tests/test_openssf_badge.py
+  s_72fde105c4df10::t_6624624482147d 130-132,135,137,143-144,148-153,156,160-165,170-173,175-176,181-182,184-185
+  s_72fde105c4df10::t_6d74bd97e024b6 3
+  s_72fde105c4df10::t_42e017b61a222f 7
+METRIC_BLIND_SPOTS.md
+  s_72fde105c4df10::t_32055c3a0d1719 270
+  s_72fde105c4df10::t_d2b8f73f318a44 308-313
+  s_72fde105c4df10::t_d7b17e1540075d 306
+  s_72fde105c4df10::t_8cd9b83dbc3fe5 307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "630bd1b25c7ce4a8e60c9e163dcb68911c0784bf",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
