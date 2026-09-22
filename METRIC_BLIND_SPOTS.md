@@ -213,7 +213,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.1 | Governance Keyword Analysis | ⚪ F6 | fixed keyword vocabulary |
 | 4.2.1 | Governance Effectiveness | 🟡 F1, ⚪ F2 | CODEOWNERS at three literal paths |
 | 4.2.1 | CHAOSS Governance Metrics | ⚪ F10, F8 | 30–50 item samples; popularity weighted on stars |
-| 4.2.2 | FAIR Metadata Assessment | 🟡 F1, F2 | only `CITATION.cff`; CodeScribe ships `citation.cff` |
+| 4.2.2 | FAIR Metadata Assessment | ✅ fixed | `citation.cff` (Lab-Notebooks/CodeScribe) now resolved case-insensitively |
 | 4.2.2 | Enhanced License Detection | ⚪ F12 | NOASSERTION on modified licenses — text fallback mitigates |
 | 4.2.3 | Release Pattern Assessment | 🟡 F6, ⚪ F10 | tag-name parsing; `per_page=20` |
 | 4.2.3 | Multi-Channel Communication | ⚪ F2, F6 | README link detection by pattern |
@@ -224,7 +224,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.5 | **Onboarding Infrastructure** | ✅ fixed | **#49** — fixed via RepoTree; getting-started guide now found by regex, not 6 literal paths |
 | 4.2.5 | New Contributor / Retention / Lifecycle | ⚪ F10 | 5-page contributor cap, 10-page commit cap |
 | 4.2.5 | Good First Issue Effectiveness | ⚪ F6, F9 | label vocabulary; penalises promptly-fixed issues |
-| 4.2.6 | Decision-Making Visibility | 🟡 F2, ⚪ F1 | roadmap / meeting-notes paths — 4 repos unmatched |
+| 4.2.6 | Decision-Making Visibility | ✅ fixed | roadmap/meeting-notes now regex-matched (CHIP-SPV, Viskores, petsc, llvm all confirmed live) |
 | 4.2.7 | **Collaboration Network Analysis** | 🔴 F8, F12 | **#50** — source-level coupling invisible to registries |
 | 4.2.7 | Advanced Dependency Analysis | 🔴 F12 | spurious `go` entries; conda-forge missing |
 | 4.2.8 | Funding Documentation Analysis | ⚪ F2, F6 | award-number regex is DOE/NSF/NIH-shaped only |
@@ -267,7 +267,7 @@ Phases 1–5 are mechanical; phase 6 needs a product decision.
 | CalVer release tags | F6 | [#53](https://github.com/corsa-center/metrics/issues/53) | `2e89d9f` |
 | Defect-trend fallback threshold | F7 | [#52](https://github.com/corsa-center/metrics/issues/52) | `2e89d9f` |
 
-### Phase 1 — Tree-based file detection ⭐ highest value — 6/9 landed
+### Phase 1 — Tree-based file detection ⭐ highest value — 8/9 landed
 
 **Removes F1 and F3 outright, and F2 wherever a candidate is genuinely
 locatable by regex.**
@@ -301,8 +301,8 @@ Migration order, by measured exposure:
 | 4 | `dev_tooling.py` | 4.3.2 Testing (`TESTING/`, `TEST/`, vendored frameworks) | ✅ landed |
 | 5 | `accessibility.py` | 4.3.5 Portable Build (`Makefile.am`, 6 repos) | ✅ landed |
 | 6 | `reliability.py` | 4.3.1 Static Analysis configs; CERT flag-file scan now whole-tree (#51) | ✅ landed |
-| 7 | `fair_licensing.py` | 4.2.2 `citation.cff` | 🔲 todo |
-| 8 | `welcomeness.py` | 4.2.6 roadmap / meeting notes | 🔲 todo |
+| 7 | `fair_licensing.py` | 4.2.2 `citation.cff` | ✅ landed |
+| 8 | `welcomeness.py` | 4.2.6 roadmap / meeting notes (broadened to regex, like #49) | ✅ landed |
 | 9 | remaining 6 collectors | latent exposure | 🔲 todo |
 
 ¹ **Containers/Environment Management are case-insensitive and single-fetch

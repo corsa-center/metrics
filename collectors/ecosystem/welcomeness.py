@@ -13,32 +13,36 @@ about maintainers, and stay uncollected.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
 # Places a project can conduct decision-making in the open. Grouped so any
 # variant counts once.
 _DECISION_PATHS = {
-    "Roadmap": [
-        "ROADMAP.md", "ROADMAP", "docs/roadmap.md", "doc/roadmap.md",
-        ".github/ROADMAP.md",
-    ],
-    "Meeting notes": [
-        "meetings", "docs/meetings", "MEETINGS.md", "doc/meetings",
-        "docs/meeting-notes", "notes/meetings",
-    ],
     "Decision records": [
         "docs/adr", "adr", "docs/decisions", "doc/adr", "DECISIONS.md",
         "docs/architecture-decisions",
     ],
     "Governance document": [
-        "GOVERNANCE.md", "docs/GOVERNANCE.md", ".github/GOVERNANCE.md",
+        "GOVERNANCE.md", "GOVERNANCE.rst", "docs/GOVERNANCE.md", ".github/GOVERNANCE.md",
     ],
+}
+
+# Roadmap and meeting-notes documents are matched by regex rather than a
+# literal candidate list -- a project's roadmap doesn't have to be named
+# exactly "roadmap.md" (CHIP-SPV: docs/Devicelib_roadmap.md, petsc:
+# doc/community/roadmap.md and doc/overview/gpu_roadmap.md), and meeting
+# notes don't have to live in a directory named exactly "meetings" (llvm's
+# flang subproject keeps them at flang/docs/MeetingNotes/). All four
+# portfolio repos the probe flagged use a name a fixed list never enumerated.
+_DECISION_PATTERNS = {
+    "Roadmap": r"(^|/)[\w.-]*roadmap[\w.-]*\.(md|rst|txt)$",
+    "Meeting notes": r"(^|/)meeting[-_]?notes?(/|$)|(^|/)[\w.-]*meeting[-_]?notes[\w.-]*\.(md|rst|txt)$",
 }
 
 # Repository features that expose discussion and documentation publicly.
@@ -65,7 +69,7 @@ class WelcomenessCollector(GitHubCollectorBase):
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
                 self._get_public_channels(client, owner, repo),
-                self._find_decision_documents(client, owner, repo),
+                RepoTree.fetch(client, self.github_headers, owner, repo),
                 return_exceptions=True,
             )
 
@@ -75,11 +79,10 @@ class WelcomenessCollector(GitHubCollectorBase):
         else:
             channels, channels_gap = results[0]
 
+        tree = COLLECTION_GAP if isinstance(results[1], Exception) else results[1]
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=decision_documents reason=exception:{results[1]!r}")
-            documents = {"found": [], "not_collected": [], "details": {}}
-        else:
-            documents = results[1]
+        documents = self._find_decision_documents(tree)
 
         return {
             "package_name": repo_name,
@@ -104,35 +107,38 @@ class WelcomenessCollector(GitHubCollectorBase):
             return [], False
         return [label for flag, label in _PUBLIC_CHANNELS.items() if data.get(flag)], False
 
-    async def _find_decision_documents(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Dict[str, Any]:
-        """Roadmaps, meeting notes, decision records and governance docs."""
-
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
-            saw_gap = False
-            for path in paths:
-                url = await self._check_file_exists(client, owner, repo, path)
-                if url is COLLECTION_GAP:
-                    saw_gap = True
-                    continue
-                if url:
-                    return label, url, saw_gap
-            return label, None, saw_gap
-
-        results = await asyncio.gather(
-            *[check(label, paths) for label, paths in _DECISION_PATHS.items()]
-        )
+    def _find_decision_documents(self, tree) -> Dict[str, Any]:
+        """Roadmaps, meeting notes, decision records and governance docs,
+        matched against a RepoTree (case-insensitive, files or directories)
+        rather than probed one literal path at a time -- see
+        METRIC_BLIND_SPOTS.md class F1/F2.
+        """
         found, not_collected, details = [], [], {}
-        for label, url, saw_gap in results:
+
+        for label, paths in _DECISION_PATHS.items():
+            if tree is COLLECTION_GAP:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+                continue
+            url = tree.match_url(paths)
             if url:
                 found.append(label)
                 details[label] = {"exists": True, "url": url}
-            elif saw_gap:
-                not_collected.append(label)
-                details[label] = {"not_collected": True}
             else:
                 details[label] = {"exists": False}
+
+        for label, pattern in _DECISION_PATTERNS.items():
+            if tree is COLLECTION_GAP:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+                continue
+            url = tree.find_url(pattern)
+            if url:
+                found.append(label)
+                details[label] = {"exists": True, "url": url}
+            else:
+                details[label] = {"exists": False}
+
         return {"found": found, "not_collected": not_collected, "details": details}
 
     def _calculate_score(
