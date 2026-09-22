@@ -30,13 +30,52 @@ _SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 # three-component semver read that as no versioning discipline at all.
 _CALVER_RE = re.compile(r"^v?(\d{2}|\d{4})\.(\d{1,2})(?:\.\d+)?(?:[-+].*)?$")
 
+# A compact all-numeric date tag (flang-compiler/flang: flang_20190329),
+# once the project-name prefix below has been stripped.
+_COMPACT_DATE_RE = re.compile(r"^\d{8}$")
+
+# Bare major.minor (OpenACCV-V: v3.0; CODARcode/Chimbuko: v7.0) -- a real,
+# deliberate versioning discipline, just without a patch component. Checked
+# last since it would also match the leading two components of a genuine
+# semver/calver tag if those didn't already match first.
+_MAJOR_MINOR_RE = re.compile(r"^\d+\.\d+$")
+
+# The version core of a tag: a run of digits and internal separators that
+# starts and ends on a digit (so a trailing non-numeric suffix like papi's
+# "-t" or "b2" pre-release marker is excluded), or a single digit run.
+_TAG_VERSION_CORE_RE = re.compile(r"\d[\d._-]*\d|\d+")
+
+
+def _normalize_tag(tag: str) -> str:
+    """Strip a project-name prefix and normalize hyphen/underscore-separated
+    numeric groups to dots, so a prefixed tag reads the same as a bare
+    version string.
+
+    A fixed list of exact-format regexes rejected any tag that wasn't
+    already bare digits-and-dots, which is the exception rather than the
+    rule in this portfolio: llvm tags llvmorg-23.1.1, Trilinos tags
+    trilinos-release-17-2-1 (hyphens as the version separator, not dots),
+    and papi tags papi-7-2-0-t (a trailing non-version suffix). All three
+    normalize to a recognizable scheme once the prefix is gone and hyphens
+    read as dots.
+    """
+    match = _TAG_VERSION_CORE_RE.search(tag)
+    if not match:
+        return tag
+    return re.sub(r"[-_]", ".", match.group(0))
+
 
 def _versioning_scheme(tag: str) -> Optional[str]:
-    """"semver", "calver", or None for a tag that follows neither."""
-    if _SEMVER_RE.match(tag):
+    """"semver", "calver", "major.minor", or None for a tag matching none."""
+    normalized = _normalize_tag(tag)
+    if _SEMVER_RE.match(normalized):
         return "semver"
-    if _CALVER_RE.match(tag):
+    if _CALVER_RE.match(normalized):
         return "calver"
+    if _COMPACT_DATE_RE.match(normalized):
+        return "calver"
+    if _MAJOR_MINOR_RE.match(normalized):
+        return "major.minor"
     return None
 
 
