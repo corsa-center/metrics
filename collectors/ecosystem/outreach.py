@@ -18,38 +18,45 @@ programmes, course syllabi, non-code contribution records — and stay uncollect
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
 # Labels projects conventionally use to flag newcomer-friendly work.
 _NEWCOMER_LABELS = ["good first issue", "help wanted", "good-first-issue", "newcomer"]
 
-# Onboarding resources, grouped so a project gets credit for any variant.
-_ONBOARDING_PATHS = {
-    "Contributing guide": [
-        "CONTRIBUTING.md", "CONTRIBUTING.rst", "CONTRIBUTING",
-        ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md",
-    ],
-    "Issue templates": [
-        ".github/ISSUE_TEMPLATE", ".github/ISSUE_TEMPLATE.md",
-    ],
-    "Pull request template": [
-        ".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
-        "PULL_REQUEST_TEMPLATE.md",
-    ],
-    "Getting-started guide": [
-        "docs/getting-started.md", "docs/getting_started.md", "docs/quickstart.md",
-        "doc/getting-started.md", "GETTING_STARTED.md", "docs/source/getting_started.rst",
-    ],
-}
+# Onboarding resources matched against a RepoTree (case-insensitive, whole
+# tree) rather than probed one literal path at a time.
+_ONBOARDING_LABELS = [
+    "Contributing guide", "Issue templates", "Pull request template",
+    "Getting-started guide",
+]
+_CONTRIBUTING_PATHS = [
+    "CONTRIBUTING.md", "CONTRIBUTING.rst", "CONTRIBUTING",
+    ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md",
+]
+_ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
+_ISSUE_TEMPLATE_FILES = [".github/ISSUE_TEMPLATE.md"]
+_PR_TEMPLATE_PATHS = [
+    ".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
+    "PULL_REQUEST_TEMPLATE.md",
+]
+# A getting-started guide, under whatever name and location it actually has --
+# six enumerated spellings missed 16 of 65 portfolio repos, AMReX's
+# Docs/sphinx_documentation/source/GettingStarted.rst among them
+# (corsa-center/metrics#49). Matched anywhere under a doc-shaped directory
+# rather than at a handful of exact paths.
+_GETTING_STARTED_PATTERN = (
+    r"(^|/)(docs?|documentation)/.*(getting[-_]?started|quick[-_ ]?start|tutorial)"
+)
 
 # Window for "new" contributors and recent commit activity.
 _RECENT_DAYS = 365
@@ -77,7 +84,7 @@ class OutreachCollector(GitHubCollectorBase):
                 self._get_contributors(client, owner, repo),
                 self._get_recent_commit_authors(client, owner, repo),
                 self._get_newcomer_issues(client, owner, repo),
-                self._check_onboarding(client, owner, repo),
+                RepoTree.fetch(client, self.github_headers, owner, repo),
                 return_exceptions=True,
             )
 
@@ -100,12 +107,10 @@ class OutreachCollector(GitHubCollectorBase):
         else:
             newcomer_issues = results[2]
 
+        tree = COLLECTION_GAP if isinstance(results[3], Exception) else results[3]
         if isinstance(results[3], Exception):
             logger.warning(f"COLLECTION-GAP category=onboarding reason=exception:{results[3]!r}")
-            onboarding = {"found": [], "missing": [],
-                          "not_collected": list(_ONBOARDING_PATHS), "details": {}}
-        else:
-            onboarding = results[3]
+        onboarding = self._check_onboarding(tree)
 
         growth = self._analyze_contributor_growth(contributors, recent_commits)
 
@@ -240,37 +245,34 @@ class OutreachCollector(GitHubCollectorBase):
             result["not_collected"] = True
         return result
 
-    async def _check_onboarding(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Dict[str, Any]:
-        """Which onboarding resources the repository provides."""
+    def _check_onboarding(self, tree) -> Dict[str, Any]:
+        """Which onboarding resources the repository provides, resolved
+        against a RepoTree instead of probed one literal path at a time --
+        see corsa-center/metrics#49 and METRIC_BLIND_SPOTS.md class F2.
+        """
+        if tree is COLLECTION_GAP:
+            return {
+                "found": [], "missing": [], "not_collected": list(_ONBOARDING_LABELS),
+                "details": {label: {"not_collected": True} for label in _ONBOARDING_LABELS},
+            }
 
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
-            saw_gap = False
-            for path in paths:
-                url = await self._check_file_exists(client, owner, repo, path)
-                if url is COLLECTION_GAP:
-                    saw_gap = True
-                    continue
-                if url:
-                    return label, url, saw_gap
-            return label, None, saw_gap
+        issue_templates_url = tree.match_url(_ISSUE_TEMPLATE_FILES)
+        if not issue_templates_url and tree.has_dir(_ISSUE_TEMPLATE_DIR):
+            issue_templates_url = f"https://github.com/{tree.owner}/{tree.repo}/tree/HEAD/{_ISSUE_TEMPLATE_DIR}"
 
-        results = await asyncio.gather(
-            *[check(label, paths) for label, paths in _ONBOARDING_PATHS.items()]
-        )
-        found, missing, not_collected, details = [], [], [], {}
-        for label, url, saw_gap in results:
-            if url:
-                found.append(label)
-                details[label] = {"exists": True, "url": url}
-            elif saw_gap:
-                not_collected.append(label)
-                details[label] = {"not_collected": True}
-            else:
-                missing.append(label)
-                details[label] = {"exists": False}
-        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+        urls = {
+            "Contributing guide": tree.match_url(_CONTRIBUTING_PATHS),
+            "Issue templates": issue_templates_url,
+            "Pull request template": tree.match_url(_PR_TEMPLATE_PATHS),
+            "Getting-started guide": tree.find_url(_GETTING_STARTED_PATTERN),
+        }
+        found = [label for label in _ONBOARDING_LABELS if urls[label]]
+        missing = [label for label in _ONBOARDING_LABELS if not urls[label]]
+        details = {
+            label: ({"exists": True, "url": urls[label]} if urls[label] else {"exists": False})
+            for label in _ONBOARDING_LABELS
+        }
+        return {"found": found, "missing": missing, "not_collected": [], "details": details}
 
     @staticmethod
     def _next_link(link_header: Optional[str]) -> Optional[str]:
@@ -406,7 +408,7 @@ class OutreachCollector(GitHubCollectorBase):
         onboarding_passing = len(found) >= get_threshold("4.2.5", "Onboarding Infrastructure Assessment")
         onboarding_entry: Dict[str, Any] = {
             "label": "Onboarding Infrastructure Assessment",
-            "value": f"{len(found)}/{len(_ONBOARDING_PATHS)} resources",
+            "value": f"{len(found)}/{len(_ONBOARDING_LABELS)} resources",
             "detail": ", ".join(found) if found else None,
             "passing": onboarding_passing,
         }

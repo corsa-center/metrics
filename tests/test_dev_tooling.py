@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.development_practices.dev_tooling import (
     DevToolingCollector, _TESTING_PATHS, _TOOLING_PATHS,
 )
@@ -123,36 +123,34 @@ class TestScoringGapHandling:
         assert s["status"] == "not_collected"
 
 
-class TestScanGapHandling:
-    def _run(self, collector, responses):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+class TestScan:
+    """_scan now takes a RepoTree (or COLLECTION_GAP) directly -- see
+    METRIC_BLIND_SPOTS.md class F1.
+    """
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._scan(None, "o", "r", _TESTING_PATHS)
-
-        return asyncio.run(go())
-
-    def test_gapped_group_with_no_find_is_not_collected(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _TESTING_PATHS.values() for p in paths}
-        result = self._run(collector, responses)
+    def test_gapped_tree_reports_every_item_not_collected(self, collector):
+        result = collector._scan(COLLECTION_GAP, _TESTING_PATHS)
         assert result["found"] == []
         assert set(result["not_collected"]) == set(_TESTING_PATHS)
 
-    def test_found_group_survives_gaps_on_other_groups(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _TESTING_PATHS.values() for p in paths}
-        responses["pytest.ini"] = "http://x"
-        result = self._run(collector, responses)
+    def test_found_group_survives_confirmed_misses_on_other_groups(self, collector):
+        tree = RepoTree("o", "r", ["pytest.ini"], truncated=False)
+        result = collector._scan(tree, _TESTING_PATHS)
         assert "pytest configuration" in result["found"]
+        assert result["not_collected"] == []
 
     def test_capitalized_tests_directory_is_found(self, collector):
-        # GitHub's Contents API is case-sensitive; AMReX-Codes/amrex's test
-        # directory is "Tests" (capitalized), which lowercase-only patterns
-        # never match even though a real test suite is right there.
-        responses = {"Tests": "http://x"}
-        result = self._run(collector, responses)
+        # AMReX-Codes/amrex's test directory is "Tests" (capitalized), which
+        # a lowercase-only literal comparison never matches even though a
+        # real test suite is right there.
+        tree = RepoTree("o", "r", ["Tests/CMakeLists.txt"], truncated=False)
+        result = collector._scan(tree, _TESTING_PATHS)
         assert "Test suite directory" in result["found"]
+
+    def test_vendored_test_framework_directory_is_found(self, collector):
+        tree = RepoTree("o", "r", ["test/googletest/README.md"], truncated=False)
+        result = collector._scan(tree, _TESTING_PATHS)
+        assert "Test framework vendored" in result["found"]
 
 
 class TestAnalyzeReviewCoverageGapHandling:

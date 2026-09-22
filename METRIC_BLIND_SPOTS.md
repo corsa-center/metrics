@@ -221,7 +221,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.4 | **Engagement Quality Metrics** | 🔴 F9, ⚪ F10 | **#48** — deliberate triage reads as disengagement |
 | 4.2.4 | **Community Participation** | 🔴 F9 | **#48** — maintainer-authored work penalised |
 | 4.2.4 | Response Time / Issue Resolution | ⚪ F10, F9 | 30-issue sample; bot-closed issues counted |
-| 4.2.5 | **Onboarding Infrastructure** | 🔴 F1, F2 | **#49** — 16 repos have an unmatched getting-started guide |
+| 4.2.5 | **Onboarding Infrastructure** | ✅ fixed | **#49** — fixed via RepoTree; getting-started guide now found by regex, not 6 literal paths |
 | 4.2.5 | New Contributor / Retention / Lifecycle | ⚪ F10 | 5-page contributor cap, 10-page commit cap |
 | 4.2.5 | Good First Issue Effectiveness | ⚪ F6, F9 | label vocabulary; penalises promptly-fixed issues |
 | 4.2.6 | Decision-Making Visibility | 🟡 F2, ⚪ F1 | roadmap / meeting-notes paths — 4 repos unmatched |
@@ -229,20 +229,20 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.7 | Advanced Dependency Analysis | 🔴 F12 | spurious `go` entries; conda-forge missing |
 | 4.2.8 | Funding Documentation Analysis | ⚪ F2, F6 | award-number regex is DOE/NSF/NIH-shaped only |
 | 4.2.8 | Institutional Affiliation | ⚪ F10, F12 | top-25 sample; free-text `company` often blank |
-| 4.3.1 | **CERT Guidelines Compliance** | 🔴 F3, F4 | **#51** — flags outside scanned dirs, workflows gated out |
+| 4.3.1 | **CERT Guidelines Compliance** | ◐ F3 fixed, F4 open | **#51** — flag-file scan now whole-tree (`.cmake`); workflow filename gate is Phase 2 |
 | 4.3.1 | **Reliability Trend Analysis** | 🔴 F7 | **#52** — fallback suppressed by one typed issue |
 | 4.3.1 | Advanced Static Analysis | 🟡 F2, F4 | config paths + the same workflow gate |
 | 4.3.1 | Test Coverage Excellence | ⚪ F12 | Codecov-only; near-universally unmeasurable for HPC |
 | 4.3.2 | CI/CD Effectiveness | 🔴 F5, ⚪ F10 | fixed — was zeroing 71% of the portfolio |
-| 4.3.2 | Testing Framework Excellence | 🔴 F1, 🟡 F2 | `Tests/` fixed; `TESTING/`, `TEST/` still miss |
+| 4.3.2 | Testing Framework Excellence | ✅ fixed | `Tests/`, `TESTING/`, `TEST/`, vendored frameworks all case-insensitive now |
 | 4.3.2 | Development Tool Integration | ⚪ F1, F2 | literal config paths at repo root |
 | 4.3.2 | Code Review Quality | ⚪ F10, F9 | last 50 PRs; self-merge conventions differ |
 | 4.3.3 | **Version Control Best Practices** | 🔴 F6 | **#53** — CalVer fixed; 16 prefixed-tag repos still fail |
-| 4.3.3 | Environment Management | 🟡 F2 | 23 repos pin deps at an unmatched nested path |
-| 4.3.3 | Containerization Excellence | 🟡 F2 | 20 repos have Dockerfiles the 7-path list cannot see |
+| 4.3.3 | Environment Management | ◐ F1 fixed, F2 open | case-insensitive now; 23 repos still pin deps at an unenumerated nested path (needs a scope decision, see Phase 1 footnote) |
+| 4.3.3 | Containerization Excellence | ◐ F1 fixed, F2 open | case-insensitive now; CI-only Dockerfiles deliberately still excluded (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | FAIR4RS / Reproducibility Docs | ⚪ F1, F2 | literal path lists |
 | 4.3.4 | **Documentation Completeness** | 🔴 F1, ⚪ F6 | **#54** — `Docs` fixed; `DOC/` still misses |
-| 4.3.5 | Portable Build System | 🔴 F2 | `GNUmakefile.in` fixed; `Makefile.am` unlisted (6 repos) |
+| 4.3.5 | Portable Build System | ✅ fixed | `GNUmakefile.in`, `Makefile.am` (6 autotools repos) both now detected |
 | 4.3.5 | Platform Documentation | ⚪ F6 | README platform-name regex |
 | 4.3.5 | Deployment Environment Testing | ⚪ F10 | workflow scan capped — AMReX scanned 25 of 26 |
 | 4.3.6 | Complexity / Code Quality / Docs Quality | ⚪ F8 | **immune to F1–F3** — reads the recursive tree |
@@ -263,57 +263,79 @@ Phases 1–5 are mechanical; phase 6 needs a product decision.
 | `.rst` governance/CoC/contributing docs | F2 | — | `ec30acd` |
 | `ci_cd.py` resolves real default branch | F5 | — | `8cb02a8` |
 | `Tests/` capitalisation, `GNUmakefile.in` | F1, F2 | — | `8cb02a8` |
-| `Docs`/`Doc` doc-directory waiver | F1 | [#54](https://github.com/corsa-center/metrics/issues/54) | *uncommitted* |
-| CalVer release tags | F6 | [#53](https://github.com/corsa-center/metrics/issues/53) | *uncommitted* |
-| Defect-trend fallback threshold | F7 | [#52](https://github.com/corsa-center/metrics/issues/52) | *uncommitted* |
+| `Docs`/`Doc` doc-directory waiver | F1 | [#54](https://github.com/corsa-center/metrics/issues/54) | `2e89d9f` |
+| CalVer release tags | F6 | [#53](https://github.com/corsa-center/metrics/issues/53) | `2e89d9f` |
+| Defect-trend fallback threshold | F7 | [#52](https://github.com/corsa-center/metrics/issues/52) | `2e89d9f` |
 
-### Phase 1 — Tree-based file detection ⭐ highest value
+### Phase 1 — Tree-based file detection ⭐ highest value — 6/9 landed
 
-**Removes F1, F2 and F3 outright — ~112 literals and three defect classes.**
+**Removes F1 and F3 outright, and F2 wherever a candidate is genuinely
+locatable by regex.**
 
-Add a `RepoTree` helper to [`collectors/ecosystem/base.py`](collectors/ecosystem/base.py):
+Added `RepoTree` to [`collectors/ecosystem/base.py`](collectors/ecosystem/base.py):
+one `GET /repos/{owner}/{repo}/git/trees/HEAD?recursive=1` per repository,
+indexing both files and (inferred) directories case-insensitively.
 
-- one `GET /repos/{owner}/{repo}/git/trees/{default_branch}?recursive=1` per
-  repository, cached for the run;
-- `exists(*names)` — case-insensitive basename match;
-- `find(pattern)` — regex over full paths;
-- `dirs(pattern)` — directory matches;
-- returns `COLLECTION_GAP` on failure, preserving the existing gap semantics.
+- `match(candidates)` / `match_url(candidates)` — first candidate present as a
+  file **or** directory, case-insensitive, real casing returned;
+- `has_dir(path)` — case-insensitive directory presence;
+- `find(pattern)` / `find_url(pattern)` — regex over the whole tree, for "this
+  concept, any spelling" checks a literal list can't express;
+- `fetch()` returns `COLLECTION_GAP` on failure, preserving existing gap
+  semantics; `.truncated` is carried through for callers that want to know.
 
 **Feasibility, measured:** 64 of 65 repositories return a complete tree.
 Only `llvm/llvm-project` truncates (64,859 paths); Trilinos at 51,729 does not.
-Keep `_check_file_exists` as the documented fallback when `truncated: true`.
+`_check_file_exists` remains available as a fallback for a truncated tree.
 
 **This reduces request volume.** Up to ~112 per-path probes per repository
-collapse into one tree call — relevant given the rate-limit pressure documented
-in `config/orchestrator.yaml`.
+collapse into one tree call.
 
 Migration order, by measured exposure:
 
-| Order | Collector | Metrics fixed |
-|---|---|---|
-| 1 | `usability.py` | 4.3.4 Documentation Completeness (`DOC/`) |
-| 2 | `outreach.py` | 4.2.5 Onboarding — 16 repos |
-| 3 | `reproducibility.py` | 4.3.3 Environment (23), Containers (20) |
-| 4 | `dev_tooling.py` | 4.3.2 Testing (`TESTING/`, `TEST/`) |
-| 5 | `accessibility.py` | 4.3.5 Portable Build (`Makefile.am`) |
-| 6 | `reliability.py` | 4.3.1 Static Analysis configs |
-| 7 | `fair_licensing.py` | 4.2.2 `citation.cff` |
-| 8 | `welcomeness.py` | 4.2.6 roadmap / meeting notes |
-| 9 | remaining 6 collectors | latent exposure |
+| Order | Collector | Metrics fixed | Status |
+|---|---|---|---|
+| 1 | `usability.py` | 4.3.4 Documentation Completeness (`DOC/`) | ✅ landed |
+| 2 | `outreach.py` | 4.2.5 Onboarding — 16 repos, incl. AMReX's getting-started guide (#49) | ✅ landed |
+| 3 | `reproducibility.py` | 4.3.3 Environment, Containers — case-insensitive + single-fetch | ✅ landed¹ |
+| 4 | `dev_tooling.py` | 4.3.2 Testing (`TESTING/`, `TEST/`, vendored frameworks) | ✅ landed |
+| 5 | `accessibility.py` | 4.3.5 Portable Build (`Makefile.am`, 6 repos) | ✅ landed |
+| 6 | `reliability.py` | 4.3.1 Static Analysis configs; CERT flag-file scan now whole-tree (#51) | ✅ landed |
+| 7 | `fair_licensing.py` | 4.2.2 `citation.cff` | 🔲 todo |
+| 8 | `welcomeness.py` | 4.2.6 roadmap / meeting notes | 🔲 todo |
+| 9 | remaining 6 collectors | latent exposure | 🔲 todo |
+
+¹ **Containers/Environment Management are case-insensitive and single-fetch
+now, but still exact-path matching, not regex.** Broadening them to "found
+anywhere in the tree" was deliberately *not* done: the probe's F2 counts for
+these two categories included CI-only artifacts (e.g. kokkos's
+`scripts/docker/Dockerfile.gcc-10`, built to test compilers, not shipped for
+users) that arguably shouldn't count toward a *reproducibility* signal the
+way a root `Dockerfile` does. Broadening needs a product decision about which
+nested locations legitimately count; case-insensitivity and the tree-based
+fetch were the parts safe to land without one.
+
+**Also found while migrating `reliability.py`'s CERT flag-file scan:**
+broadening `_find_flag_files` to search the whole tree (instead of four fixed
+directories) initially let `SECURITY.md` ("secur") and a CI workflow named
+`flag_prs_to_master.yml` ("flag") match the keyword regex by name alone,
+crowding out genuine `.cmake` files within the small 4-file result cap on
+Trilinos. Fixed by restricting the whole-tree search to `.cmake` files
+specifically, which is what the four original directories implied in the
+first place. Worth remembering as a general risk when Phase 2 broadens the
+CI-workflow read the same way: a wider net needs a correspondingly tighter
+filter, or a small result cap silently fills with noise.
 
 ### Phase 2 — Read every CI workflow
 
 **Removes F4 — 62% of the portfolio.**
 
-- Drop `_ANALYSIS_WORKFLOW_HINT`; enumerate `.github/workflows/*` from the tree.
+- Drop `_ANALYSIS_WORKFLOW_HINT`; enumerate `.github/workflows/*` from the tree
+  (already available via `RepoTree.find(r"^\.github/workflows/.*\.ya?ml$")`).
 - Spend the read budget on the largest or most recently modified workflows
   rather than name-matched ones.
 - Where a cap still binds, report a **partial scan** rather than a confident
   absence — an `F11`-correct result.
-- Apply the same change to `_FLAG_DIRECTORIES`: search the tree for
-  `*.cmake`/`*.mk` carrying flag-shaped names anywhere, not in four fixed
-  directories. Closes [#51](https://github.com/corsa-center/metrics/issues/51).
 
 ### Phase 3 — Scheme detection instead of exact formats
 
@@ -392,9 +414,9 @@ permanent:
 | Issue | Metric | Class | Phase | Status |
 |---|---|---|---|---|
 | [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality / Community Participation | F9 | 6 | 🔲 Todo |
-| [#49](https://github.com/corsa-center/metrics/issues/49) | Onboarding Infrastructure | F1, F2 | 1 | 🔲 Todo |
+| [#49](https://github.com/corsa-center/metrics/issues/49) | Onboarding Infrastructure | F1, F2 | 1 | ✅ Fixed |
 | [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network Analysis | F8, F12 | 6 | 🔲 Todo |
-| [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 2 | 🔲 Todo |
+| [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ◐ flag-file scan fixed (F3); workflow gate pending (F4) |
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
 | [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ◐ CalVer fixed; prefixed tags pending |
-| [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs` fixed; `DOC/` pending |
+| [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs`/`DOC/` fixed; heading-regex rigidity (F6) pending |

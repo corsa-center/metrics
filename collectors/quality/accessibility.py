@@ -13,16 +13,16 @@ Checks (per the report):
   - Documentation        : INSTALL, INSTALL.md
 """
 
-import asyncio
 import httpx
 import logging
 from typing import Any, Dict, List
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
-# Each category maps a human-readable label to candidate file paths.
+# Each category maps a human-readable label to candidate file paths, matched
+# case-insensitively against a RepoTree (see base.py).
 _CHECKS: Dict[str, Dict[str, List[str]]] = {
     "containers": {
         "Docker": ["Dockerfile", "docker/Dockerfile", ".docker/Dockerfile"],
@@ -31,7 +31,6 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
             "singularity/Singularity",
             "Apptainer",
             "apptainer/Apptainer",
-            "*.def",
         ],
     },
     "build_systems": {
@@ -45,7 +44,13 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
             "environment.yaml",
         ],
         "Autoconf": ["configure.ac", "configure.in"],
-        "Makefile": ["Makefile", "makefile", "GNUmakefile", "Makefile.in", "GNUmakefile.in"],
+        "Makefile": [
+            "Makefile", "makefile", "GNUmakefile", "Makefile.in", "GNUmakefile.in",
+            # Autotools projects (open-mpi/ompi, pmodels/mpich, and four
+            # other portfolio repos) ship Makefile.am, the automake source,
+            # not a literal Makefile/GNUmakefile.
+            "Makefile.am",
+        ],
     },
     "python_packaging": {
         "pyproject.toml": ["pyproject.toml"],
@@ -74,15 +79,19 @@ class AccessibilityCollector(GitHubCollectorBase):
         logger.info(f"Checking accessibility / portability for {owner}/{repo}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            return await self._scan(client, repo_name, owner, repo)
+            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
+            return self._scan(tree, repo_name, owner, repo)
 
-    async def _scan(
+    def _scan(
         self,
-        client: httpx.AsyncClient,
+        tree,
         repo_name: str,
         owner: str,
         repo: str,
     ) -> Dict[str, Any]:
+        """Resolved against a RepoTree (or COLLECTION_GAP) rather than probed
+        one literal path at a time -- see METRIC_BLIND_SPOTS.md class F1/F2.
+        """
         category_results: Dict[str, Any] = {}
         all_found: List[str] = []
         all_missing: List[str] = []
@@ -94,34 +103,20 @@ class AccessibilityCollector(GitHubCollectorBase):
             not_collected: List[str] = []
             details: Dict[str, Any] = {}
 
-            # Check each item in the category concurrently.
-            async def check_item(label: str, paths: List[str]) -> tuple:
-                saw_gap = False
-                for path in paths:
-                    html_url = await self._check_file_exists(client, owner, repo, path)
-                    if html_url is COLLECTION_GAP:
-                        saw_gap = True
-                        continue
-                    if html_url:
-                        return label, path, html_url, saw_gap
-                return label, paths[0], None, saw_gap
-
-            results = await asyncio.gather(
-                *[check_item(label, paths) for label, paths in items.items()]
-            )
-
-            for label, matched_path, html_url, saw_gap in results:
-                if html_url:
+            for label, paths in items.items():
+                if tree is COLLECTION_GAP:
+                    not_collected.append(label)
+                    details[label] = {"not_collected": True}
+                    continue
+                matched_path = tree.match(paths)
+                if matched_path:
                     found.append(label)
                     details[label] = {
                         "exists": True,
                         "file": matched_path,
-                        "url": html_url,
+                        "url": tree.match_url(paths),
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
-                elif saw_gap:
-                    not_collected.append(label)
-                    details[label] = {"not_collected": True}
                 else:
                     missing.append(label)
                     details[label] = {"exists": False}

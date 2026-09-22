@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
 
 
@@ -132,38 +132,43 @@ class TestAnalyzeReadmeGapHandling:
         assert "not_collected" not in result
 
 
-class TestFindDocDirectoryGapHandling:
-    def _run(self, collector, responses):
-        import asyncio
-        from unittest.mock import AsyncMock, patch
+class TestFindDocDirectory:
+    """_find_doc_directory now takes a RepoTree (or COLLECTION_GAP) directly,
+    rather than probing paths one at a time -- see corsa-center/metrics#54 and
+    METRIC_BLIND_SPOTS.md class F1.
+    """
 
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
-
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_doc_directory(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gap_on_all_candidates_is_tracked(self, collector):
-        path, saw_gap = self._run(collector, {"docs": COLLECTION_GAP, "doc": COLLECTION_GAP,
-                                                "documentation": COLLECTION_GAP, "Documentation": COLLECTION_GAP})
+    def test_gap_tree_is_tracked(self, collector):
+        path, saw_gap = collector._find_doc_directory(COLLECTION_GAP)
         assert path is None
         assert saw_gap is True
 
     def test_found_directory_reports_no_gap(self, collector):
-        path, saw_gap = self._run(collector, {"docs": "http://x"})
+        tree = RepoTree("o", "r", ["docs/index.md"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
         assert path == "docs"
         assert saw_gap is False
 
     def test_capitalized_docs_directory_is_found(self, collector):
         # AMReX-Codes/amrex ships "Docs" (capital D, lowercase rest); the
-        # waiver could never fire for it since only "Documentation" and
-        # "docs"/"doc"/"documentation" were listed. Reported in
-        # corsa-center/metrics#54.
-        path, saw_gap = self._run(collector, {"Docs": "http://x"})
-        assert path == "Docs"
+        # waiver could never fire for it when case had to be enumerated.
+        # Reported in corsa-center/metrics#54.
+        tree = RepoTree("o", "r", ["Docs/index.rst"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
+        assert path == "docs"
+        assert saw_gap is False
+
+    def test_screaming_case_doc_directory_is_found(self, collector):
+        # superlu/superlu_dist/superlu_mt ship DOC/, not doc/ or docs/.
+        tree = RepoTree("o", "r", ["DOC/html/index.html"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
+        assert path == "doc"
+        assert saw_gap is False
+
+    def test_no_doc_directory_is_a_confirmed_absence(self, collector):
+        tree = RepoTree("o", "r", ["README.md", "src/main.c"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
+        assert path is None
         assert saw_gap is False
 
 
