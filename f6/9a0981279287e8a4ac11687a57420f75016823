@@ -1,0 +1,33 @@
+tests/test_supply_chain.py
+  s_72fde105c4df10::t_eea3ad2c73e236 10-13
+  s_72fde105c4df10::t_d8b3b9bcad8563 312,318,328,356,364,378,408-570
+  s_72fde105c4df10::t_556223e2d04b23 271,279,281-287,291,296
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_479b75342c9686 449
+  s_72fde105c4df10::t_980df598d5b3d2 465-483,485-492
+collectors/quality/supply_chain.py
+  s_72fde105c4df10::t_a12450784f9840 329-331
+  s_72fde105c4df10::t_b637be08cd587c 165-177
+  s_72fde105c4df10::t_9729898aa3542e 72-74,105-162
+  s_72fde105c4df10::t_8a16497fde06ea 271-283,289-311,314,317,320-322,325,338,340-341,345,347-353,355-356
+  s_72fde105c4df10::t_7c1b8458c0afc3 12-24
+  s_72fde105c4df10::t_90f2319315c450 43
+  s_72fde105c4df10::t_a884bfa4437fb3 163-164
+  s_72fde105c4df10::t_d0dcf9acc233d5 332-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f69a0981279287e8a4ac11687a57420f75016823",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
