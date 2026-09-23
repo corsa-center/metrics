@@ -143,3 +143,40 @@ class TestDownloadsSummary:
 
     def test_empty_registries(self, collector):
         assert collector._downloads_summary([]) == {"total": 0, "by_registry": []}
+
+
+class TestDropSpuriousGoEntries:
+    """Go's decentralized module system lets any public repo be `go get`-ed
+    without the project ever intending to publish a Go module -- ecosyste.ms
+    indexes AMReX-Codes/amrex (a C++ library) under "go" with zero
+    dependents purely because some tool once resolved that path.
+    corsa-center/metrics#50.
+    """
+
+    def test_zero_dependent_go_entry_dropped_for_non_go_repo(self, collector):
+        registries = [_pkg("go", "github.com/AMReX-Codes/amrex"), _pkg("spack", "amrex", deps=2)]
+        result = collector._drop_spurious_go_entries(registries, "C++")
+        assert [r["ecosystem"] for r in result] == ["spack"]
+
+    def test_go_entry_with_real_dependents_kept(self, collector):
+        registries = [_pkg("go", "github.com/foo/bar", deps=5)]
+        result = collector._drop_spurious_go_entries(registries, "C++")
+        assert len(result) == 1
+
+    def test_go_entry_kept_for_a_real_go_project(self, collector):
+        # A genuinely young Go package can legitimately have zero
+        # dependents yet -- only drop the noise for non-Go repos.
+        registries = [_pkg("go", "github.com/foo/bar")]
+        result = collector._drop_spurious_go_entries(registries, "Go")
+        assert len(result) == 1
+
+    def test_unknown_primary_language_keeps_the_entry(self, collector):
+        # Absence of information isn't license to discard real data.
+        registries = [_pkg("go", "github.com/foo/bar")]
+        result = collector._drop_spurious_go_entries(registries, None)
+        assert len(result) == 1
+
+    def test_non_go_ecosystems_never_touched(self, collector):
+        registries = [_pkg("pypi", "foo")]
+        result = collector._drop_spurious_go_entries(registries, "C++")
+        assert len(result) == 1

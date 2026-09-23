@@ -220,8 +220,21 @@ class EngagementCollector(GitHubCollectorBase):
 
         valid_responses = [t for t in response_times if t is not None]
 
+        # Maintainer-filed, zero-comment issues are self-contained triage
+        # records -- a defect ticket immediately closed by the PR that fixes
+        # it -- not a conversation. Counting them the same as an unanswered
+        # community question misreads a deliberate, effective triage
+        # workflow as disengagement. Excluded only from the discussion-shaped
+        # metrics below (comment depth, outside-participation share); close
+        # time and first-response time aren't affected -- a fast, silent
+        # close doesn't misrepresent those the same way.
+        discussable = [
+            i for i in issues
+            if not (i.get("author_association") in _INSIDE_ASSOCIATIONS and i.get("comments", 0) == 0)
+        ]
+
         # Interaction depth and how evenly responses are distributed.
-        comment_counts = [i.get("comments", 0) for i in issues]
+        comment_counts = [i.get("comments", 0) for i in discussable]
         median_comments = (
             round(statistics.median(comment_counts), 1) if comment_counts else None
         )
@@ -235,12 +248,16 @@ class EngagementCollector(GitHubCollectorBase):
             timely_share = round(timely / len(issues), 3)
 
         outside = sum(
-            1 for i in issues
+            1 for i in discussable
             if i.get("author_association") not in _INSIDE_ASSOCIATIONS
         )
 
         return {
             "sample_size": len(issues),
+            # Denominator for Community Participation Assessment -- see
+            # `discussable` above.
+            "discussion_sample_size": len(discussable),
+            "internal_triage_excluded": len(issues) - len(discussable),
             "median_first_response_hours": round(statistics.median(valid_responses), 1) if valid_responses else None,
             "median_close_time_hours": round(statistics.median(close_times), 1) if close_times else None,
             "pct_with_response": round(len(valid_responses) / len(issues) * 100, 1) if issues else 0.0,
@@ -379,8 +396,11 @@ class EngagementCollector(GitHubCollectorBase):
         pts += sub["communication_patterns"]["pts"]
 
         # 7. Community Participation Assessment — work arriving from outside the
-        # maintainer group, across both issues and pull requests.
-        issue_n = issue_stats.get("sample_size", 0)
+        # maintainer group, across both issues and pull requests. Uses the
+        # discussion-shaped issue count (excludes maintainer-filed,
+        # zero-comment triage tickets), same reasoning as Engagement Quality
+        # above -- see _compute_issue_stats.
+        issue_n = issue_stats.get("discussion_sample_size", 0)
         pr_n = pr_stats.get("sample_size", 0)
         total_n = issue_n + pr_n
         outside_n = (

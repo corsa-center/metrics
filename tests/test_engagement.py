@@ -168,7 +168,7 @@ class TestNewSubMetrics:
 
     def _score(self, collector, **issue):
         base = {"median_first_response_hours": None, "median_close_time_hours": None,
-                "sample_size": 30, "median_comments": None,
+                "sample_size": 30, "discussion_sample_size": 30, "median_comments": None,
                 "timely_response_share": None, "outside_authors": 0}
         base.update(issue)
         pr = {"merge_rate_pct": None, "sample_size": 30,
@@ -246,6 +246,61 @@ class TestIssueStats:
         stats = collector._compute_issue_stats([], [])
         assert stats["timely_response_share"] is None
         assert stats["median_comments"] is None
+
+
+class TestInternalTriageExclusion:
+    """Maintainer-filed, zero-comment issues are self-contained triage
+    records, not a conversation -- counting them as unanswered community
+    questions misreads a deliberate, effective triage workflow as
+    disengagement. corsa-center/metrics#48.
+    """
+
+    def _issue(self, assoc, comments):
+        return {"comments": comments, "author_association": assoc,
+                "created_at": None, "closed_at": None}
+
+    def test_maintainer_zero_comment_issues_excluded_from_median(self, collector):
+        # AMReX's shape: a batch of maintainer-filed audit defects, each
+        # closed by its own fixing PR, carrying no discussion.
+        issues = [self._issue("MEMBER", 0) for _ in range(5)] + [
+            self._issue("CONTRIBUTOR", 3),
+        ]
+        stats = collector._compute_issue_stats(issues, [None] * 6)
+        # Without the exclusion this would be median([0,0,0,0,0,3]) == 0.
+        assert stats["median_comments"] == 3
+        assert stats["internal_triage_excluded"] == 5
+        assert stats["discussion_sample_size"] == 1
+
+    def test_maintainer_issue_with_any_comment_still_counts(self, collector):
+        # A real conversation, even a short one, is not silent triage.
+        issues = [self._issue("MEMBER", 1)]
+        stats = collector._compute_issue_stats(issues, [None])
+        assert stats["internal_triage_excluded"] == 0
+        assert stats["discussion_sample_size"] == 1
+
+    def test_outside_author_zero_comment_issue_still_counts(self, collector):
+        # The exclusion is specifically about maintainer-filed self-triage,
+        # not "any quiet issue" -- an unanswered external question is a
+        # real signal, not a bookkeeping ticket.
+        issues = [self._issue("CONTRIBUTOR", 0)]
+        stats = collector._compute_issue_stats(issues, [None])
+        assert stats["internal_triage_excluded"] == 0
+        assert stats["outside_authors"] == 1
+
+    def test_all_internal_triage_reports_no_median(self, collector):
+        issues = [self._issue("OWNER", 0) for _ in range(3)]
+        stats = collector._compute_issue_stats(issues, [None] * 3)
+        assert stats["median_comments"] is None
+        assert stats["discussion_sample_size"] == 0
+        assert stats["sample_size"] == 3
+
+    def test_sample_size_unaffected_by_exclusion(self, collector):
+        # sample_size stays the true fetched count; discussion_sample_size
+        # is the separate, trimmed denominator used for participation.
+        issues = [self._issue("MEMBER", 0) for _ in range(4)]
+        stats = collector._compute_issue_stats(issues, [None] * 4)
+        assert stats["sample_size"] == 4
+        assert stats["discussion_sample_size"] == 0
 
 
 # ------------------------------------------------------------------ #
