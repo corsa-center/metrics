@@ -20,12 +20,12 @@ import asyncio
 import base64
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -79,21 +79,18 @@ class FairLicensingCollector(GitHubCollectorBase):
         logger.info(f"Collecting FAIR and licensing detail for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
             results = await asyncio.gather(
                 self._get_license(client, owner, repo),
-                self._get_citation(client, owner, repo),
-                self._any_exists(client, owner, repo, _CODEMETA_PATHS),
-                self._any_exists(client, owner, repo, _ZENODO_PATHS),
+                self._get_citation(client, owner, repo, tree),
                 self._has_releases(client, owner, repo),
                 return_exceptions=True,
             )
 
-        names = ["license", "citation", "codemeta", "zenodo", "releases"]
+        names = ["license", "citation", "releases"]
         defaults = [
             ({"spdx_id": None, "text": ""}, True),
             ({}, True),
-            (False, True),
-            (False, True),
             (False, True),
         ]
         unpacked = []
@@ -106,9 +103,9 @@ class FairLicensingCollector(GitHubCollectorBase):
 
         (license_data, license_gap) = unpacked[0]
         (citation, citation_gap) = unpacked[1]
-        (has_codemeta, codemeta_gap) = unpacked[2]
-        (has_zenodo, zenodo_gap) = unpacked[3]
-        (releases, releases_gap) = unpacked[4]
+        (releases, releases_gap) = unpacked[2]
+        has_codemeta, codemeta_gap = self._any_exists(tree, _CODEMETA_PATHS)
+        has_zenodo, zenodo_gap = self._any_exists(tree, _ZENODO_PATHS)
 
         exceptions = self._analyze_license_text(license_data, license_gap)
         metadata = self._analyze_citation(citation, citation_gap)
@@ -148,44 +145,40 @@ class FairLicensingCollector(GitHubCollectorBase):
         }, False
 
     async def _get_citation(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree
     ) -> tuple:
         """Parsed CITATION.cff, or an empty dict if absent or unparseable.
 
-        Returns (citation, saw_gap).
+        Returns (citation, saw_gap). Resolved against a RepoTree first so a
+        differently-cased file (Lab-Notebooks/CodeScribe ships citation.cff,
+        not CITATION.cff) is still found -- see METRIC_BLIND_SPOTS.md class F1.
         """
-        saw_gap = False
-        for path in _CITATION_PATHS:
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-            )
-            if data is COLLECTION_GAP:
-                saw_gap = True
-                continue
-            if data is None:
-                continue
-            try:
-                text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
-                parsed = yaml.safe_load(text)
-                if isinstance(parsed, dict):
-                    return parsed, saw_gap
-            except Exception as e:
-                logger.debug(f"Could not parse {path}: {e}")
-        return {}, saw_gap
+        if tree is COLLECTION_GAP:
+            return {}, True
+        path = tree.match(_CITATION_PATHS)
+        if path is None:
+            return {}, False
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+        )
+        if data is COLLECTION_GAP:
+            return {}, True
+        if data is None:
+            return {}, False
+        try:
+            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+            parsed = yaml.safe_load(text)
+            if isinstance(parsed, dict):
+                return parsed, False
+        except Exception as e:
+            logger.debug(f"Could not parse {path}: {e}")
+        return {}, False
 
-    async def _any_exists(
-        self, client: httpx.AsyncClient, owner: str, repo: str, paths: List[str]
-    ) -> tuple:
+    def _any_exists(self, tree, paths: List[str]) -> tuple:
         """Returns (found, saw_gap)."""
-        saw_gap = False
-        for path in paths:
-            result = await self._check_file_exists(client, owner, repo, path)
-            if result is COLLECTION_GAP:
-                saw_gap = True
-                continue
-            if result:
-                return True, saw_gap
-        return False, saw_gap
+        if tree is COLLECTION_GAP:
+            return False, True
+        return bool(tree.match(paths)), False
 
     async def _has_releases(
         self, client: httpx.AsyncClient, owner: str, repo: str

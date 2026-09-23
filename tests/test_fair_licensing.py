@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.fair_licensing import (
     FairLicensingCollector, _CITATION_FIELDS, _CODEMETA_PATHS,
 )
@@ -293,36 +293,38 @@ class TestFetchGapHandling:
         data, saw_gap = asyncio.run(go())
         assert saw_gap is True
 
-    def test_get_citation_gap_with_no_find_is_tracked(self, collector):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_citation(None, "o", "r")
-
-        citation, saw_gap = asyncio.run(go())
+    def test_get_citation_gapped_tree_is_tracked(self, collector):
+        citation, saw_gap = asyncio.run(collector._get_citation(None, "o", "r", COLLECTION_GAP))
         assert citation == {}
         assert saw_gap is True
 
-    def test_any_exists_gap_with_no_find_is_tracked(self, collector):
-        async def fake_exists(client, owner, repo, path):
-            return COLLECTION_GAP
+    def test_get_citation_resolves_case_insensitively(self, collector):
+        # Lab-Notebooks/CodeScribe ships citation.cff, not CITATION.cff.
+        tree = RepoTree("o", "r", ["citation.cff"], truncated=False)
+        data = {"content": "dGl0bGU6IEZvbw=="}  # base64 "title: Foo"
 
         async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._any_exists(None, "o", "r", _CODEMETA_PATHS)
+            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._get_citation(None, "o", "r", tree)
 
-        found, saw_gap = asyncio.run(go())
+        citation, saw_gap = asyncio.run(go())
+        assert citation == {"title": "Foo"}
+        assert saw_gap is False
+
+    def test_get_citation_confirmed_absent_is_not_a_gap(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        citation, saw_gap = asyncio.run(collector._get_citation(None, "o", "r", tree))
+        assert citation == {}
+        assert saw_gap is False
+
+    def test_any_exists_gapped_tree_is_tracked(self, collector):
+        found, saw_gap = collector._any_exists(COLLECTION_GAP, _CODEMETA_PATHS)
         assert found is False
         assert saw_gap is True
 
     def test_any_exists_found_does_not_need_gap_flag(self, collector):
-        async def fake_exists(client, owner, repo, path):
-            return "http://x"
-
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._any_exists(None, "o", "r", _CODEMETA_PATHS)
-
-        found, saw_gap = asyncio.run(go())
+        tree = RepoTree("o", "r", _CODEMETA_PATHS, truncated=False)
+        found, saw_gap = collector._any_exists(tree, _CODEMETA_PATHS)
         assert found is True
         assert saw_gap is False
 
