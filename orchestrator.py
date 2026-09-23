@@ -538,20 +538,15 @@ class MetricsOrchestrator:
         """Whether repo_name ("owner/repo") resolves to a real, accessible
         GitHub repository.
 
-        A catalog entry can point at a renamed, deleted, or simply
-        mistranscribed repository -- RAJA-llnl/RAJA and vtk/vtk both 404;
-        the projects' actual current locations are LLNL/RAJA and
-        Kitware/VTK. Every collector still ran against the wrong path: each
-        one's own 404 on every path/API call it tried read as a *confirmed*
-        absence of that one file, adding up to a full battery of confident
-        zeros across every metric instead of one clear "this repository
-        doesn't exist." Checked once here instead, before any of that runs
-        (METRIC_BLIND_SPOTS.md class F13).
+        A catalog entry can point at a renamed, deleted, or mistranscribed
+        repository. Without this check, every collector's own 404s on that
+        path get read as a confirmed absence of each thing it looked for,
+        rather than one clear "this repository doesn't exist."
 
-        Fails open (returns True) on anything other than a clean 404 --
-        a network hiccup or rate limit here must not silently drop a
-        perfectly valid package from the run; the per-collector gap
-        handling is already the right tool for that uncertainty.
+        Fails open (returns True) on anything other than a clean 404 -- a
+        network hiccup or rate limit here must not silently drop a valid
+        package from the run; per-collector gap handling is the right tool
+        for that uncertainty.
         """
         token = self._get_github_token()
         headers = {"Accept": "application/vnd.github.v3+json"}
@@ -944,10 +939,6 @@ class MetricsOrchestrator:
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
         elif not await self._confirm_repo_exists(package["repository"]):
-            # See _confirm_repo_exists: a stale catalog entry pointing at a
-            # renamed/deleted/mistranscribed repo must not be collected as
-            # if it were real -- every collector's own 404s would otherwise
-            # read as confirmed absence, not as "wrong repository entirely".
             logger.error(
                 f"Skipping collection for {package['name']}: "
                 f"{package['repository']} does not exist on GitHub "
