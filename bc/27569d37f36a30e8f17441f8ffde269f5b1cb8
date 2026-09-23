@@ -1,0 +1,20 @@
+tools/portfolio_probe.py
+  s_72fde105c4df10::t_6ecf8822daf947 14
+  s_72fde105c4df10::t_ed649e35990686 77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bc27569d37f36a30e8f17441f8ffde269f5b1cb8",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
