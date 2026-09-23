@@ -11,10 +11,7 @@ Reuses the actual collector code and constants (RepoTree,
 ReproducibilityCollector._check_semantic_versioning, _MAX_ANALYSIS_WORKFLOWS)
 rather than a separate copy of the same logic, so this stays in sync
 automatically as those evolve instead of silently drifting into its own,
-eventually-wrong idea of what the collectors do -- a simplified
-re-derivation of the version-scheme check during this tool's own
-development fell one fix behind the real collector and wrongly re-flagged
-sandialabs/Albany as unresolved.
+eventually-wrong idea of what the collectors do.
 
 Checks, in order:
 
@@ -77,10 +74,7 @@ async def _probe_one(
         result["workflow_scan_partial"] = len(workflows) > _MAX_ANALYSIS_WORKFLOWS
 
         # The real collector method, not a separate reimplementation --
-        # this is what caught the probe's own bug during development: a
-        # simplified re-derivation here fell one Phase behind the actual
-        # release-then-tags fallback fix and wrongly re-flagged
-        # sandialabs/Albany as unresolved.
+        # keeps this in sync as that logic evolves instead of drifting.
         version_result = await repro._check_semantic_versioning(client, owner, repo)
         if not version_result.get("not_collected"):
             result["version_scheme_found"] = version_result["uses_semver"]
