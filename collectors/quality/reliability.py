@@ -59,14 +59,18 @@ _ANALYSIS_IN_CI = {
     "Sanitizers": re.compile(r"-fsanitize=|\b(?:asan|ubsan|tsan|msan)\b", re.I),
 }
 
-# Only workflows whose names suggest analysis are read, to bound the requests.
-# "check" is deliberately absent: it matched linkchecker, markdown-link-check
-# and review-checklist, which consumed the read budget before any workflow that
-# actually builds the code.
+# Workflows whose names suggest analysis are read first; the rest of the
+# request budget then fills with whatever workflows remain (see
+# _read_analysis_workflows). Previously this was the ONLY thing read, which
+# meant a repo naming its per-compiler CI jobs generically -- AMReX's gcc.yml,
+# clang.yml, cuda.yml, hip.yml -- had zero of its workflows read at all
+# (METRIC_BLIND_SPOTS.md class F4). "check" is deliberately absent from the
+# hint: it matched linkchecker, markdown-link-check and review-checklist,
+# which used to consume the whole (smaller) budget on its own.
 _ANALYSIS_WORKFLOW_HINT = re.compile(
     r"(analy|lint|scan|secur|sanitiz|tidy|sonar|coverity|codeql|nightly|asan|ubsan)", re.I
 )
-_MAX_ANALYSIS_WORKFLOWS = 8
+_MAX_ANALYSIS_WORKFLOWS = 25
 
 # Build-configuration files likely to carry hardening settings.
 _BUILD_FILES = ["CMakeLists.txt", "configure.ac", "Makefile.am", "meson.build"]
@@ -112,10 +116,8 @@ class ReliabilityCollector(GitHubCollectorBase):
         logger.info(f"Collecting reliability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            tree, (workflows, workflows_gap) = await asyncio.gather(
-                RepoTree.fetch(client, self.github_headers, owner, repo),
-                self._read_analysis_workflows(client, owner, repo),
-            )
+            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
+            workflows, workflows_gap = await self._read_analysis_workflows(client, owner, repo, tree)
             results = await asyncio.gather(
                 self._find_analysis_tools(tree, workflows),
                 self._find_hardening(client, owner, repo, tree, workflows),
@@ -182,34 +184,43 @@ class ReliabilityCollector(GitHubCollectorBase):
         return sorted(found), saw_gap
 
     async def _read_analysis_workflows(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree
     ) -> tuple:
-        """Text of the workflows whose names suggest they run analysis, and
-        whether the directory listing (or any candidate read) gapped.
+        """Text of up to _MAX_ANALYSIS_WORKFLOWS workflow files, and whether
+        any candidate read gapped.
+
+        Workflows whose name suggests analysis are read first; the rest of
+        the budget is then filled with whatever workflows remain, rather
+        than reading only keyword-matched names. A repo whose per-compiler
+        jobs are named generically (AMReX's gcc.yml, cuda.yml, hip.yml) used
+        to have zero of its workflows read at all -- this still prioritizes
+        the likely-relevant ones, but no longer reads nothing when the
+        naming convention doesn't cooperate (METRIC_BLIND_SPOTS.md class F4).
         """
-        entries = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contents/.github/workflows",
-        )
-        if entries is COLLECTION_GAP:
+        if tree is COLLECTION_GAP:
             return [], True
-        if not isinstance(entries, list):
-            return [], False
-        candidates = [
-            e for e in entries
-            if e.get("name", "").endswith((".yml", ".yaml"))
-            and e.get("download_url")
-            and _ANALYSIS_WORKFLOW_HINT.search(e["name"])
-        ][:_MAX_ANALYSIS_WORKFLOWS]
+        all_workflows = tree.find(r"^\.github/workflows/.*\.ya?ml$")
+        hinted = [w for w in all_workflows if _ANALYSIS_WORKFLOW_HINT.search(w.rsplit("/", 1)[-1])]
+        rest = [w for w in all_workflows if w not in hinted]
+        candidates = (hinted + rest)[:_MAX_ANALYSIS_WORKFLOWS]
+        # More workflows exist than the cap allows reading: an empty result
+        # from what follows isn't a confirmed absence, since the unread
+        # remainder could hold the marker being searched for (HDF5 has 76
+        # workflows; this repo's cap only reaches 25 of them).
+        truncated = len(all_workflows) > len(candidates)
 
-        async def read(url: str) -> Optional[str]:
-            try:
-                r = await client.get(url)
-                return r.text if r.status_code == 200 else None
-            except Exception:
+        async def read(path: str) -> Optional[str]:
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+            )
+            if data is COLLECTION_GAP:
                 return None
+            if data is None:
+                return ""
+            return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
-        texts = await asyncio.gather(*[read(e["download_url"]) for e in candidates])
-        saw_gap = any(t is None for t in texts)
+        texts = await asyncio.gather(*[read(p) for p in candidates])
+        saw_gap = truncated or any(t is None for t in texts)
         return [t for t in texts if t], saw_gap
 
     async def _find_hardening(

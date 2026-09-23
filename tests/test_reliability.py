@@ -33,6 +33,82 @@ class TestWorkflowSelection:
         assert not _ANALYSIS_WORKFLOW_HINT.search(name)
 
 
+class TestReadAnalysisWorkflows:
+    """_read_analysis_workflows now reads every workflow (hinted first, then
+    the rest) up to the cap, instead of only keyword-matched names -- a repo
+    naming its per-compiler jobs generically (AMReX's gcc.yml, cuda.yml) used
+    to have zero workflows read at all. METRIC_BLIND_SPOTS.md class F4.
+    """
+
+    def _b64(self, text: str) -> dict:
+        import base64
+        return {"content": base64.b64encode(text.encode()).decode()}
+
+    def test_gapped_tree_is_tracked(self, collector):
+        texts, saw_gap = asyncio.run(
+            collector._read_analysis_workflows(None, "o", "r", COLLECTION_GAP)
+        )
+        assert texts == []
+        assert saw_gap is True
+
+    def test_generically_named_workflow_is_still_read(self, collector):
+        # AMReX's shape: gcc.yml matches no analysis keyword, but with the
+        # keyword-only gate removed it's read anyway since nothing else
+        # competes for the budget.
+        tree = RepoTree("o", "r", [".github/workflows/gcc.yml"], truncated=False)
+
+        async def fake_get(client, url, params=None):
+            return self._b64("run: cppcheck .")
+
+        with patch.object(collector, "_github_get", side_effect=fake_get):
+            texts, saw_gap = asyncio.run(
+                collector._read_analysis_workflows(None, "o", "r", tree)
+            )
+        assert texts == ["run: cppcheck ."]
+        assert saw_gap is False
+
+    def test_hinted_workflows_are_prioritized_within_the_cap(self, collector):
+        # More workflows than the cap: an unhinted one and a hinted one,
+        # with the cap small enough that only the hinted one fits.
+        paths = [".github/workflows/build.yml", ".github/workflows/codeql.yml"]
+        tree = RepoTree("o", "r", paths, truncated=False)
+        seen = []
+
+        async def fake_get(client, url, params=None):
+            seen.append(url)
+            return self._b64("content")
+
+        with patch.object(collector, "_github_get", side_effect=fake_get), \
+             patch("collectors.quality.reliability._MAX_ANALYSIS_WORKFLOWS", 1):
+            asyncio.run(collector._read_analysis_workflows(None, "o", "r", tree))
+        assert seen == ["https://api.github.com/repos/o/r/contents/.github/workflows/codeql.yml"]
+
+    def test_no_workflows_directory_is_a_confirmed_empty_not_a_gap(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        texts, saw_gap = asyncio.run(
+            collector._read_analysis_workflows(None, "o", "r", tree)
+        )
+        assert texts == []
+        assert saw_gap is False
+
+    def test_more_workflows_than_the_cap_is_a_gap_not_a_confirmed_empty(self, collector):
+        # HDF5 has 76 workflows; reading only the first 25 and finding
+        # nothing there must not read as "confirmed no analysis tooling" --
+        # the unread 51 could hold it.
+        paths = [f".github/workflows/w{i}.yml" for i in range(30)]
+        tree = RepoTree("o", "r", paths, truncated=False)
+
+        async def fake_get(client, url, params=None):
+            return self._b64("nothing relevant here")
+
+        with patch.object(collector, "_github_get", side_effect=fake_get):
+            texts, saw_gap = asyncio.run(
+                collector._read_analysis_workflows(None, "o", "r", tree)
+            )
+        assert len(texts) == 25
+        assert saw_gap is True
+
+
 class TestFlagFileDiscovery:
     @pytest.mark.parametrize("name", [
         "sanitizers.cmake", "CompilerWarnings.cmake", "HardeningFlags.cmake",
