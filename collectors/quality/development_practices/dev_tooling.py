@@ -13,20 +13,21 @@ handled elsewhere (ci_cd.py and the OpenSSF badge respectively).
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
 # Test layout and framework configuration, grouped so any variant counts once.
+# Matched case-insensitively against a RepoTree (see base.py), so a single
+# casing per candidate is enough -- AMReX-Codes/amrex's top-level "Tests"
+# and superlu's "TESTING" both match "tests"/"testing" without every casing
+# enumerated here (METRIC_BLIND_SPOTS.md class F1).
 _TESTING_PATHS = {
-    # GitHub's Contents API is case-sensitive, so both casings are listed
-    # explicitly -- AMReX-Codes/amrex's top-level directory is "Tests"
-    # (capitalized), which "tests" alone never matches.
-    "Test suite directory": ["test", "tests", "Test", "Tests", "testing", "Testing", "src/test"],
+    "Test suite directory": ["test", "tests", "testing", "src/test"],
     "CTest / CMake testing": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
     "pytest configuration": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
     "Test framework vendored": [
@@ -66,20 +67,17 @@ class DevToolingCollector(GitHubCollectorBase):
         logger.info(f"Collecting development tooling metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            testing, tooling, review = await asyncio.gather(
-                self._scan(client, owner, repo, _TESTING_PATHS),
-                self._scan(client, owner, repo, _TOOLING_PATHS),
+            tree, review = await asyncio.gather(
+                RepoTree.fetch(client, self.github_headers, owner, repo),
                 self._analyze_review_coverage(client, owner, repo),
                 return_exceptions=True,
             )
 
-        empty_scan = {"found": [], "missing": [], "not_collected": [], "details": {}}
-        if isinstance(testing, Exception):
-            logger.warning(f"COLLECTION-GAP category=testing reason=exception:{testing!r}")
-            testing = empty_scan
-        if isinstance(tooling, Exception):
-            logger.warning(f"COLLECTION-GAP category=tooling reason=exception:{tooling!r}")
-            tooling = empty_scan
+        if isinstance(tree, Exception):
+            logger.warning(f"COLLECTION-GAP category=testing,tooling reason=exception:{tree!r}")
+            tree = COLLECTION_GAP
+        testing = self._scan(tree, _TESTING_PATHS)
+        tooling = self._scan(tree, _TOOLING_PATHS)
         if isinstance(review, Exception):
             logger.warning(f"COLLECTION-GAP category=code_review reason=exception:{review!r}")
             review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
@@ -94,31 +92,22 @@ class DevToolingCollector(GitHubCollectorBase):
             "overall_score": self._calculate_score(testing, tooling, review),
         }
 
-    async def _scan(
-        self, client: httpx.AsyncClient, owner: str, repo: str, groups: Dict[str, List[str]]
-    ) -> Dict[str, Any]:
-        """Check each group, recording the first matching path."""
-
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
-            saw_gap = False
-            for path in paths:
-                url = await self._check_file_exists(client, owner, repo, path)
-                if url is COLLECTION_GAP:
-                    saw_gap = True
-                    continue
-                if url:
-                    return label, url, saw_gap
-            return label, None, saw_gap
-
-        results = await asyncio.gather(*[check(l, p) for l, p in groups.items()])
+    def _scan(self, tree, groups: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Check each group against a RepoTree (or COLLECTION_GAP), recording
+        the first matching path -- case-insensitively, and as either a file
+        or a directory, since candidates like "test/googletest" name a
+        vendored subdirectory (METRIC_BLIND_SPOTS.md class F1).
+        """
         found, missing, not_collected, details = [], [], [], {}
-        for label, url, saw_gap in results:
+        for label, paths in groups.items():
+            if tree is COLLECTION_GAP:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+                continue
+            url = tree.match_url(paths)
             if url:
                 found.append(label)
                 details[label] = {"exists": True, "url": url}
-            elif saw_gap:
-                not_collected.append(label)
-                details[label] = {"not_collected": True}
             else:
                 missing.append(label)
                 details[label] = {"exists": False}

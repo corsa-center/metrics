@@ -24,13 +24,13 @@ import base64
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +71,10 @@ _MAX_ANALYSIS_WORKFLOWS = 8
 # Build-configuration files likely to carry hardening settings.
 _BUILD_FILES = ["CMakeLists.txt", "configure.ac", "Makefile.am", "meson.build"]
 
-# Larger projects keep compiler flags out of the root build file. Rather than
-# guessing filenames per project — HDF5 puts its sanitizer setup in
-# config/sanitizer/sanitizers.cmake — these conventional directories are listed
-# and any file whose name suggests flags is read.
-_FLAG_DIRECTORIES = ["cmake", "config/cmake", "config/sanitizer", "CMake"]
+# Larger projects keep compiler flags out of the root build file -- AMReX's
+# live in Tools/CMake/, HDF5's in config/flags/. Rather than guessing which
+# directories to list, any file anywhere in the tree whose name suggests
+# flags is read.
 _FLAG_FILE_HINT = re.compile(r"(sanitiz|warn|flag|harden|secur)", re.I)
 _MAX_FLAG_FILES = 4
 
@@ -113,10 +112,13 @@ class ReliabilityCollector(GitHubCollectorBase):
         logger.info(f"Collecting reliability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            workflows, workflows_gap = await self._read_analysis_workflows(client, owner, repo)
+            tree, (workflows, workflows_gap) = await asyncio.gather(
+                RepoTree.fetch(client, self.github_headers, owner, repo),
+                self._read_analysis_workflows(client, owner, repo),
+            )
             results = await asyncio.gather(
-                self._find_analysis_tools(client, owner, repo, workflows),
-                self._find_hardening(client, owner, repo, workflows),
+                self._find_analysis_tools(tree, workflows),
+                self._find_hardening(client, owner, repo, tree, workflows),
                 self._defect_trend(client, owner, repo),
                 return_exceptions=True,
             )
@@ -155,36 +157,23 @@ class ReliabilityCollector(GitHubCollectorBase):
 
     # ------------------------------------------------------------------ fetch
 
-    async def _find_analysis_tools(
-        self, client: httpx.AsyncClient, owner: str, repo: str,
-        workflows: List[str],
-    ) -> tuple:
+    async def _find_analysis_tools(self, tree, workflows: List[str]) -> tuple:
         """Defect-finding tools, from config files and analysis-shaped workflows.
 
         Returns (sorted tool names, saw_gap). A tool found via a config file
         or in the CI text is real regardless of gaps elsewhere; saw_gap only
-        matters to the caller when the result is otherwise empty.
+        matters to the caller when the result is otherwise empty. Config
+        files are matched against a RepoTree (case-insensitive, one fetch)
+        rather than probed one literal path at a time -- see
+        METRIC_BLIND_SPOTS.md class F1.
         """
         found = set()
-        saw_gap = False
+        saw_gap = tree is COLLECTION_GAP
 
-        async def check(tool: str, paths: List[str]) -> tuple:
-            gap = False
-            for path in paths:
-                result = await self._check_file_exists(client, owner, repo, path)
-                if result is COLLECTION_GAP:
-                    gap = True
-                    continue
-                if result:
-                    return tool, gap
-            return None, gap
-
-        results = await asyncio.gather(*[check(t, p) for t, p in _ANALYSIS_CONFIGS.items()])
-        for tool, gap in results:
-            if tool:
-                found.add(tool)
-            elif gap:
-                saw_gap = True
+        if not saw_gap:
+            for tool, paths in _ANALYSIS_CONFIGS.items():
+                if tree.match(paths):
+                    found.add(tool)
 
         for text in workflows:
             for tool, pattern in _ANALYSIS_IN_CI.items():
@@ -225,16 +214,17 @@ class ReliabilityCollector(GitHubCollectorBase):
 
     async def _find_hardening(
         self, client: httpx.AsyncClient, owner: str, repo: str,
-        workflows: List[str],
+        tree, workflows: List[str],
     ) -> tuple:
         """Secure-coding practice indicators in the build files and in CI.
 
-        Large projects keep compiler flags out of the root build file — HDF5's
-        live under config/cmake/ — and sanitizer runs are usually CI jobs rather
-        than build settings, so both corpora are searched. Returns (markers
-        found, saw_gap): a marker actually found is real regardless of gaps
-        elsewhere, but an empty result needs saw_gap to tell "no hardening
-        configured" from "couldn't read enough of the repo to tell".
+        Large projects keep compiler flags out of the root build file — AMReX's
+        live under Tools/CMake/, HDF5's under config/flags/ — and sanitizer runs
+        are usually CI jobs rather than build settings, so both corpora are
+        searched. Returns (markers found, saw_gap): a marker actually found is
+        real regardless of gaps elsewhere, but an empty result needs saw_gap
+        to tell "no hardening configured" from "couldn't read enough of the
+        repo to tell".
         """
 
         async def read(path: str):
@@ -247,7 +237,7 @@ class ReliabilityCollector(GitHubCollectorBase):
                 return ""
             return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
-        flag_paths, flag_gap = await self._find_flag_files(client, owner, repo)
+        flag_paths, flag_gap = self._find_flag_files(tree)
         texts = await asyncio.gather(
             *[read(p) for p in _BUILD_FILES + flag_paths]
         )
@@ -261,33 +251,28 @@ class ReliabilityCollector(GitHubCollectorBase):
             if pattern.search(corpus)
         ], saw_gap
 
-    async def _find_flag_files(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> tuple:
-        """Paths of build-configuration files whose names suggest compiler
-        flags, and whether any directory listing gapped.
+    def _find_flag_files(self, tree) -> tuple:
+        """Paths of .cmake files whose names suggest compiler flags, searched
+        across the whole tree rather than four fixed directories -- AMReX
+        keeps its flags in Tools/CMake/, which a directory allowlist never
+        reached even though a real hardening setting (-Werror in
+        AMReXFlagsTargets.cmake) was sitting right there
+        (corsa-center/metrics#51, METRIC_BLIND_SPOTS.md class F3).
+
+        Restricted to .cmake specifically (not any file with a flag-shaped
+        name) so the small result cap isn't spent on false positives a
+        whole-tree search otherwise turns up -- SECURITY.md ("secur") and a
+        CI workflow named flag_prs_to_master.yml ("flag") both matched
+        _FLAG_FILE_HINT on Trilinos and would have crowded out its real
+        TriBITS compiler-flag .cmake files.
         """
-
-        async def listing(directory: str) -> tuple:
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{directory}"
-            )
-            if data is COLLECTION_GAP:
-                return [], True
-            if not isinstance(data, list):
-                return [], False
-            return [
-                e["path"] for e in data
-                if e.get("type") == "file" and _FLAG_FILE_HINT.search(e.get("name", ""))
-            ], False
-
-        results = await asyncio.gather(*[listing(d) for d in _FLAG_DIRECTORIES])
-        paths: List[str] = []
-        saw_gap = False
-        for group_paths, gap in results:
-            paths.extend(group_paths)
-            saw_gap = saw_gap or gap
-        return paths[:_MAX_FLAG_FILES], saw_gap
+        if tree is COLLECTION_GAP:
+            return [], True
+        hits = [
+            p for p in tree.paths
+            if p.endswith(".cmake") and _FLAG_FILE_HINT.search(p.rsplit("/", 1)[-1])
+        ]
+        return hits[:_MAX_FLAG_FILES], False
 
     async def _defect_trend(
         self, client: httpx.AsyncClient, owner: str, repo: str

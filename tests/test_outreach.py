@@ -4,8 +4,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
-from collectors.ecosystem.outreach import OutreachCollector, _ONBOARDING_PATHS
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.ecosystem.outreach import OutreachCollector, _ONBOARDING_LABELS
 
 
 @pytest.fixture
@@ -175,7 +175,7 @@ class TestScoringGapHandling:
         s = self._score(
             collector,
             issues={"total": 0, "open": 0, "closed": 0, "not_collected": True},
-            onboarding={"found": [], "not_collected": list(_ONBOARDING_PATHS)},
+            onboarding={"found": [], "not_collected": list(_ONBOARDING_LABELS)},
             contributors_gap=True, commits_gap=True,
         )
         assert s["score"] is None
@@ -296,25 +296,40 @@ class TestGetNewcomerIssuesGapHandling:
         assert "not_collected" not in result
 
 
-class TestCheckOnboardingGapHandling:
-    def _run(self, collector, responses):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+class TestCheckOnboarding:
+    """_check_onboarding now takes a RepoTree (or COLLECTION_GAP) directly --
+    see corsa-center/metrics#49 and METRIC_BLIND_SPOTS.md class F2.
+    """
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._check_onboarding(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gapped_label_with_no_find_is_not_collected(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _ONBOARDING_PATHS.values() for p in paths}
-        result = self._run(collector, responses)
+    def test_gap_tree_reports_all_labels_not_collected(self, collector):
+        result = collector._check_onboarding(COLLECTION_GAP)
         assert result["found"] == []
-        assert set(result["not_collected"]) == set(_ONBOARDING_PATHS)
+        assert set(result["not_collected"]) == set(_ONBOARDING_LABELS)
 
-    def test_found_label_survives_gaps_on_others(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _ONBOARDING_PATHS.values() for p in paths}
-        responses["CONTRIBUTING.md"] = "http://x"
-        result = self._run(collector, responses)
+    def test_contributing_guide_found(self, collector):
+        tree = RepoTree("o", "r", ["CONTRIBUTING.md"], truncated=False)
+        result = collector._check_onboarding(tree)
         assert "Contributing guide" in result["found"]
+
+    def test_issue_template_directory_counts(self, collector):
+        tree = RepoTree("o", "r", [".github/ISSUE_TEMPLATE/bug_report.md"], truncated=False)
+        result = collector._check_onboarding(tree)
+        assert "Issue templates" in result["found"]
+
+    def test_getting_started_guide_found_at_an_unenumerated_path(self, collector):
+        # AMReX-Codes/amrex's actual location -- none of the six literal
+        # paths this check used to enumerate would have matched it.
+        tree = RepoTree(
+            "o", "r",
+            ["Docs/sphinx_documentation/source/GettingStarted.rst"],
+            truncated=False,
+        )
+        result = collector._check_onboarding(tree)
+        assert "Getting-started guide" in result["found"]
+
+    def test_missing_resources_are_confirmed_absent_not_gapped(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        result = collector._check_onboarding(tree)
+        assert result["found"] == []
+        assert set(result["missing"]) == set(_ONBOARDING_LABELS)
+        assert result["not_collected"] == []

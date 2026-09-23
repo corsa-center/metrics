@@ -2,14 +2,17 @@
 
 import asyncio
 import pytest
-from unittest.mock import patch
-from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.accessibility import AccessibilityCollector
 
 
 @pytest.fixture
 def collector():
     return AccessibilityCollector()
+
+
+def _tree(paths):
+    return RepoTree("owner", "repo", list(paths), truncated=False)
 
 
 class TestEmptyResult:
@@ -31,103 +34,90 @@ class TestCollectInvalidUrl:
 
 
 class TestScan:
-    def _run_scan(self, collector, found_paths):
-        async def mock_exists(client, owner, repo, path):
-            return path in found_paths
-
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan(client, "MyPkg", "owner", "repo")
-
-        return asyncio.run(run())
+    """_scan now takes a RepoTree (or COLLECTION_GAP) directly, rather than
+    probing paths one at a time -- see METRIC_BLIND_SPOTS.md class F1/F2.
+    """
 
     def test_dockerfile_only(self, collector):
-        result = self._run_scan(collector, {"Dockerfile"})
+        result = collector._scan(_tree({"Dockerfile"}), "MyPkg", "owner", "repo")
         assert result["has_container"] is True
         assert result["categories"]["containers"]["found"] == ["Docker"]
         assert result["categories"]["containers"]["count_found"] == 1
 
     def test_cmake_and_dockerfile(self, collector):
-        result = self._run_scan(collector, {"Dockerfile", "CMakeLists.txt"})
+        result = collector._scan(_tree({"Dockerfile", "CMakeLists.txt"}), "MyPkg", "owner", "repo")
         assert result["has_container"] is True
         assert result["has_portable_build_system"] is True
         assert "CMake" in result["categories"]["build_systems"]["found"]
 
     def test_nothing_found(self, collector):
-        result = self._run_scan(collector, set())
+        result = collector._scan(_tree(set()), "MyPkg", "owner", "repo")
         assert result["has_container"] is False
         assert result["has_portable_build_system"] is False
         assert result["overall_score"]["percentage"] == 0.0
 
     def test_overall_score_increases_with_matches(self, collector):
-        none = self._run_scan(collector, set())
-        some = self._run_scan(collector, {"Dockerfile", "CMakeLists.txt", "pyproject.toml"})
+        none = collector._scan(_tree(set()), "MyPkg", "owner", "repo")
+        some = collector._scan(
+            _tree({"Dockerfile", "CMakeLists.txt", "pyproject.toml"}), "MyPkg", "owner", "repo"
+        )
         assert some["overall_score"]["percentage"] > none["overall_score"]["percentage"]
 
     def test_singularity_detected(self, collector):
-        result = self._run_scan(collector, {"Singularity"})
+        result = collector._scan(_tree({"Singularity"}), "MyPkg", "owner", "repo")
         assert result["has_container"] is True
         assert "Singularity / Apptainer" in result["categories"]["containers"]["found"]
 
     def test_spack_detected(self, collector):
-        result = self._run_scan(collector, {"package.py"})
+        result = collector._scan(_tree({"package.py"}), "MyPkg", "owner", "repo")
         assert result["has_portable_build_system"] is True
         assert "Spack" in result["categories"]["build_systems"]["found"]
 
     def test_gnumakefile_in_template_detected(self, collector):
         # AMReX-Codes/amrex ships GNUmakefile.in (a template for its custom
         # GNU Make build) rather than a literal GNUmakefile/Makefile.
-        result = self._run_scan(collector, {"GNUmakefile.in"})
+        result = collector._scan(_tree({"GNUmakefile.in"}), "MyPkg", "owner", "repo")
         assert result["has_portable_build_system"] is True
         assert "Makefile" in result["categories"]["build_systems"]["found"]
 
+    def test_makefile_am_detected(self, collector):
+        # open-mpi/ompi, pmodels/mpich and four other portfolio repos build
+        # with GNU Autotools and ship Makefile.am, not Makefile/GNUmakefile.
+        result = collector._scan(_tree({"Makefile.am"}), "MyPkg", "owner", "repo")
+        assert "Makefile" in result["categories"]["build_systems"]["found"]
+
+    def test_match_is_case_insensitive(self, collector):
+        # superlu ships DOC/CMakeLists.txt-style capitalization elsewhere in
+        # the portfolio; confirm a differently-cased CMakeLists.txt matches.
+        result = collector._scan(_tree({"cmakelists.txt"}), "MyPkg", "owner", "repo")
+        assert "CMake" in result["categories"]["build_systems"]["found"]
+
 
 class TestScanGapHandling:
-    def _run_scan(self, collector, responses):
-        async def mock_exists(client, owner, repo, path):
-            return responses.get(path, None)
-
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan(client, "MyPkg", "owner", "repo")
-
-        return asyncio.run(run())
-
-    def test_gapped_item_is_not_collected_not_a_confirmed_missing(self, collector):
-        result = self._run_scan(collector, {"Dockerfile": COLLECTION_GAP})
+    def test_gapped_tree_is_not_collected_not_a_confirmed_missing(self, collector):
+        result = collector._scan(COLLECTION_GAP, "MyPkg", "owner", "repo")
         containers = result["categories"]["containers"]
-        assert "Docker" not in containers["missing"]
+        assert containers["missing"] == []
         assert "Docker" in containers["not_collected"]
 
-    def test_found_item_survives_a_gap_on_a_sibling_candidate(self, collector):
-        result = self._run_scan(collector, {"CMakeLists.txt": "http://x"})
+    def test_confirmed_missing_is_not_the_same_as_gapped(self, collector):
+        result = collector._scan(_tree({"README.md"}), "MyPkg", "owner", "repo")
+        containers = result["categories"]["containers"]
+        assert containers["not_collected"] == []
+        assert "Docker" in containers["missing"]
+
+    def test_found_item_survives_confirmed_misses_on_siblings(self, collector):
+        result = collector._scan(_tree({"CMakeLists.txt"}), "MyPkg", "owner", "repo")
         assert "CMake" in result["categories"]["build_systems"]["found"]
 
     def test_category_fully_gapped_reports_no_percentage(self, collector):
-        responses = {"INSTALL": COLLECTION_GAP, "INSTALL.md": COLLECTION_GAP,
-                     "INSTALL.rst": COLLECTION_GAP, "INSTALL.txt": COLLECTION_GAP}
-        result = self._run_scan(collector, responses)
+        result = collector._scan(COLLECTION_GAP, "MyPkg", "owner", "repo")
         install_docs = result["categories"]["install_docs"]
         assert install_docs["percentage"] is None
         assert install_docs["count_total"] == 0
 
     def test_everything_gapped_reports_not_collected_overall(self, collector):
-        all_paths = {p for items in [
-            "Dockerfile", "docker/Dockerfile", ".docker/Dockerfile",
-            "Singularity", "singularity/Singularity", "Apptainer", "apptainer/Apptainer", "*.def",
-            "CMakeLists.txt", "package.py", "spack/package.py",
-            "meta.yaml", "conda/meta.yaml", "recipe/meta.yaml", "environment.yml", "environment.yaml",
-            "configure.ac", "configure.in", "Makefile", "makefile", "GNUmakefile",
-            "Makefile.in", "GNUmakefile.in",
-            "pyproject.toml", "setup.py", "setup.cfg",
-            "INSTALL", "INSTALL.md", "INSTALL.rst", "INSTALL.txt",
-        ] for p in [items]}
-        responses = {p: COLLECTION_GAP for p in all_paths}
-        result = self._run_scan(collector, responses)
+        result = collector._scan(COLLECTION_GAP, "MyPkg", "owner", "repo")
         assert result["overall_score"]["score"] is None
         assert result["overall_score"]["max_score"] == 0
         assert result["overall_score"]["percentage"] is None

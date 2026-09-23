@@ -2,8 +2,8 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from collectors.ecosystem.base import COLLECTION_GAP
+from unittest.mock import AsyncMock, MagicMock
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.reproducibility import ReproducibilityCollector, _FILE_CHECKS
 
 
@@ -194,67 +194,55 @@ class TestComputeOverall:
 
 
 class TestScanFiles:
-    def _run_scan(self, collector, found_paths):
-        async def mock_exists(client, owner, repo, path):
-            return path in found_paths
+    """_scan_files now takes a RepoTree (or COLLECTION_GAP) directly, rather
+    than probing paths one at a time -- see METRIC_BLIND_SPOTS.md class F2.
+    """
 
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan_files(client, "owner", "repo")
-
-        return asyncio.run(run())
+    def _tree(self, paths):
+        return RepoTree("owner", "repo", list(paths), truncated=False)
 
     def test_dockerfile_detected(self, collector):
-        result = self._run_scan(collector, {"Dockerfile"})
+        result = collector._scan_files(self._tree({"Dockerfile"}))
         assert "Dockerfile" in result["containers"]["found"]
 
     def test_poetry_lock_detected(self, collector):
-        result = self._run_scan(collector, {"poetry.lock"})
+        result = collector._scan_files(self._tree({"poetry.lock"}))
         assert "Poetry lock" in result["dependency_pinning"]["found"]
 
     def test_citation_cff_detected(self, collector):
-        result = self._run_scan(collector, {"CITATION.cff"})
+        result = collector._scan_files(self._tree({"CITATION.cff"}))
         assert "CITATION.cff" in result["fair4rs_metadata"]["found"]
 
+    def test_match_is_case_insensitive(self, collector):
+        result = collector._scan_files(self._tree({"Poetry.Lock"}))
+        assert "Poetry lock" in result["dependency_pinning"]["found"]
+
     def test_nothing_found(self, collector):
-        result = self._run_scan(collector, set())
+        result = collector._scan_files(self._tree(set()))
         for cat in ("containers", "dependency_pinning", "fair4rs_metadata"):
             assert result[cat]["found"] == []
             assert result[cat]["percentage"] == 0.0
 
 
 class TestScanFilesGapHandling:
-    def _run_scan(self, collector, responses):
-        async def mock_exists(client, owner, repo, path):
-            return responses.get(path, None)
-
-        async def run():
-            import httpx
-            async with httpx.AsyncClient() as client:
-                with patch.object(collector, "_check_file_exists", side_effect=mock_exists):
-                    return await collector._scan_files(client, "owner", "repo")
-
-        return asyncio.run(run())
-
-    def test_gapped_item_is_not_collected_not_a_confirmed_miss(self, collector):
-        result = self._run_scan(collector, {"Dockerfile": COLLECTION_GAP})
+    def test_gapped_tree_reports_every_item_not_collected(self, collector):
+        result = collector._scan_files(COLLECTION_GAP)
         containers = result["containers"]
-        assert "Dockerfile" not in containers["missing"]
-        assert "Dockerfile" in containers["not_collected"]
-
-    def test_found_item_survives_a_gap_on_another_path(self, collector):
-        result = self._run_scan(collector, {"poetry.lock": "http://x"})
-        pinning = result["dependency_pinning"]
-        assert "Poetry lock" in pinning["found"]
+        assert containers["found"] == []
+        assert containers["missing"] == []
+        assert set(containers["not_collected"]) == set(_FILE_CHECKS["containers"])
 
     def test_category_fully_gapped_reports_no_percentage(self, collector):
-        # Every candidate for every item in fair4rs_metadata gaps.
-        responses = {p: COLLECTION_GAP for paths in _FILE_CHECKS["fair4rs_metadata"].values() for p in paths}
-        result = self._run_scan(collector, responses)
+        result = collector._scan_files(COLLECTION_GAP)
         assert result["fair4rs_metadata"]["percentage"] is None
         assert result["fair4rs_metadata"]["count_total"] == 0
+
+    def test_confirmed_missing_is_not_the_same_as_gapped(self, collector):
+        tree = RepoTree("owner", "repo", ["README.md"], truncated=False)
+        result = collector._scan_files(tree)
+        containers = result["containers"]
+        assert containers["not_collected"] == []
+        assert set(containers["missing"]) == set(_FILE_CHECKS["containers"])
 
 
 class TestSemanticVersioningGapHandling:

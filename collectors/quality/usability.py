@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ _README_SECTIONS = {
     "Support": r"(?:support|help|contact|community|questions|mailing list)",
 }
 
-_DOC_DIRECTORIES = ["docs", "doc", "documentation", "Documentation", "Docs", "Doc"]
+_DOC_DIRECTORIES = ["docs", "doc", "documentation"]
 
 # Markdown ATX headings and Setext underlines both appear in real READMEs.
 _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
@@ -56,12 +56,13 @@ class UsabilityCollector(GitHubCollectorBase):
         logger.info(f"Collecting usability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            readme, (doc_dir, doc_dir_gap), (site, site_gap) = await asyncio.gather(
+            readme, tree, (site, site_gap) = await asyncio.gather(
                 self._analyze_readme(client, owner, repo),
-                self._find_doc_directory(client, owner, repo),
+                RepoTree.fetch(client, self.github_headers, owner, repo),
                 self._find_documentation_site(client, owner, repo),
                 return_exceptions=False,
             )
+        doc_dir, doc_dir_gap = self._find_doc_directory(tree)
 
         return {
             "package_name": repo_name,
@@ -106,22 +107,20 @@ class UsabilityCollector(GitHubCollectorBase):
             "missing": [s for s in _README_SECTIONS if s not in found],
         }
 
-    async def _find_doc_directory(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> tuple:
+    def _find_doc_directory(self, tree) -> tuple:
         """First documentation directory present in the repository, and
-        whether any candidate along the way gapped rather than confirming
-        absence.
+        whether the tree fetch gapped rather than confirming absence.
+
+        Matched via RepoTree.has_dir(), which is case-insensitive -- AMReX's
+        "Docs" and superlu's "DOC" both match a candidate spelled "docs"
+        without needing every casing enumerated here (corsa-center/metrics#54).
         """
-        saw_gap = False
-        for path in _DOC_DIRECTORIES:
-            url = await self._check_file_exists(client, owner, repo, path)
-            if url is COLLECTION_GAP:
-                saw_gap = True
-                continue
-            if url:
-                return path, saw_gap
-        return None, saw_gap
+        if tree is COLLECTION_GAP:
+            return None, True
+        for name in _DOC_DIRECTORIES:
+            if tree.has_dir(name):
+                return name, False
+        return None, False
 
     async def _find_documentation_site(
         self, client: httpx.AsyncClient, owner: str, repo: str

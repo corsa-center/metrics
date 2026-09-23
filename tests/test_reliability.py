@@ -4,10 +4,10 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.reliability import (
     ReliabilityCollector, _ANALYSIS_WORKFLOW_HINT, _HARDENING_MARKERS,
-    _FLAG_FILE_HINT, _DEFECT_LABELS, _ANALYSIS_CONFIGS, _FLAG_DIRECTORIES,
+    _FLAG_FILE_HINT, _DEFECT_LABELS, _ANALYSIS_CONFIGS,
 )
 
 
@@ -157,61 +157,81 @@ class TestScoringGapHandling:
         assert s["status"] == "not_collected"
 
 
-class TestFindAnalysisToolsGapHandling:
-    def _run(self, collector, responses, workflows=None):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+class TestFindAnalysisTools:
+    """_find_analysis_tools now takes a RepoTree (or COLLECTION_GAP) directly
+    -- see METRIC_BLIND_SPOTS.md class F1.
+    """
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_analysis_tools(None, "o", "r", workflows or [])
-
-        return asyncio.run(go())
-
-    def test_gapped_config_check_with_no_finds_reports_gap(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _ANALYSIS_CONFIGS.values() for p in paths}
-        tools, saw_gap = self._run(collector, responses)
+    def test_gapped_tree_with_no_ci_matches_reports_gap(self, collector):
+        tools, saw_gap = asyncio.run(collector._find_analysis_tools(COLLECTION_GAP, []))
         assert tools == []
         assert saw_gap is True
 
-    def test_found_tool_survives_gaps_on_others(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _ANALYSIS_CONFIGS.values() for p in paths}
-        responses[".clang-tidy"] = "http://x"
-        tools, saw_gap = self._run(collector, responses)
+    def test_config_file_found(self, collector):
+        tree = RepoTree("o", "r", [".clang-tidy"], truncated=False)
+        tools, saw_gap = asyncio.run(collector._find_analysis_tools(tree, []))
         assert tools == ["clang-tidy"]
+        assert saw_gap is False
 
-    def test_ci_text_match_does_not_need_file_probe(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _ANALYSIS_CONFIGS.values() for p in paths}
-        tools, saw_gap = self._run(collector, responses, workflows=["run: cppcheck ."])
+    def test_confirmed_absence_is_not_a_gap(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tools, saw_gap = asyncio.run(collector._find_analysis_tools(tree, []))
+        assert tools == []
+        assert saw_gap is False
+
+    def test_ci_text_match_does_not_need_a_config_file(self, collector):
+        tools, saw_gap = asyncio.run(
+            collector._find_analysis_tools(COLLECTION_GAP, ["run: cppcheck ."])
+        )
         assert "Cppcheck" in tools
 
 
-class TestFindFlagFilesGapHandling:
-    def _run(self, collector, responses):
-        async def go():
-            client = MagicMock()
+class TestFindFlagFiles:
+    """_find_flag_files now searches the whole tree by filename regex,
+    rather than listing four fixed directories -- AMReX's actual flag file
+    (Tools/CMake/AMReXFlagsTargets.cmake) sits outside all four
+    (corsa-center/metrics#51, METRIC_BLIND_SPOTS.md class F3).
+    """
 
-            async def fake_github_get(c, url, params=None):
-                for directory in _FLAG_DIRECTORIES:
-                    if url.endswith(f"/contents/{directory}"):
-                        return responses.get(directory, None)
-                return None
-
-            with patch.object(collector, "_github_get", side_effect=fake_github_get):
-                return await collector._find_flag_files(client, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gapped_directory_listing_is_tracked(self, collector):
-        responses = {_FLAG_DIRECTORIES[0]: COLLECTION_GAP}
-        paths, saw_gap = self._run(collector, responses)
+    def test_gapped_tree_is_tracked(self, collector):
+        paths, saw_gap = collector._find_flag_files(COLLECTION_GAP)
+        assert paths == []
         assert saw_gap is True
 
-    def test_confirmed_missing_directory_is_not_a_gap(self, collector):
-        responses = {d: None for d in _FLAG_DIRECTORIES}
-        paths, saw_gap = self._run(collector, responses)
+    def test_confirmed_no_flag_files_is_not_a_gap(self, collector):
+        tree = RepoTree("o", "r", ["README.md", "CMakeLists.txt"], truncated=False)
+        paths, saw_gap = collector._find_flag_files(tree)
         assert paths == []
         assert saw_gap is False
+
+    def test_flag_file_found_outside_conventional_directories(self, collector):
+        tree = RepoTree("o", "r", ["Tools/CMake/AMReXFlagsTargets.cmake"], truncated=False)
+        paths, saw_gap = collector._find_flag_files(tree)
+        assert paths == ["Tools/CMake/AMReXFlagsTargets.cmake"]
+        assert saw_gap is False
+
+    def test_result_capped_at_max_flag_files(self, collector):
+        tree = RepoTree(
+            "o", "r",
+            [f"cmake/warn{i}.cmake" for i in range(10)],
+            truncated=False,
+        )
+        paths, _ = collector._find_flag_files(tree)
+        assert len(paths) == 4
+
+    def test_non_cmake_files_do_not_crowd_out_the_cap(self, collector):
+        # SECURITY.md ("secur") and a CI workflow named flag_prs_to_master.yml
+        # ("flag") both match _FLAG_FILE_HINT by keyword alone -- restricting
+        # to .cmake keeps them from spending the small result cap on
+        # Trilinos-shaped false positives.
+        tree = RepoTree(
+            "o", "r",
+            ["SECURITY.md", ".github/workflows/flag_prs_to_master.yml",
+             "cmake/tribits/WarningFlags.cmake"],
+            truncated=False,
+        )
+        paths, _ = collector._find_flag_files(tree)
+        assert paths == ["cmake/tribits/WarningFlags.cmake"]
 
 
 class TestDefectTrendGapHandling:

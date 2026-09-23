@@ -17,9 +17,9 @@ import asyncio
 import httpx
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
 
 logger = logging.getLogger(__name__)
 
@@ -119,12 +119,12 @@ class ReproducibilityCollector(GitHubCollectorBase):
         logger.info(f"Collecting reproducibility metrics for {owner}/{repo}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            file_results, semver = await asyncio.gather(
-                self._scan_files(client, owner, repo),
+            tree, semver = await asyncio.gather(
+                RepoTree.fetch(client, self.github_headers, owner, repo),
                 self._check_semantic_versioning(client, owner, repo),
             )
 
-        categories = {**file_results, "semantic_versioning": semver}
+        categories = {**self._scan_files(tree), "semantic_versioning": semver}
         overall = self._compute_overall(categories)
 
         return {
@@ -144,9 +144,14 @@ class ReproducibilityCollector(GitHubCollectorBase):
     # File scanning                                                        #
     # ------------------------------------------------------------------ #
 
-    async def _scan_files(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Dict[str, Any]:
+    def _scan_files(self, tree) -> Dict[str, Any]:
+        """Resolved against a RepoTree (or COLLECTION_GAP) rather than probed
+        one literal path at a time -- see METRIC_BLIND_SPOTS.md class F2.
+        A candidate list can only match spellings someone thought to write
+        down; matching against the whole tree, case-insensitively, catches
+        e.g. AMReX's GNUmakefile.in and the 23/20 portfolio repos whose
+        dependency-pinning/container files sit at an unenumerated path.
+        """
         results: Dict[str, Any] = {}
 
         for category, items in _FILE_CHECKS.items():
@@ -155,33 +160,20 @@ class ReproducibilityCollector(GitHubCollectorBase):
             not_collected: List[str] = []
             details: Dict[str, Any] = {}
 
-            async def check_item(label: str, paths: List[str]) -> Tuple[str, str, Optional[str], bool]:
-                saw_gap = False
-                for path in paths:
-                    html_url = await self._check_file_exists(client, owner, repo, path)
-                    if html_url is COLLECTION_GAP:
-                        saw_gap = True
-                        continue
-                    if html_url:
-                        return label, path, html_url, saw_gap
-                return label, paths[0], None, saw_gap
-
-            hits = await asyncio.gather(
-                *[check_item(label, paths) for label, paths in items.items()]
-            )
-
-            for label, matched_path, html_url, saw_gap in hits:
-                if html_url:
+            for label, paths in items.items():
+                if tree is COLLECTION_GAP:
+                    not_collected.append(label)
+                    details[label] = {"not_collected": True}
+                    continue
+                matched_path = tree.match(paths)
+                if matched_path:
                     found.append(label)
                     details[label] = {
                         "exists": True,
                         "file": matched_path,
-                        "url": html_url,
+                        "url": tree.match_url(paths),
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
-                elif saw_gap:
-                    not_collected.append(label)
-                    details[label] = {"not_collected": True}
                 else:
                     missing.append(label)
                     details[label] = {"exists": False}

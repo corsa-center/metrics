@@ -260,6 +260,120 @@ class GitHubCollectorBase:
         return datetime.now(timezone.utc).isoformat()
 
 
+class RepoTree:
+    """Case-insensitive index of every path in a repo's default-branch tree,
+    fetched once and reused for every file/format check a collector needs.
+
+    Fixes two related problems in one call:
+
+    1. **Case sensitivity.** The Contents API (`_check_file_exists` above) is
+       case-sensitive, so a literal "docs" never matches "Docs" and "tests"
+       never matches "TESTING". `community_health.py` solved this for
+       governance documents by listing directories and matching
+       case-insensitively; this generalizes that fix to every other
+       collector, instead of leaving each to reinvent it (or not).
+    2. **Finite enumeration.** A candidate-path list can only match spellings
+       someone thought to write down. `find()` searches the whole tree by
+       regex, so "a getting-started guide, in any doc-shaped location"
+       becomes one expression instead of six literal paths that AMReX's
+       `Docs/sphinx_documentation/source/GettingStarted.rst` and 15 other
+       portfolio repos still miss.
+
+    One `git/trees/{branch}?recursive=1` call replaces what could otherwise
+    be a dozen-plus per-path Contents API probes per repository -- a net
+    reduction in request volume, not just a correctness fix.
+    """
+
+    def __init__(self, owner: str, repo: str, paths: List[str], truncated: bool):
+        self.owner = owner
+        self.repo = repo
+        self.paths = paths
+        self.truncated = truncated
+        self._by_lower_path: Dict[str, str] = {p.lower(): p for p in paths}
+        # Every directory a blob path implies, keyed case-insensitively with
+        # its real casing as the value -- git doesn't track empty
+        # directories, so a non-empty one is always inferable from its
+        # files' paths without a second API call for tree entries.
+        self._by_lower_dir: Dict[str, str] = {}
+        for p in paths:
+            parts = p.split("/")
+            for i in range(1, len(parts)):
+                d = "/".join(parts[:i])
+                self._by_lower_dir.setdefault(d.lower(), d)
+
+    @classmethod
+    async def fetch(
+        cls, client: httpx.AsyncClient, headers: Dict[str, str],
+        owner: str, repo: str, branch: str = "HEAD",
+    ):
+        """A RepoTree, or COLLECTION_GAP if the tree couldn't be fetched.
+
+        `branch="HEAD"` resolves against the repo's actual default branch
+        (develop, main, master, whatever it is) without needing to look it
+        up first -- same trick `_check_file_exists` uses.
+        """
+        url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+        try:
+            response = await client.get(url, headers=headers)
+        except Exception as e:
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
+            return COLLECTION_GAP
+        if response.status_code != 200:
+            return COLLECTION_GAP
+        data = response.json()
+        paths = [e["path"] for e in data.get("tree", []) if e.get("type") == "blob"]
+        return cls(owner, repo, paths, bool(data.get("truncated")))
+
+    def match(self, candidates: List[str]) -> Optional[str]:
+        """First candidate present in the tree as a file OR a directory,
+        matched case-insensitively and in candidate order. Returns the path
+        with its real casing (not the candidate's), or None if none of them
+        are there.
+
+        Checking both is what `_check_file_exists` did too (the Contents API
+        returns either a file or a directory listing for the same path) --
+        a candidate like "test/googletest" is a vendored subdirectory, not a
+        file, and still needs to match.
+        """
+        for candidate in candidates:
+            key = candidate.lower().rstrip("/")
+            hit = self._by_lower_path.get(key) or self._by_lower_dir.get(key)
+            if hit is not None:
+                return hit
+        return None
+
+    def match_url(self, candidates: List[str]) -> Optional[str]:
+        """Same as match(), rendered as a browsable GitHub URL."""
+        path = self.match(candidates)
+        if path is None:
+            return None
+        kind = "blob" if path.lower() in self._by_lower_path else "tree"
+        return f"https://github.com/{self.owner}/{self.repo}/{kind}/HEAD/{path}"
+
+    def has_dir(self, path: str) -> bool:
+        """Whether this exact directory path exists, case-insensitively --
+        "docs" matches a real "Docs/" tree. `path` can be nested
+        (".github/ISSUE_TEMPLATE"), but is matched as a full path from the
+        repo root, not as a basename search at arbitrary depth.
+        """
+        return path.lower().rstrip("/") in self._by_lower_dir
+
+    def find(self, pattern: str, flags: int = re.IGNORECASE) -> List[str]:
+        """Full paths anywhere in the tree matching a regex, in tree order.
+        For "does the concept exist, under any name" checks that a fixed
+        candidate list can't express.
+        """
+        rx = re.compile(pattern, flags)
+        return [p for p in self.paths if rx.search(p)]
+
+    def find_url(self, pattern: str, flags: int = re.IGNORECASE) -> Optional[str]:
+        """First find() hit, rendered as a browsable GitHub URL."""
+        hits = self.find(pattern, flags)
+        if not hits:
+            return None
+        return f"https://github.com/{self.owner}/{self.repo}/blob/HEAD/{hits[0]}"
+
+
 # --------------------------------------------------------------------------- #
 # Threshold registry                                                          #
 # --------------------------------------------------------------------------- #
