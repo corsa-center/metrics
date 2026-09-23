@@ -1,0 +1,26 @@
+tests/test_reproducibility.py
+  s_72fde105c4df10::t_39fe4816567970 154-163,170,177
+METRIC_BLIND_SPOTS.md
+  s_72fde105c4df10::t_d7f8d2c56a9d29 240
+  s_72fde105c4df10::t_c2f1c520ac22ed 504
+  s_72fde105c4df10::t_2bfc8fb82ac962 386-394
+  s_72fde105c4df10::t_285013ec74a7e2 416,420-444
+collectors/quality/reproducibility.py
+  s_72fde105c4df10::t_22dfe878a50daa 255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ec46da0293355ce03568349bc2a8587255996760",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
