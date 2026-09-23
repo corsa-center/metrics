@@ -1,10 +1,8 @@
 """Unit tests for MetricsOrchestrator's catalog-identity preflight.
 
 See METRIC_BLIND_SPOTS.md class F13: a catalog entry can point at a
-renamed, deleted, or mistranscribed repository (RAJA-llnl/RAJA and vtk/vtk
-both 404; the real locations are LLNL/RAJA and Kitware/VTK). Collecting
-against it anyway means every collector's own 404s read as a confirmed
-absence per file/API call, adding up to a full battery of confident zeros
+renamed, deleted, or mistranscribed repository. Collecting against it
+anyway means every collector's own 404s read as a confirmed absence,
 instead of one clear "this repository doesn't exist".
 """
 

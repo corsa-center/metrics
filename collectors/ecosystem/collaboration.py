@@ -164,13 +164,12 @@ class CollaborationCollector(GitHubCollectorBase):
 
         Go's decentralized module system lets any public repository path be
         `go get`-ed without the project ever intending to publish a Go
-        module -- ecosyste.ms indexes AMReX-Codes/amrex (a C++ library)
-        under "go" with dependent_packages=0, dependent_repos=0, purely
-        because some tool once resolved that path. Left alone for a repo
-        whose primary language actually is Go (a real, young package can
-        legitimately have zero dependents yet), and left alone whenever the
-        primary language isn't known at all -- absence of information isn't
-        license to discard real data (corsa-center/metrics#50).
+        module, so ecosyste.ms can index a non-Go repo under "go" with no
+        real dependents. Left alone for a repo whose primary language
+        actually is Go (a real, young package can legitimately have zero
+        dependents yet), and left alone whenever the primary language isn't
+        known at all -- absence of information isn't license to discard
+        real data.
         """
         if not primary_language or primary_language.lower() == "go":
             return registries

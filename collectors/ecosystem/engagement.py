@@ -224,10 +224,7 @@ class EngagementCollector(GitHubCollectorBase):
         # records -- a defect ticket immediately closed by the PR that fixes
         # it -- not a conversation. Counting them the same as an unanswered
         # community question misreads a deliberate, effective triage
-        # workflow as disengagement: AMReX filed a batch of audit defects,
-        # each closed by its own fixing PR, and both Engagement Quality
-        # and Community Participation read that as failure
-        # (corsa-center/metrics#48). Excluded only from the discussion-shaped
+        # workflow as disengagement. Excluded only from the discussion-shaped
         # metrics below (comment depth, outside-participation share); close
         # time and first-response time aren't affected -- a fast, silent
         # close doesn't misrepresent those the same way.
