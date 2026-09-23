@@ -237,7 +237,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.3.2 | Testing Framework Excellence | ✅ fixed | `Tests/`, `TESTING/`, `TEST/`, vendored frameworks all case-insensitive now |
 | 4.3.2 | Development Tool Integration | ⚪ F1, F2 | literal config paths at repo root |
 | 4.3.2 | Code Review Quality | ⚪ F10, F9 | last 50 PRs; self-merge conventions differ |
-| 4.3.3 | **Version Control Best Practices** | 🔴 F6 | **#53** — CalVer fixed; 16 prefixed-tag repos still fail |
+| 4.3.3 | **Version Control Best Practices** | ✅ fixed | **#53** — CalVer, prefixed/normalized tags, major.minor, compact date; 15/16 flagged repos confirmed live |
 | 4.3.3 | Environment Management | ◐ F1 fixed, F2 open | case-insensitive now; 23 repos still pin deps at an unenumerated nested path (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | Containerization Excellence | ◐ F1 fixed, F2 open | case-insensitive now; CI-only Dockerfiles deliberately still excluded (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | FAIR4RS / Reproducibility Docs | ⚪ F1, F2 | literal path lists |
@@ -359,23 +359,45 @@ would need either the tree's per-blob size (not currently indexed) or a
 commit-history lookup per file (expensive at portfolio scale) for a benefit
 that hinted-first-then-fill already captures in practice.
 
-### Phase 3 — Scheme detection instead of exact formats
+### Phase 3 — Scheme detection instead of exact formats — landed
 
-**Removes the remaining 16 F6 repos.**
+**Removes 15 of the 16 remaining F6 repos.**
 
-In `_versioning_scheme`, strip a leading non-numeric prefix and normalise
-separators before parsing:
+`_normalize_tag` strips a project-name prefix and normalizes hyphen/underscore
+separators to dots before `_versioning_scheme` checks semver/calver, so a
+prefixed or differently-separated tag reads the same as a bare version
+string:
 
 ```
-llvmorg-23.1.1            → 23.1.1
-trilinos-release-17-2-1   → 17.2.1
-papi-7-2-0-t              → 7.2.0
-gex-2025.8.0              → 2025.8.0
-vstable_2026_09_04        → 2026.09.04
+llvmorg-23.1.1            → 23.1.1            (semver)
+trilinos-release-17-2-1   → 17.2.1            (semver, hyphens as separator)
+papi-7-2-0-t              → 7.2.0             (semver, trailing suffix dropped)
+gex-2025.8.0              → 2025.8.0          (semver)
+vstable_2026_09_04        → 2026.09.04        (semver, underscores as separator)
+release-2022.04           → 2022.04           (calver, 2-part)
 ```
 
-Then audit the other exact-format regexes for the same rigidity: award numbers
-(4.2.8), defect labels (4.3.1), README headings (4.3.4), platform names (4.3.5).
+Two additional schemes were added, both real conventions found in the
+portfolio rather than noise: **compact date** (`flang-compiler/flang` tags
+`flang_20190329` — an 8-digit `YYYYMMDD`) and **major.minor**
+(`OpenACCUserGroup/OpenACCV-V` tags `v3.0`; `CODARcode/Chimbuko` tags `v7.0`)
+— a deliberate versioning discipline, just without a patch component.
+
+Verified against all 16 originally-flagged repos: 15 now resolve, each
+checked against its real tags via the live GitHub API. The one holdout,
+`sandialabs/Albany`, samples only `Old_master_support_end` in its last 5
+tags — genuinely not a version marker of any kind, not something a smarter
+regex can recover from; would need a larger tag sample or the project's own
+release process to actually use tags, neither of which this fix can supply.
+
+Checked for false positives against real non-version tags in the same
+portfolio (`main`, `nightly`, `latest`, `gex-stable`, `urp_rs_21`) — none
+match.
+
+Deferred: auditing the other exact-format regexes for the same rigidity
+(award numbers in 4.2.8, defect labels in 4.3.1, README headings in 4.3.4,
+platform names in 4.3.5) — no measured exposure found for these yet, so
+this is speculative until a specific project trips one.
 
 ### Phase 4 — Audit every `== 0` fallback guard
 
@@ -440,5 +462,5 @@ permanent:
 | [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network Analysis | F8, F12 | 6 | 🔲 Todo |
 | [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ✅ Fixed |
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
-| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ◐ CalVer fixed; prefixed tags pending |
+| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ✅ Fixed (15/16; Albany has no real version tags to recover) |
 | [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs`/`DOC/` fixed; heading-regex rigidity (F6) pending |

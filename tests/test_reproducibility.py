@@ -4,7 +4,9 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
-from collectors.quality.reproducibility import ReproducibilityCollector, _FILE_CHECKS
+from collectors.quality.reproducibility import (
+    ReproducibilityCollector, _FILE_CHECKS, _versioning_scheme,
+)
 
 
 @pytest.fixture
@@ -91,6 +93,44 @@ class TestSemanticVersioning:
             collector._check_semantic_versioning(client, "owner", "repo")
         )
         assert result["scheme"] == "semver"
+
+
+class TestVersioningSchemeNormalization:
+    """A project-name-prefixed tag reads the same as a bare version string
+    once normalized -- see corsa-center/metrics#53 (Version Control Best
+    Practices) and METRIC_BLIND_SPOTS.md class F6. Each case here is a real
+    tag from a specific portfolio repo the probe flagged as still failing
+    after the initial CalVer fix.
+    """
+
+    @pytest.mark.parametrize("tag,expected", [
+        ("llvmorg-23.1.1", "semver"),                # llvm/llvm-project
+        ("trilinos-release-17-2-1", "semver"),        # trilinos/Trilinos (hyphens, not dots)
+        ("papi-7-2-0-t", "semver"),                   # icl-utk-edu/papi (trailing suffix)
+        ("legion-26.06.0", "semver"),                 # StanfordLegion/legion
+        ("gex-2025.8.0", "semver"),                   # BerkeleyLab/gasnet
+        ("upcxx-2025.10.0", "semver"),                # BerkeleyLab/upcxx
+        ("vstable_2026_09_04", "semver"),              # snl-dakota/dakota (underscores)
+        ("release-2022.05.15", "semver"),             # HPCToolkit/hpctoolkit
+        ("release-2022.04", "calver"),                # HPCToolkit/hpctoolkit (2-part)
+        ("tag.v1.10.0", "semver"),                    # Parallel-NetCDF/PnetCDF
+        ("checkpoint.1.15.1", "semver"),              # Parallel-NetCDF/PnetCDF
+        ("flang_20190329", "calver"),                 # flang-compiler/flang (compact date)
+        ("v3.0", "major.minor"),                      # OpenACCUserGroup/OpenACCV-V
+        ("v7.0", "major.minor"),                      # CODARcode/Chimbuko
+        ("v0.31", "major.minor"),                     # SCOREC/pumi-pic
+        ("26.09", "calver"),                          # AMReX-Codes/amrex
+        ("v1.2.3", "semver"),
+    ])
+    def test_real_portfolio_tags_now_recognized(self, tag, expected):
+        assert _versioning_scheme(tag) == expected
+
+    @pytest.mark.parametrize("tag", [
+        "main", "nightly", "latest", "gex-stable",
+        "urp_rs_21", "Old_master_support_end",
+    ])
+    def test_non_version_tags_still_unmatched(self, tag):
+        assert _versioning_scheme(tag) is None
 
     def test_no_releases_falls_back_to_tags(self, collector):
         mock_resp = MagicMock()
