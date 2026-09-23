@@ -155,12 +155,6 @@ class MetricsOrchestrator:
         # not affect the maintainer-authored package_config/ files, which are
         # operator-controlled regardless of this switch.
         self.project_config = self.config.get("project_config", {})
-        self.project_config_enabled = (self.config.get("project_config") or {}).get(
-            "enabled", True
-        )
-        self.project_config_file = (self.config.get("project_config") or {}).get(
-            "metrics_file", ""
-        )
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
