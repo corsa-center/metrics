@@ -1,0 +1,21 @@
+collectors/ecosystem/collaboration.py
+  s_72fde105c4df10::t_fb17a241d97072 167-172
+collectors/ecosystem/engagement.py
+  s_72fde105c4df10::t_d0c6e985e27670 227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d174651a91b6cea073baaa52520a9d1fd876b8ef",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
