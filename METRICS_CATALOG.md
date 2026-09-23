@@ -463,7 +463,7 @@ small hint list (`sbom`, `spdx`, `cyclonedx`, `intoto`, `slsa`, `.sigstore`,
 SPDX/CycloneDX/SLSA specs.
 
 **Dependency Vulnerability Posture's coverage is real but narrow.** Six
-lockfile shapes are read, all at the repository root only, all resolved
+kinds of lockfiles are read, all at the repository root only, all resolved
 against `RepoTree`: `requirements.txt` and `Pipfile.lock` (PyPI, only exact
 `==` pins — OSV.dev's query API takes a single version, not a range, so
 `numpy>=1.20` names a real dependency the check can't evaluate; `Pipfile.lock`

@@ -14,7 +14,7 @@ distribution pipeline:
                                      Dependabot alert access needed on the
                                      target repo, unlike GitHub's own
                                      vulnerability-alerts API. Reads six
-                                     lockfile shapes, root-level only:
+                                     kinds of lockfiles, root-level only:
                                      requirements.txt and Pipfile.lock
                                      (PyPI, exact == pins), uv.lock and
                                      poetry.lock (PyPI, registry-sourced
@@ -98,8 +98,8 @@ _OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 
 
 def _parse_pinned_pypi_deps(text: str) -> List[Tuple[str, str]]:
-    """Exactly-pinned (name, version) pairs from a requirements.txt-shaped
-    file. Lines using a range (>=, ~=, <), a bare name, a VCS/URL
+    """Exactly-pinned (name, version) pairs from a requirements.txt file.
+    Lines using a range (>=, ~=, <), a bare name, a VCS/URL
     requirement, or a pip option (-e, -r, --index-url) are skipped --
     real dependencies, just not ones a single-version query can check.
     """
@@ -119,7 +119,7 @@ def _parse_uv_lock(text: str) -> List[Tuple[str, str]]:
     registry. uv.lock records `source = { registry = "..." }` for a normal
     published package and `{ path = ... }` / `{ git = ... }` / `{ editable =
     ... }` / `{ virtual = ... }` for anything else -- only the registry
-    shape names a real, queryable release.
+    form names a real, queryable release.
     """
     try:
         data = tomllib.loads(text)
@@ -217,7 +217,7 @@ def _parse_pipfile_lock(text: str) -> List[Tuple[str, str]]:
 
 
 # (OSV ecosystem, root-level candidate paths, parser) for every lockfile
-# shape this checks. All six happen to overlap with reproducibility.py's
+# this checks. All six happen to overlap with reproducibility.py's
 # own "dependency_pinning" candidates, but each needs its own parser --
 # requirements.txt and go.sum are line-oriented, Pipfile.lock is JSON, and
 # the rest are TOML with three different conventions for telling a
@@ -329,7 +329,7 @@ class SupplyChainCollector(GitHubCollectorBase):
         batch query API -- no Dependabot alert access needed on the target
         repo, unlike GitHub's own vulnerability-alerts API.
 
-        Every lockfile shape in _LOCKFILE_SPECS present at the repository
+        Every lockfile in _LOCKFILE_SPECS present at the repository
         root is read and merged into one query; a repo can have more than
         one (Python bindings pinned via requirements.txt alongside a Rust
         component's Cargo.lock, say). A gap fetching one file doesn't lose
