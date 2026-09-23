@@ -151,6 +151,31 @@ class TestVersioningSchemeNormalization:
         )
         assert result["uses_semver"] is True
 
+    def test_non_matching_releases_do_not_fall_back_to_tags(self, collector):
+        # Releases exist but don't carry a real version -- reported as-is.
+        # A project's raw git tags include every ad hoc marker it ever made
+        # (support-end notices, downstream collaboration snapshots, ...),
+        # not just its versioning history, so they aren't a reliable
+        # fallback source the way "no releases at all" is: sandialabs/Albany
+        # publishes exactly one non-versioned Release, and its tags are
+        # dominated by tags like "compass-2026-03-21" for an external
+        # collaboration's snapshots -- unrelated to Albany's own versioning
+        # discipline, but shaped enough like a date to be misread as one.
+        release_resp = MagicMock()
+        release_resp.status_code = 200
+        release_resp.json.return_value = [{"tag_name": "Initial release"}]
+        release_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=release_resp)
+
+        result = asyncio.run(
+            collector._check_semantic_versioning(mock_client, "owner", "repo")
+        )
+        assert result["uses_semver"] is False
+        assert result["example_tags"] == ["Initial release"]
+        mock_client.get.assert_called_once()
+
 
 class TestComputeOverall:
     def test_all_present(self, collector):

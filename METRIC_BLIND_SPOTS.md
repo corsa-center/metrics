@@ -237,7 +237,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.3.2 | Testing Framework Excellence | ✅ fixed | `Tests/`, `TESTING/`, `TEST/`, vendored frameworks all case-insensitive now |
 | 4.3.2 | Development Tool Integration | ⚪ F1, F2 | literal config paths at repo root |
 | 4.3.2 | Code Review Quality | ⚪ F10, F9 | last 50 PRs; self-merge conventions differ |
-| 4.3.3 | **Version Control Best Practices** | ✅ fixed | **#53** — CalVer, prefixed/normalized tags, major.minor, compact date; 15/16 flagged repos confirmed live |
+| 4.3.3 | **Version Control Best Practices** | ✅ fixed | **#53** — CalVer, prefixed/normalized tags, major.minor, compact date; 15/16 flagged repos confirmed live (the 16th, Albany, has no real versioning to detect — see Phase 4) |
 | 4.3.3 | Environment Management | ◐ F1 fixed, F2 open | case-insensitive now; 23 repos still pin deps at an unenumerated nested path (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | Containerization Excellence | ◐ F1 fixed, F2 open | case-insensitive now; CI-only Dockerfiles deliberately still excluded (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | FAIR4RS / Reproducibility Docs | ⚪ F1, F2 | literal path lists |
@@ -385,10 +385,13 @@ portfolio rather than noise: **compact date** (`flang-compiler/flang` tags
 
 Verified against all 16 originally-flagged repos: 15 now resolve, each
 checked against its real tags via the live GitHub API. The one holdout,
-`sandialabs/Albany`, samples only `Old_master_support_end` in its last 5
-tags — genuinely not a version marker of any kind, not something a smarter
-regex can recover from; would need a larger tag sample or the project's own
-release process to actually use tags, neither of which this fix can supply.
+`sandialabs/Albany`, samples only `Old_master_support_end` in its one
+GitHub Release — genuinely not a version marker of any kind. Its raw git
+tags aren't a usable substitute either: they're dominated by names like
+`QCAD_support_end` and `compass-2026-03-21`, markers for retired
+application modules and a downstream collaboration's dated snapshots, not
+Albany's own release history (see Phase 4 for why this rules out a
+tags-based fallback here, not just a smarter regex).
 
 Checked for false positives against real non-version tags in the same
 portfolio (`main`, `nightly`, `latest`, `gex-stable`, `urp_rs_21`) — none
@@ -399,10 +402,46 @@ Deferred: auditing the other exact-format regexes for the same rigidity
 platform names in 4.3.5) — no measured exposure found for these yet, so
 this is speculative until a specific project trips one.
 
-### Phase 4 — Audit every `== 0` fallback guard
+### Phase 4 — Audit every `== 0` fallback guard — landed
 
-**Removes latent F7.** `grep -rn "== 0" collectors/` and check each one against
-"is this enough to answer the question?" rather than "is this empty?".
+**Removes latent F7.** Every `== 0` in `collectors/` (12 call sites) plus every
+comment mentioning "fallback" was checked against "is this enough to answer
+the question?" rather than "is this empty?".
+
+Eleven of twelve `== 0` guards were legitimate: division-by-zero protection,
+per-item bookkeeping, or (in `ci_cd.py`) an already-correct pattern that
+explicitly disambiguates a confirmed zero from "not applicable" via a second
+call — the opposite of the bug, not an instance of it.
+
+One candidate for the actual F7 pattern turned up, structurally similar to
+issue #52 but gated by `if not releases:` instead of `== 0`:
+`reproducibility.py`'s `_check_semantic_versioning` only fell back from
+GitHub Releases to raw git tags when Releases were completely *absent* — not
+when they existed but didn't match any recognized scheme. The candidate fix
+tried also checking tags whenever the release sample came up empty-handed,
+on the theory that a project's tags are usually a superset of what it chose
+to publish as a Release.
+
+**Tried, then reverted after checking it against the one real repo it
+affected.** `sandialabs/Albany` was the only originally-flagged repo this
+changed anything for — its lone GitHub Release, `Old_master_support_end`,
+carries no version. But a maintainer review (see PR #60) correctly caught
+that Albany's raw git tags don't carry one either: they're a mix of
+support-end markers for retired application modules
+(`QCAD_support_end`, `PERIDIGM_support_end`, …) and dated snapshot tags cut
+for an external collaboration (`compass-2026-03-21`, `e3sm-2023-02-21`) —
+neither reflects Albany's own release-versioning practice, and Albany
+doesn't appear to have one. The `compass-*` tags parse as valid dates and
+were what tripped the fallback into a false "passes" — a normal git tag can
+be created for any reason, so treating a project's whole tag list as a
+stand-in for its deliberately-curated Release list isn't safe the way
+falling back to tags when *zero* Releases exist at all is (that fallback,
+predating this phase, stays unchanged: a project with no Releases but a
+real `vX.Y.Z` tagging habit is a different, common, legitimate case).
+
+Net result: 15 of 16 originally-flagged repos for #53 are fixed by Phase 3;
+`sandialabs/Albany` is confirmed to have no real versioning discipline to
+detect, not a bug in the detector.
 
 ### Phase 5 — Validate the catalog before every run
 
@@ -462,5 +501,5 @@ permanent:
 | [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network Analysis | F8, F12 | 6 | 🔲 Todo |
 | [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ✅ Fixed |
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
-| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ✅ Fixed (15/16; Albany has no real version tags to recover) |
+| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ✅ Fixed (15/16; Albany has no real version tags to recover — see Phase 4) |
 | [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs`/`DOC/` fixed; heading-regex rigidity (F6) pending |
