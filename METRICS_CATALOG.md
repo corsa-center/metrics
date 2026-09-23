@@ -545,7 +545,7 @@ Per-package overrides for sub-metrics that are genuinely N/A live in
 `package_config/<owner>_<repo>.yaml`; keys are the exact sub-metric labels from
 this catalog. See [PLACEHOLDER_GUIDE.md](PLACEHOLDER_GUIDE.md).
 
-A project can also narrow its *own* collection by adding `.corsa/metrics.yaml`
+A project can also narrow its *own* collection by adding `.metrics/metrics.yaml`
 to its own repo -- same `collectors:` / `overrides:` shape, fetched at
 collection time, and unable to re-enable anything the global config or a
 `package_config/` file already turned off. See

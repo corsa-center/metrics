@@ -104,7 +104,7 @@ class CommunityHealthCollector:
     # are conventional enough names to check automatically, with no per-
     # project configuration needed, whenever the primary repo comes up short.
     # A project with a differently-named governance repo still has the
-    # existing package_config/.corsa overrides as an escape hatch.
+    # existing package_config overrides as an escape hatch.
     FALLBACK_REPO_NAMES = ["governance", ".github"]
 
     # Keyword groups needed before the documented process counts as substantive.

@@ -1,6 +1,6 @@
 """Unit tests for per-project metric config: precedence in _sub_enabled,
 _package_excluded_keys provenance, and fetching/validating a project's own
-PROJECT_CONFIG_PATH (.corsa/metrics.yaml).
+metrics file (.metrics/metrics.yaml).
 """
 
 import asyncio
@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from orchestrator import MetricsOrchestrator, _sanitize_metric_config
 
 
-def _orch(config=None, project_config_enabled=True):
+def _orch(config=None):
     o = MetricsOrchestrator.__new__(MetricsOrchestrator)
     o.config = config or {}
     o.ecosystem_collectors = (config or {}).get("ecosystem_collectors", {})
     o.quality_collectors = (config or {}).get("quality_collectors", {})
-    o.project_config_enabled = project_config_enabled
+    o.project_config = (config or {}).get("project_config", {})
     return o
 
 
@@ -140,7 +140,7 @@ PACKAGE = {"repository": "HDFGroup/hdf5", "name": "hdf5"}
 
 class TestFetchProjectConfig:
     def test_disabled_globally_skips_fetch_entirely(self):
-        o = _orch(project_config_enabled=False)
+        o = _orch({"package_config": {"enabled": False, "metrics_file": ".metrics/metrics.yaml"}})
         with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
             result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
