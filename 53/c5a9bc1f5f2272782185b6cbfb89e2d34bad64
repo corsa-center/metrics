@@ -1,0 +1,25 @@
+collectors/quality/supply_chain.py
+  s_72fde105c4df10::t_4e340ae3a4428c 17
+  s_72fde105c4df10::t_3740736e619516 332
+  s_72fde105c4df10::t_0dd32192ce8c46 101-102
+  s_72fde105c4df10::t_93cae4148ef0f8 122
+  s_72fde105c4df10::t_13e5e6562d4c26 220
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_af38f02a042b0f 466
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "53c5a9bc1f5f2272782185b6cbfb89e2d34bad64",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
