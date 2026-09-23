@@ -247,7 +247,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.3.5 | Deployment Environment Testing | ⚪ F10 | workflow scan capped — AMReX scanned 25 of 26 |
 | 4.3.6 | Complexity / Code Quality / Docs Quality | ⚪ F8 | **immune to F1–F3** — reads the recursive tree |
 | 4.3.8 | SBOM / Build Provenance | ⚪ F2, F6, F10 | filename matching only; last 5 releases |
-| — | Catalog repository identity | 🔴 F13 | 5 entries 404 — those projects score nothing |
+| — | Catalog repository identity | ◐ pipeline-side fixed | pipeline now skips a 404'd entry loudly instead of scoring nothing silently; the 5 stale entries themselves live in the `dashboard` repo, not fixed here |
 
 ---
 
@@ -443,15 +443,30 @@ Net result: 15 of 16 originally-flagged repos for #53 are fixed by Phase 3;
 `sandialabs/Albany` is confirmed to have no real versioning discipline to
 detect, not a bug in the detector.
 
-### Phase 5 — Validate the catalog before every run
+### Phase 5 — Validate the catalog before every run — landed (metrics side)
 
-**Removes F13.** Add a preflight to `orchestrator.prepare_software_list()`:
+**Removes F13's silent-zero symptom.** `collect_all_metrics` now checks
+`_confirm_repo_exists` before running any of the three CASS dimensions:
 
-- resolve every repository URL; GitHub returns `301` with the new location on
-  rename, so renames can be followed automatically and logged;
-- fail loudly on `404` rather than collecting zeros.
+- one `GET /repos/{owner}/{repo}` per package, ahead of everything else;
+- a confirmed `404` skips collection entirely for that package (same
+  "leave sub-metrics unset" shape already used for the non-GitHub-repo
+  gate right above it), logged as an **error**, not silently absorbed into
+  a battery of confident zeros;
+- anything else (200, or a transient 403/5xx) **fails open** — a rate limit
+  or network hiccup here must not drop a perfectly valid package from the
+  run. Confirmed live: `LLNL/RAJA` 403'd against this session's own token
+  (the same classic-PAT-lifetime org policy noted throughout this doc) and
+  correctly still counted as existing rather than being skipped.
 
-Known corrections to apply now:
+**Not done, and out of scope for this repo:** actually correcting the stale
+catalog entries. The catalog itself
+(`{dashboard}/explore/github-data/intReposInfo.json`) lives in the
+**`dashboard` repo**, not `metrics` — a separate codebase this plan's PRs
+don't touch. What landed here makes the pipeline *notice and skip* a bad
+entry loudly instead of silently scoring on nothing; someone still needs to
+fix the entries themselves in `dashboard`. Known corrections, confirmed live
+via the GitHub API:
 
 | Catalog entry | Correct location |
 |---|---|
