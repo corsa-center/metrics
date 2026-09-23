@@ -267,7 +267,7 @@ Phases 1–5 are mechanical; phase 6 needs a product decision.
 | CalVer release tags | F6 | [#53](https://github.com/corsa-center/metrics/issues/53) | `2e89d9f` |
 | Defect-trend fallback threshold | F7 | [#52](https://github.com/corsa-center/metrics/issues/52) | `2e89d9f` |
 
-### Phase 1 — Tree-based file detection ⭐ highest value — 8/9 landed
+### Phase 1 — Tree-based file detection ⭐ highest value — complete
 
 **Removes F1 and F3 outright, and F2 wherever a candidate is genuinely
 locatable by regex.**
@@ -303,7 +303,14 @@ Migration order, by measured exposure:
 | 6 | `reliability.py` | 4.3.1 Static Analysis configs; CERT flag-file scan now whole-tree (#51) | ✅ landed |
 | 7 | `fair_licensing.py` | 4.2.2 `citation.cff` | ✅ landed |
 | 8 | `welcomeness.py` | 4.2.6 roadmap / meeting notes (broadened to regex, like #49) | ✅ landed |
-| 9 | remaining 6 collectors | latent exposure | 🔲 todo |
+| 9 | `chaoss_governance.py`, `openssf_badge.py`, `funding.py`, `supply_chain.py` | 4.2.4 docs usability, 4.2.1/4.2.5 badge fallback, 4.2.8 funding files, 4.3.8 SBOM | ✅ landed |
+
+`static_analysis.py` and `licensing.py` were checked and found not to need
+migration: `static_analysis.py`'s literal CodeQL-workflow filenames are
+already backed by a whole-directory content-scan fallback (finds ADIOS2's
+`everything.yml`), so it isn't actually exposed to F1/F2 the way the others
+were; `licensing.py` doesn't use a candidate-path list at all — it reads
+GitHub's License API directly.
 
 ¹ **Containers/Environment Management are case-insensitive and single-fetch
 now, but still exact-path matching, not regex.** Broadening them to "found
