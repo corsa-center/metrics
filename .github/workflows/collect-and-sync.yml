@@ -191,8 +191,8 @@ jobs:
             jq -r '.packages_by_score | to_entries[] | "- **\(.key):** \(.value)"' output/orchestrator_summary.json >> $GITHUB_STEP_SUMMARY
 
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Top 5 Packages" >> $GITHUB_STEP_SUMMARY
-            jq -r '.top_packages[:5][] | "- \(.[0]): \(.[1])/100"' output/orchestrator_summary.json >> $GITHUB_STEP_SUMMARY
+            echo "### Top Packages" >> $GITHUB_STEP_SUMMARY
+            jq -r '.top_packages[] | "- \(.[0]): \(.[1])/100"' output/orchestrator_summary.json >> $GITHUB_STEP_SUMMARY
           fi
 
   schedule-next:
