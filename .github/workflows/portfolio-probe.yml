@@ -1,0 +1,44 @@
+name: Portfolio Probe
+
+# Tests the framework's own heuristics against the real state of every
+# tracked repository, instead of waiting for a maintainer to file an issue
+# about a false negative -- see METRIC_BLIND_SPOTS.md and
+# tools/portfolio_probe.py for the analysis and tool this grew out of.
+#
+# Weekly, not on every push: the checks here (catalog identity, CI-workflow
+# read coverage, version-scheme coverage) track slow-moving portfolio facts,
+# not code changes -- a repo doesn't get renamed or add 50 more workflows
+# between commits to this repo. Failing on a confirmed stale catalog entry
+# (F13) is the one hard gate; everything else is a report, since some
+# repos will always be genuine, acceptable exceptions.
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Monday mornings
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout metrics repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run portfolio probe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/portfolio_probe.py --config config/orchestrator.yaml

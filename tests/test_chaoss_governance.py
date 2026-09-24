@@ -1,13 +1,59 @@
 """Unit tests for CHAOSSGovernanceCollector pure computation methods."""
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from collectors.ecosystem.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
 
 
 @pytest.fixture
 def collector():
     return CHAOSSGovernanceCollector()
+
+
+# ------------------------------------------------------------------ #
+# _get_documentation_usability                                         #
+# ------------------------------------------------------------------ #
+
+class TestDocumentationUsabilityTreeResolution:
+    """Contributing guide and docs folder are resolved against a RepoTree
+    (case-insensitive) -- see METRIC_BLIND_SPOTS.md class F1.
+    """
+
+    def _run(self, collector, tree, readme=None, has_wiki=False):
+        async def go():
+            with patch.object(collector, "_get_readme_content", new=AsyncMock(return_value=readme)), \
+                 patch.object(collector, "_check_wiki_enabled", new=AsyncMock(return_value=has_wiki)):
+                return await collector._get_documentation_usability(None, "o", "r", tree)
+
+        return asyncio.run(go())
+
+    def test_gapped_tree_marks_whole_result_not_collected(self, collector):
+        result = self._run(collector, COLLECTION_GAP)
+        assert result["not_collected"] is True
+
+    def test_differently_cased_contributing_guide_found(self, collector):
+        # ADIOS2 names its guide Contributing.md.
+        tree = RepoTree("o", "r", ["Contributing.md"], truncated=False)
+        result = self._run(collector, tree)
+        assert "contributing" in result["found"]
+        assert result["details"]["contributing"]["exists"] is True
+
+    def test_capitalized_docs_directory_found(self, collector):
+        # AMReX-Codes/amrex ships "Docs", superlu ships "DOC".
+        tree = RepoTree("o", "r", ["Docs/index.rst"], truncated=False)
+        result = self._run(collector, tree)
+        assert "docs_folder" in result["found"]
+        assert result["details"]["docs_folder"]["path"] == "docs"
+
+    def test_confirmed_absence_is_not_a_gap(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        result = self._run(collector, tree)
+        assert "not_collected" not in result
+        assert result["details"]["contributing"]["exists"] is False
+        assert result["details"]["docs_folder"]["exists"] is False
 
 
 # ------------------------------------------------------------------ #

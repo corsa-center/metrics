@@ -534,6 +534,34 @@ class MetricsOrchestrator:
         """
         return bool(repo_url) and "github.com/" not in repo_url
 
+    async def _confirm_repo_exists(self, repo_name: str) -> bool:
+        """Whether repo_name ("owner/repo") resolves to a real, accessible
+        GitHub repository.
+
+        A catalog entry can point at a renamed, deleted, or mistranscribed
+        repository. Without this check, every collector's own 404s on that
+        path get read as a confirmed absence of each thing it looked for,
+        rather than one clear "this repository doesn't exist."
+
+        Fails open (returns True) on anything other than a clean 404 -- a
+        network hiccup or rate limit here must not silently drop a valid
+        package from the run; per-collector gap handling is the right tool
+        for that uncertainty.
+        """
+        token = self._get_github_token()
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if token:
+            headers["Authorization"] = f"token {token}"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"https://api.github.com/repos/{repo_name}", headers=headers
+                )
+        except Exception as e:
+            logger.warning(f"Could not verify {repo_name} exists: {e!r} -- proceeding as if it does")
+            return True
+        return resp.status_code != 404
+
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
 
@@ -898,19 +926,7 @@ class MetricsOrchestrator:
         package["package_config"] = self._load_package_config(package["repository"])
         package["project_config"] = await self._fetch_project_config(package)
 
-        if not self._is_known_non_github_repo(package.get("repo_url", "")):
-            # Collect all 3 CASS dimensions in parallel
-            (
-                impact_metrics,
-                ecosystem_metrics,
-                quality_metrics,
-            ) = await asyncio.gather(
-                self.collect_impact_dimension(package),
-                self.collect_ecosystem_dimension(package),
-                self.collect_quality_dimension(package),
-                return_exceptions=True,
-            )
-        else:
+        if self._is_known_non_github_repo(package.get("repo_url", "")):
             # Every collector assumes GitHub; see _is_known_non_github_repo.
             # Leave all sub-metrics unset ("not yet collected" downstream)
             # rather than let each one silently 404 against the wrong host
@@ -922,6 +938,27 @@ class MetricsOrchestrator:
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+        elif not await self._confirm_repo_exists(package["repository"]):
+            logger.error(
+                f"Skipping collection for {package['name']}: "
+                f"{package['repository']} does not exist on GitHub "
+                f"(catalog entry may be stale)"
+            )
+            impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
+            ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
+            quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+        else:
+            # Collect all 3 CASS dimensions in parallel
+            (
+                impact_metrics,
+                ecosystem_metrics,
+                quality_metrics,
+            ) = await asyncio.gather(
+                self.collect_impact_dimension(package),
+                self.collect_ecosystem_dimension(package),
+                self.collect_quality_dimension(package),
+                return_exceptions=True,
+            )
 
         # Handle exceptions
         if isinstance(impact_metrics, Exception):

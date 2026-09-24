@@ -4,8 +4,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
-from collectors.ecosystem.funding import FundingCollector, _FUNDING_FILES
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.ecosystem.funding import FundingCollector
 
 
 @pytest.fixture
@@ -171,40 +171,34 @@ class TestScoringGapHandling:
         assert s["status"] == "not_collected"
 
 
-class TestFindFundingFilesGapHandling:
-    def _run(self, collector, responses):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+class TestFindFundingFiles:
+    """_find_funding_files now takes a RepoTree (or COLLECTION_GAP) directly
+    -- see METRIC_BLIND_SPOTS.md class F1.
+    """
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_funding_files(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gap_with_no_find_is_not_collected(self, collector):
-        responses = {p: COLLECTION_GAP for p in _FUNDING_FILES}
-        result = self._run(collector, responses)
+    def test_gapped_tree_is_not_collected(self, collector):
+        result = asyncio.run(collector._find_funding_files(None, "o", "r", COLLECTION_GAP))
         assert result["found"] == []
         assert result["not_collected"] is True
 
-    def test_found_file_is_not_marked_not_collected_despite_gaps_elsewhere(self, collector):
-        responses = {p: COLLECTION_GAP for p in _FUNDING_FILES}
-        responses[".github/FUNDING.yml"] = "http://x"
-
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+    def test_found_file_is_not_marked_not_collected(self, collector):
+        tree = RepoTree("o", "r", [".github/FUNDING.yml"], truncated=False)
 
         async def fake_platforms(client, owner, repo, path):
             return [], False
 
         async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists), \
-                 patch.object(collector, "_read_funding_platforms", side_effect=fake_platforms):
-                return await collector._find_funding_files(None, "o", "r")
+            with patch.object(collector, "_read_funding_platforms", side_effect=fake_platforms):
+                return await collector._find_funding_files(None, "o", "r", tree)
 
         result = asyncio.run(go())
         assert len(result["found"]) == 1
+        assert "not_collected" not in result
+
+    def test_confirmed_absence_is_not_collected_free(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        result = asyncio.run(collector._find_funding_files(None, "o", "r", tree))
+        assert result["found"] == []
         assert "not_collected" not in result
 
 

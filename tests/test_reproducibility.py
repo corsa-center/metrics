@@ -4,7 +4,9 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
-from collectors.quality.reproducibility import ReproducibilityCollector, _FILE_CHECKS
+from collectors.quality.reproducibility import (
+    ReproducibilityCollector, _FILE_CHECKS, _versioning_scheme,
+)
 
 
 @pytest.fixture
@@ -92,6 +94,44 @@ class TestSemanticVersioning:
         )
         assert result["scheme"] == "semver"
 
+
+class TestVersioningSchemeNormalization:
+    """A project-name-prefixed tag reads the same as a bare version string
+    once normalized -- see corsa-center/metrics#53 (Version Control Best
+    Practices) and METRIC_BLIND_SPOTS.md class F6. Each case here is a real
+    tag from a specific portfolio repo the probe flagged as still failing
+    after the initial CalVer fix.
+    """
+
+    @pytest.mark.parametrize("tag,expected", [
+        ("llvmorg-23.1.1", "semver"),                # llvm/llvm-project
+        ("trilinos-release-17-2-1", "semver"),        # trilinos/Trilinos (hyphens, not dots)
+        ("papi-7-2-0-t", "semver"),                   # icl-utk-edu/papi (trailing suffix)
+        ("legion-26.06.0", "semver"),                 # StanfordLegion/legion
+        ("gex-2025.8.0", "semver"),                   # BerkeleyLab/gasnet
+        ("upcxx-2025.10.0", "semver"),                # BerkeleyLab/upcxx
+        ("vstable_2026_09_04", "semver"),              # snl-dakota/dakota (underscores)
+        ("release-2022.05.15", "semver"),             # HPCToolkit/hpctoolkit
+        ("release-2022.04", "calver"),                # HPCToolkit/hpctoolkit (2-part)
+        ("tag.v1.10.0", "semver"),                    # Parallel-NetCDF/PnetCDF
+        ("checkpoint.1.15.1", "semver"),              # Parallel-NetCDF/PnetCDF
+        ("flang_20190329", "calver"),                 # flang-compiler/flang (compact date)
+        ("v3.0", "major.minor"),                      # OpenACCUserGroup/OpenACCV-V
+        ("v7.0", "major.minor"),                      # CODARcode/Chimbuko
+        ("v0.31", "major.minor"),                     # SCOREC/pumi-pic
+        ("26.09", "calver"),                          # AMReX-Codes/amrex
+        ("v1.2.3", "semver"),
+    ])
+    def test_real_portfolio_tags_now_recognized(self, tag, expected):
+        assert _versioning_scheme(tag) == expected
+
+    @pytest.mark.parametrize("tag", [
+        "main", "nightly", "latest", "gex-stable",
+        "urp_rs_21", "Old_master_support_end",
+    ])
+    def test_non_version_tags_still_unmatched(self, tag):
+        assert _versioning_scheme(tag) is None
+
     def test_no_releases_falls_back_to_tags(self, collector):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -110,6 +150,31 @@ class TestSemanticVersioning:
             collector._check_semantic_versioning(mock_client, "owner", "repo")
         )
         assert result["uses_semver"] is True
+
+    def test_non_matching_releases_do_not_fall_back_to_tags(self, collector):
+        # Releases exist but don't carry a real version -- reported as-is.
+        # A project's raw git tags include every ad hoc marker it ever made
+        # (support-end notices, downstream collaboration snapshots, ...),
+        # not just its versioning history, so they aren't a reliable
+        # fallback source the way "no releases at all" is: sandialabs/Albany
+        # publishes exactly one non-versioned Release, and its tags are
+        # dominated by tags like "compass-2026-03-21" for an external
+        # collaboration's snapshots -- unrelated to Albany's own versioning
+        # discipline, but shaped enough like a date to be misread as one.
+        release_resp = MagicMock()
+        release_resp.status_code = 200
+        release_resp.json.return_value = [{"tag_name": "Initial release"}]
+        release_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=release_resp)
+
+        result = asyncio.run(
+            collector._check_semantic_versioning(mock_client, "owner", "repo")
+        )
+        assert result["uses_semver"] is False
+        assert result["example_tags"] == ["Initial release"]
+        mock_client.get.assert_called_once()
 
 
 class TestComputeOverall:

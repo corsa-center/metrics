@@ -4,8 +4,10 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
-from collectors.ecosystem.welcomeness import WelcomenessCollector, _DECISION_PATHS
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.ecosystem.welcomeness import (
+    WelcomenessCollector, _DECISION_PATHS, _DECISION_PATTERNS,
+)
 
 
 @pytest.fixture
@@ -102,25 +104,48 @@ class TestGetPublicChannelsGapHandling:
         assert saw_gap is False
 
 
-class TestFindDecisionDocumentsGapHandling:
-    def _run(self, collector, responses):
-        async def fake_exists(client, owner, repo, path):
-            return responses.get(path, None)
+class TestFindDecisionDocuments:
+    """_find_decision_documents now takes a RepoTree (or COLLECTION_GAP)
+    directly -- see METRIC_BLIND_SPOTS.md class F1/F2. Roadmap and Meeting
+    notes are matched by regex (_DECISION_PATTERNS), not a literal path list,
+    since a project's roadmap doesn't have to be named exactly "roadmap.md".
+    """
 
-        async def go():
-            with patch.object(collector, "_check_file_exists", side_effect=fake_exists):
-                return await collector._find_decision_documents(None, "o", "r")
+    _ALL_LABELS = set(_DECISION_PATHS) | set(_DECISION_PATTERNS)
 
-        return asyncio.run(go())
-
-    def test_gapped_label_with_no_find_is_not_collected(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _DECISION_PATHS.values() for p in paths}
-        result = self._run(collector, responses)
+    def test_gapped_tree_reports_every_label_not_collected(self, collector):
+        result = collector._find_decision_documents(COLLECTION_GAP)
         assert result["found"] == []
-        assert set(result["not_collected"]) == set(_DECISION_PATHS)
+        assert set(result["not_collected"]) == self._ALL_LABELS
 
-    def test_found_label_survives_gaps_on_others(self, collector):
-        responses = {p: COLLECTION_GAP for paths in _DECISION_PATHS.values() for p in paths}
-        responses["ROADMAP.md"] = "http://x"
-        result = self._run(collector, responses)
+    def test_roadmap_found_at_an_unenumerated_name(self, collector):
+        # CHIP-SPV/chipStar's actual filename -- no literal candidate list
+        # would have enumerated this spelling.
+        tree = RepoTree("o", "r", ["docs/Devicelib_roadmap.md"], truncated=False)
+        result = collector._find_decision_documents(tree)
         assert "Roadmap" in result["found"]
+
+    def test_meeting_notes_found_at_an_unenumerated_name(self, collector):
+        # llvm/llvm-project's flang subproject -- MeetingNotes/, not
+        # "meetings".
+        tree = RepoTree(
+            "o", "r", ["flang/docs/MeetingNotes/2025/2025-12-03.md"], truncated=False
+        )
+        result = collector._find_decision_documents(tree)
+        assert "Meeting notes" in result["found"]
+
+    def test_governance_document_found(self, collector):
+        tree = RepoTree("o", "r", ["GOVERNANCE.md"], truncated=False)
+        result = collector._find_decision_documents(tree)
+        assert "Governance document" in result["found"]
+
+    def test_confirmed_absence_is_not_collected_free(self, collector):
+        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        result = collector._find_decision_documents(tree)
+        assert result["found"] == []
+        assert result["not_collected"] == []
+
+    def test_source_file_mentioning_roadmap_is_not_a_false_positive(self, collector):
+        tree = RepoTree("o", "r", ["src/Roadmapper.cpp"], truncated=False)
+        result = collector._find_decision_documents(tree)
+        assert "Roadmap" not in result["found"]

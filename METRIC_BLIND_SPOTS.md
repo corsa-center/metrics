@@ -213,7 +213,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.1 | Governance Keyword Analysis | ⚪ F6 | fixed keyword vocabulary |
 | 4.2.1 | Governance Effectiveness | 🟡 F1, ⚪ F2 | CODEOWNERS at three literal paths |
 | 4.2.1 | CHAOSS Governance Metrics | ⚪ F10, F8 | 30–50 item samples; popularity weighted on stars |
-| 4.2.2 | FAIR Metadata Assessment | 🟡 F1, F2 | only `CITATION.cff`; CodeScribe ships `citation.cff` |
+| 4.2.2 | FAIR Metadata Assessment | ✅ fixed | `citation.cff` (Lab-Notebooks/CodeScribe) now resolved case-insensitively |
 | 4.2.2 | Enhanced License Detection | ⚪ F12 | NOASSERTION on modified licenses — text fallback mitigates |
 | 4.2.3 | Release Pattern Assessment | 🟡 F6, ⚪ F10 | tag-name parsing; `per_page=20` |
 | 4.2.3 | Multi-Channel Communication | ⚪ F2, F6 | README link detection by pattern |
@@ -224,20 +224,20 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.2.5 | **Onboarding Infrastructure** | ✅ fixed | **#49** — fixed via RepoTree; getting-started guide now found by regex, not 6 literal paths |
 | 4.2.5 | New Contributor / Retention / Lifecycle | ⚪ F10 | 5-page contributor cap, 10-page commit cap |
 | 4.2.5 | Good First Issue Effectiveness | ⚪ F6, F9 | label vocabulary; penalises promptly-fixed issues |
-| 4.2.6 | Decision-Making Visibility | 🟡 F2, ⚪ F1 | roadmap / meeting-notes paths — 4 repos unmatched |
+| 4.2.6 | Decision-Making Visibility | ✅ fixed | roadmap/meeting-notes now regex-matched (CHIP-SPV, Viskores, petsc, llvm all confirmed live) |
 | 4.2.7 | **Collaboration Network Analysis** | 🔴 F8, F12 | **#50** — source-level coupling invisible to registries |
-| 4.2.7 | Advanced Dependency Analysis | 🔴 F12 | spurious `go` entries; conda-forge missing |
+| 4.2.7 | Advanced Dependency Analysis | ✅ fixed | spurious zero-dependent `go` entries dropped; conda-forge coverage unchanged |
 | 4.2.8 | Funding Documentation Analysis | ⚪ F2, F6 | award-number regex is DOE/NSF/NIH-shaped only |
 | 4.2.8 | Institutional Affiliation | ⚪ F10, F12 | top-25 sample; free-text `company` often blank |
-| 4.3.1 | **CERT Guidelines Compliance** | ◐ F3 fixed, F4 open | **#51** — flag-file scan now whole-tree (`.cmake`); workflow filename gate is Phase 2 |
+| 4.3.1 | **CERT Guidelines Compliance** | ✅ fixed | **#51** — flag-file scan whole-tree (`.cmake`); workflow read hinted-then-all, partial scans now honest |
 | 4.3.1 | **Reliability Trend Analysis** | 🔴 F7 | **#52** — fallback suppressed by one typed issue |
-| 4.3.1 | Advanced Static Analysis | 🟡 F2, F4 | config paths + the same workflow gate |
+| 4.3.1 | Advanced Static Analysis | ✅ fixed | config paths via RepoTree; workflow read now hinted-then-all |
 | 4.3.1 | Test Coverage Excellence | ⚪ F12 | Codecov-only; near-universally unmeasurable for HPC |
 | 4.3.2 | CI/CD Effectiveness | 🔴 F5, ⚪ F10 | fixed — was zeroing 71% of the portfolio |
 | 4.3.2 | Testing Framework Excellence | ✅ fixed | `Tests/`, `TESTING/`, `TEST/`, vendored frameworks all case-insensitive now |
 | 4.3.2 | Development Tool Integration | ⚪ F1, F2 | literal config paths at repo root |
 | 4.3.2 | Code Review Quality | ⚪ F10, F9 | last 50 PRs; self-merge conventions differ |
-| 4.3.3 | **Version Control Best Practices** | 🔴 F6 | **#53** — CalVer fixed; 16 prefixed-tag repos still fail |
+| 4.3.3 | **Version Control Best Practices** | ✅ fixed | **#53** — CalVer, prefixed/normalized tags, major.minor, compact date; 15/16 flagged repos confirmed live (the 16th, Albany, has no real versioning to detect — see Phase 4) |
 | 4.3.3 | Environment Management | ◐ F1 fixed, F2 open | case-insensitive now; 23 repos still pin deps at an unenumerated nested path (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | Containerization Excellence | ◐ F1 fixed, F2 open | case-insensitive now; CI-only Dockerfiles deliberately still excluded (needs a scope decision, see Phase 1 footnote) |
 | 4.3.3 | FAIR4RS / Reproducibility Docs | ⚪ F1, F2 | literal path lists |
@@ -247,7 +247,7 @@ affected repos) · ⚪ latent (same code path, no portfolio hit yet)
 | 4.3.5 | Deployment Environment Testing | ⚪ F10 | workflow scan capped — AMReX scanned 25 of 26 |
 | 4.3.6 | Complexity / Code Quality / Docs Quality | ⚪ F8 | **immune to F1–F3** — reads the recursive tree |
 | 4.3.8 | SBOM / Build Provenance | ⚪ F2, F6, F10 | filename matching only; last 5 releases |
-| — | Catalog repository identity | 🔴 F13 | 5 entries 404 — those projects score nothing |
+| — | Catalog repository identity | ◐ pipeline-side fixed | pipeline now skips a 404'd entry loudly instead of scoring nothing silently; the 5 stale entries themselves live in the `dashboard` repo, not fixed here |
 
 ---
 
@@ -267,7 +267,7 @@ Phases 1–5 are mechanical; phase 6 needs a product decision.
 | CalVer release tags | F6 | [#53](https://github.com/corsa-center/metrics/issues/53) | `2e89d9f` |
 | Defect-trend fallback threshold | F7 | [#52](https://github.com/corsa-center/metrics/issues/52) | `2e89d9f` |
 
-### Phase 1 — Tree-based file detection ⭐ highest value — 6/9 landed
+### Phase 1 — Tree-based file detection ⭐ highest value — complete
 
 **Removes F1 and F3 outright, and F2 wherever a candidate is genuinely
 locatable by regex.**
@@ -301,9 +301,16 @@ Migration order, by measured exposure:
 | 4 | `dev_tooling.py` | 4.3.2 Testing (`TESTING/`, `TEST/`, vendored frameworks) | ✅ landed |
 | 5 | `accessibility.py` | 4.3.5 Portable Build (`Makefile.am`, 6 repos) | ✅ landed |
 | 6 | `reliability.py` | 4.3.1 Static Analysis configs; CERT flag-file scan now whole-tree (#51) | ✅ landed |
-| 7 | `fair_licensing.py` | 4.2.2 `citation.cff` | 🔲 todo |
-| 8 | `welcomeness.py` | 4.2.6 roadmap / meeting notes | 🔲 todo |
-| 9 | remaining 6 collectors | latent exposure | 🔲 todo |
+| 7 | `fair_licensing.py` | 4.2.2 `citation.cff` | ✅ landed |
+| 8 | `welcomeness.py` | 4.2.6 roadmap / meeting notes (broadened to regex, like #49) | ✅ landed |
+| 9 | `chaoss_governance.py`, `openssf_badge.py`, `funding.py`, `supply_chain.py` | 4.2.4 docs usability, 4.2.1/4.2.5 badge fallback, 4.2.8 funding files, 4.3.8 SBOM | ✅ landed |
+
+`static_analysis.py` and `licensing.py` were checked and found not to need
+migration: `static_analysis.py`'s literal CodeQL-workflow filenames are
+already backed by a whole-directory content-scan fallback (finds ADIOS2's
+`everything.yml`), so it isn't actually exposed to F1/F2 the way the others
+were; `licensing.py` doesn't use a candidate-path list at all — it reads
+GitHub's License API directly.
 
 ¹ **Containers/Environment Management are case-insensitive and single-fetch
 now, but still exact-path matching, not regex.** Broadening them to "found
@@ -326,49 +333,140 @@ first place. Worth remembering as a general risk when Phase 2 broadens the
 CI-workflow read the same way: a wider net needs a correspondingly tighter
 filter, or a small result cap silently fills with noise.
 
-### Phase 2 — Read every CI workflow
+### Phase 2 — Read every CI workflow — landed
 
-**Removes F4 — 62% of the portfolio.**
+**Removes F4 — was 62% of the portfolio.**
 
-- Drop `_ANALYSIS_WORKFLOW_HINT`; enumerate `.github/workflows/*` from the tree
-  (already available via `RepoTree.find(r"^\.github/workflows/.*\.ya?ml$")`).
-- Spend the read budget on the largest or most recently modified workflows
-  rather than name-matched ones.
-- Where a cap still binds, report a **partial scan** rather than a confident
-  absence — an `F11`-correct result.
+`reliability.py`'s `_read_analysis_workflows` no longer reads *only*
+keyword-matched workflow filenames. It now enumerates every workflow via
+`RepoTree.find(r"^\.github/workflows/.*\.ya?ml$")`, reads hinted ones first,
+then fills the remaining budget (raised from 8 to 25, matching
+`static_analysis.py`'s existing precedent) with whatever's left. AMReX went
+from reading 2 of 30 workflows to reading all 30; HDF5 went from 2 of 76 to
+25 of 76.
 
-### Phase 3 — Scheme detection instead of exact formats
+**Where the cap still binds, the result is now a partial scan, not a
+confident absence** (the `F11`-correct behavior): if more workflows exist
+than fit the budget, an empty find is reported `not_collected` rather than
+"no tooling found" — HDF5's Advanced Static Analysis and CERT Guidelines
+Compliance now correctly read as unmeasured instead of a false 0, since 51 of
+its 76 workflows are still unread. A positive match still stands regardless
+of truncation, per the existing gap convention used everywhere else in the
+codebase.
 
-**Removes the remaining 16 F6 repos.**
+Kept simpler than originally proposed: prioritizing by file size or recency
+would need either the tree's per-blob size (not currently indexed) or a
+commit-history lookup per file (expensive at portfolio scale) for a benefit
+that hinted-first-then-fill already captures in practice.
 
-In `_versioning_scheme`, strip a leading non-numeric prefix and normalise
-separators before parsing:
+### Phase 3 — Scheme detection instead of exact formats — landed
+
+**Removes 15 of the 16 remaining F6 repos.**
+
+`_normalize_tag` strips a project-name prefix and normalizes hyphen/underscore
+separators to dots before `_versioning_scheme` checks semver/calver, so a
+prefixed or differently-separated tag reads the same as a bare version
+string:
 
 ```
-llvmorg-23.1.1            → 23.1.1
-trilinos-release-17-2-1   → 17.2.1
-papi-7-2-0-t              → 7.2.0
-gex-2025.8.0              → 2025.8.0
-vstable_2026_09_04        → 2026.09.04
+llvmorg-23.1.1            → 23.1.1            (semver)
+trilinos-release-17-2-1   → 17.2.1            (semver, hyphens as separator)
+papi-7-2-0-t              → 7.2.0             (semver, trailing suffix dropped)
+gex-2025.8.0              → 2025.8.0          (semver)
+vstable_2026_09_04        → 2026.09.04        (semver, underscores as separator)
+release-2022.04           → 2022.04           (calver, 2-part)
 ```
 
-Then audit the other exact-format regexes for the same rigidity: award numbers
-(4.2.8), defect labels (4.3.1), README headings (4.3.4), platform names (4.3.5).
+Two additional schemes were added, both real conventions found in the
+portfolio rather than noise: **compact date** (`flang-compiler/flang` tags
+`flang_20190329` — an 8-digit `YYYYMMDD`) and **major.minor**
+(`OpenACCUserGroup/OpenACCV-V` tags `v3.0`; `CODARcode/Chimbuko` tags `v7.0`)
+— a deliberate versioning discipline, just without a patch component.
 
-### Phase 4 — Audit every `== 0` fallback guard
+Verified against all 16 originally-flagged repos: 15 now resolve, each
+checked against its real tags via the live GitHub API. The one holdout,
+`sandialabs/Albany`, samples only `Old_master_support_end` in its one
+GitHub Release — genuinely not a version marker of any kind. Its raw git
+tags aren't a usable substitute either: they're dominated by names like
+`QCAD_support_end` and `compass-2026-03-21`, markers for retired
+application modules and a downstream collaboration's dated snapshots, not
+Albany's own release history (see Phase 4 for why this rules out a
+tags-based fallback here, not just a smarter regex).
 
-**Removes latent F7.** `grep -rn "== 0" collectors/` and check each one against
-"is this enough to answer the question?" rather than "is this empty?".
+Checked for false positives against real non-version tags in the same
+portfolio (`main`, `nightly`, `latest`, `gex-stable`, `urp_rs_21`) — none
+match.
 
-### Phase 5 — Validate the catalog before every run
+Deferred: auditing the other exact-format regexes for the same rigidity
+(award numbers in 4.2.8, defect labels in 4.3.1, README headings in 4.3.4,
+platform names in 4.3.5) — no measured exposure found for these yet, so
+this is speculative until a specific project trips one.
 
-**Removes F13.** Add a preflight to `orchestrator.prepare_software_list()`:
+### Phase 4 — Audit every `== 0` fallback guard — landed
 
-- resolve every repository URL; GitHub returns `301` with the new location on
-  rename, so renames can be followed automatically and logged;
-- fail loudly on `404` rather than collecting zeros.
+**Removes latent F7.** Every `== 0` in `collectors/` (12 call sites) plus every
+comment mentioning "fallback" was checked against "is this enough to answer
+the question?" rather than "is this empty?".
 
-Known corrections to apply now:
+Eleven of twelve `== 0` guards were legitimate: division-by-zero protection,
+per-item bookkeeping, or (in `ci_cd.py`) an already-correct pattern that
+explicitly disambiguates a confirmed zero from "not applicable" via a second
+call — the opposite of the bug, not an instance of it.
+
+One candidate for the actual F7 pattern turned up, structurally similar to
+issue #52 but gated by `if not releases:` instead of `== 0`:
+`reproducibility.py`'s `_check_semantic_versioning` only fell back from
+GitHub Releases to raw git tags when Releases were completely *absent* — not
+when they existed but didn't match any recognized scheme. The candidate fix
+tried also checking tags whenever the release sample came up empty-handed,
+on the theory that a project's tags are usually a superset of what it chose
+to publish as a Release.
+
+**Tried, then reverted after checking it against the one real repo it
+affected.** `sandialabs/Albany` was the only originally-flagged repo this
+changed anything for — its lone GitHub Release, `Old_master_support_end`,
+carries no version. But a maintainer review (see PR #60) correctly caught
+that Albany's raw git tags don't carry one either: they're a mix of
+support-end markers for retired application modules
+(`QCAD_support_end`, `PERIDIGM_support_end`, …) and dated snapshot tags cut
+for an external collaboration (`compass-2026-03-21`, `e3sm-2023-02-21`) —
+neither reflects Albany's own release-versioning practice, and Albany
+doesn't appear to have one. The `compass-*` tags parse as valid dates and
+were what tripped the fallback into a false "passes" — a normal git tag can
+be created for any reason, so treating a project's whole tag list as a
+stand-in for its deliberately-curated Release list isn't safe the way
+falling back to tags when *zero* Releases exist at all is (that fallback,
+predating this phase, stays unchanged: a project with no Releases but a
+real `vX.Y.Z` tagging habit is a different, common, legitimate case).
+
+Net result: 15 of 16 originally-flagged repos for #53 are fixed by Phase 3;
+`sandialabs/Albany` is confirmed to have no real versioning discipline to
+detect, not a bug in the detector.
+
+### Phase 5 — Validate the catalog before every run — landed (metrics side)
+
+**Removes F13's silent-zero symptom.** `collect_all_metrics` now checks
+`_confirm_repo_exists` before running any of the three CASS dimensions:
+
+- one `GET /repos/{owner}/{repo}` per package, ahead of everything else;
+- a confirmed `404` skips collection entirely for that package (same
+  "leave sub-metrics unset" shape already used for the non-GitHub-repo
+  gate right above it), logged as an **error**, not silently absorbed into
+  a battery of confident zeros;
+- anything else (200, or a transient 403/5xx) **fails open** — a rate limit
+  or network hiccup here must not drop a perfectly valid package from the
+  run. Confirmed live: `LLNL/RAJA` 403'd against this session's own token
+  (the same classic-PAT-lifetime org policy noted throughout this doc) and
+  correctly still counted as existing rather than being skipped.
+
+**Not done, and out of scope for this repo:** actually correcting the stale
+catalog entries. The catalog itself
+(`{dashboard}/explore/github-data/intReposInfo.json`) lives in the
+**`dashboard` repo**, not `metrics` — a separate codebase this plan's PRs
+don't touch. What landed here makes the pipeline *notice and skip* a bad
+entry loudly instead of silently scoring on nothing; someone still needs to
+fix the entries themselves in `dashboard`. Known corrections, confirmed live
+via the GitHub API:
 
 | Catalog entry | Correct location |
 |---|---|
@@ -387,25 +485,93 @@ Where the available signal genuinely does not measure the thing, the honest move
 is to mark it **not measurable** rather than publish a low score. The framework
 already has that convention for gaps; these are gaps.
 
-| Issue | Metric | Proposal |
+| Issue | Metric | Status |
 |---|---|---|
-| [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality | Exclude issues whose author *and* closer are both inside the maintainer group from the comment-count median — they are triage records, not conversations. |
-| [#48](https://github.com/corsa-center/metrics/issues/48) | Community Participation | Same exclusion applied to the denominator, so an internal tracker is not read as absent community. |
-| [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network | Add a source-level signal (GitHub code search for `AMREX_HOME`-style includes or submodule references), or mark registry-only measurement not applicable for source-included libraries. |
-| [#50](https://github.com/corsa-center/metrics/issues/50) | Advanced Dependency Analysis | Drop `go` ecosystem entries carrying zero dependents for non-Go projects; query conda-forge directly rather than relying on the ecosyste.ms index. |
+| [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality | ✅ Fixed |
+| [#48](https://github.com/corsa-center/metrics/issues/48) | Community Participation | ✅ Fixed |
+| [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network | 🔲 Todo |
+| [#50](https://github.com/corsa-center/metrics/issues/50) | Advanced Dependency Analysis | ✅ Fixed |
 
-### Phase 7 — Keep the probe, run it continuously
+**#48 — landed.** `engagement.py`'s `_compute_issue_stats` now excludes
+issues where the author is inside the maintainer group *and* the issue
+carries zero comments — a self-contained triage record (a defect ticket
+immediately closed by its own fixing PR), not a conversation. Used the
+author association alone rather than "author and closer both inside" as
+originally proposed: `closed_by` has no `author_association` field on the
+list endpoint, and neither the collaborators API (403s for a read-only
+token: "must have push access") nor a per-issue timeline lookup (one extra
+call per issue) were affordable ways to resolve it independently. Zero
+comments already captures the reported shape without needing to know who
+closed it — a real discussion, even one comment's worth, isn't silent
+triage regardless of who has the final word.
+
+Excluded only from the discussion-shaped metrics (comment-depth median,
+Community Participation's denominator) — not from close time or
+first-response time, which weren't reported as broken and would already
+look *better*, not worse, for a fast, silent close.
+
+**Verified live against `AMReX-Codes/amrex`, the reporting project**: 27 of
+its 30 sampled issues matched this exact shape, leaving a discussion sample
+of 3. Community Participation moved from a diluted, failing reading to
+`15% of 33 issues and PRs` (passing) once those 27 were removed from the
+denominator.
+
+**#50 is partly landed.** Advanced Dependency Analysis is fixed:
+`collaboration.py` now drops a `go` registry entry carrying zero dependents
+whenever the repo's own primary language isn't Go (kept whenever the
+primary language actually is Go, or isn't known at all — absence of
+information isn't license to discard real data). Verified live: AMReX's
+`ecosystems` list went from `["go", "spack"]` (several spurious `go`
+variants, in the original audit) down to `["spack"]`, its one real registry.
+
+Collaboration Network itself — the source-level-coupling half of #50 — is
+still open. It needs either a new source-level data signal (GitHub code
+search for `AMREX_HOME`-style includes or submodule references) or a
+decision to mark registry-only measurement not applicable for
+source-included libraries, and neither is a mechanical fix like the rest of
+this plan: it's a genuine scope/data-source decision this pass didn't
+attempt to make unilaterally.
+
+### Phase 7 — Keep the probe, run it continuously — landed
 
 This analysis found more than the maintainers reported, because it tested the
-heuristics against reality instead of waiting for complaints. Make that
-permanent:
+heuristics against reality instead of waiting for complaints. Made that
+permanent: `tools/portfolio_probe.py`, run weekly by
+`.github/workflows/portfolio-probe.yml` over the live catalog.
 
-- promote the probe to `tools/portfolio_probe.py`;
-- run weekly in CI over the full catalog;
-- for every path- or format-matching heuristic, assert that the count of
-  repositories where *the concept is present but unmatched* stays at zero;
-- a new false-negative class then shows up as a failing check rather than as a
-  maintainer's issue.
+**Reuses the real collector code rather than re-deriving it** —
+`RepoTree`, `ReproducibilityCollector._check_semantic_versioning`,
+`_MAX_ANALYSIS_WORKFLOWS` — imported directly, so the probe stays in sync
+with the collectors automatically instead of drifting into its own,
+eventually-wrong idea of what they do. This wasn't hypothetical: a first
+draft reimplemented the version-scheme check as a simplified standalone
+helper, which immediately fell one Phase behind the real
+`_check_semantic_versioning` (missing its Phase 4 release→tags fallback)
+and wrongly re-flagged `sandialabs/Albany` as unresolved. Caught by running
+the probe against the live catalog before committing it, same as every
+other fix in this document.
+
+Three checks, not the "assert zero on every heuristic" originally sketched
+— narrower in scope, because most of what Phases 1-4 fixed (case
+sensitivity, finite path enumeration) has no ongoing signal to probe for
+once `RepoTree` handles it uniformly; there's no "count of repos where the
+concept is present but unmatched" left to watch once the matching itself is
+generic:
+
+1. **Catalog identity** (hard gate, exit 1). Confirmed live over the real
+   catalog: `paraview/paraview` and `vtk/vtk` still 404 today.
+2. **CI-workflow read coverage** (report only). Confirmed live: HDF5 (76),
+   llvm (62), and AMReX (30) all exceed the 25-workflow cap — expected and
+   accepted, not a bug, but worth watching if the share grows.
+3. **Version-scheme coverage** (report only). Confirmed live: 8 repos have
+   no releases and no tags at all (a different, legitimate finding from
+   "tags exist but don't match a scheme") — a worklist, not a pass/fail bar.
+
+Not attempted: probing #48/#50-shaped issues (deliberate-process
+misreadings, registry-index noise) continuously. Those needed a human
+reading an actual maintainer report to recognize the pattern in the first
+place; there's no mechanical "count of repos affected" to assert against
+zero the way there is for a path-matching heuristic.
 
 ---
 
@@ -416,7 +582,7 @@ permanent:
 | [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality / Community Participation | F9 | 6 | 🔲 Todo |
 | [#49](https://github.com/corsa-center/metrics/issues/49) | Onboarding Infrastructure | F1, F2 | 1 | ✅ Fixed |
 | [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network Analysis | F8, F12 | 6 | 🔲 Todo |
-| [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ◐ flag-file scan fixed (F3); workflow gate pending (F4) |
+| [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ✅ Fixed |
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
-| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ◐ CalVer fixed; prefixed tags pending |
+| [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ✅ Fixed (15/16; Albany has no real version tags to recover — see Phase 4) |
 | [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs`/`DOC/` fixed; heading-regex rigidity (F6) pending |
