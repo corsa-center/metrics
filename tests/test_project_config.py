@@ -139,22 +139,43 @@ PACKAGE = {"repository": "HDFGroup/hdf5", "name": "hdf5"}
 
 
 class TestFetchProjectConfig:
+    def test_missing_project_config(self):
+        o = _orch()
+        with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
+            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        assert result == {}
+        mock_ctor.assert_not_called()
+
+    def test_empty_project_config_disables_project_config(self):
+        o = _orch({"project_config": {}})
+        with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
+            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        assert result == {}
+        mock_ctor.assert_not_called()
+
+    def test_missing_metrics_file_disables_project_config(self):
+        o = _orch({"project_config": {"enabled": True}})
+        with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
+            result = asyncio.run(o._fetch_project_config(PACKAGE))
+        assert result == {}
+        mock_ctor.assert_not_called()
+
     def test_disabled_globally_skips_fetch_entirely(self):
-        o = _orch({"package_config": {"enabled": False, "metrics_file": ".metrics/metrics.yaml"}})
+        o = _orch({"project_config": {"enabled": False, "metrics_file": ".metrics/metrics.yaml"}})
         with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
             result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
         mock_ctor.assert_not_called()
 
     def test_missing_file_returns_empty(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         resp = _mock_response(status_code=404)
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
             result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
 
     def test_network_error_fails_open(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(side_effect=ConnectionError("boom"))
         with patch("orchestrator.httpx.AsyncClient", return_value=cm):
@@ -162,14 +183,14 @@ class TestFetchProjectConfig:
         assert result == {}
 
     def test_malformed_yaml_returns_empty(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         resp = _mock_response(content_b64=_b64("not: valid: yaml: : :"))
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
             result = asyncio.run(o._fetch_project_config(PACKAGE))
         assert result == {}
 
     def test_schema_mismatch_returns_empty(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         yaml_text = "schema: 99\nrepo: HDFGroup/hdf5\n"
         resp = _mock_response(content_b64=_b64(yaml_text))
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
@@ -177,7 +198,7 @@ class TestFetchProjectConfig:
         assert result == {}
 
     def test_repo_mismatch_returns_empty(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         yaml_text = "schema: 1\nrepo: someone-else/other-repo\n"
         resp = _mock_response(content_b64=_b64(yaml_text))
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
@@ -185,7 +206,7 @@ class TestFetchProjectConfig:
         assert result == {}
 
     def test_valid_config_is_returned(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         yaml_text = (
             "schema: 1\n"
             "repo: HDFGroup/hdf5\n"
@@ -199,7 +220,7 @@ class TestFetchProjectConfig:
         assert result["collectors"]["quality"]["supply_chain"] is False
 
     def test_repo_match_is_case_insensitive(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         yaml_text = "schema: 1\nrepo: hdfgroup/HDF5\n"
         resp = _mock_response(content_b64=_b64(yaml_text))
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
@@ -210,7 +231,7 @@ class TestFetchProjectConfig:
         # repo_name comes from the live-fetched catalog's own keys, not from
         # anything validated beforehand -- one with no "/" must not raise
         # past this method.
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         bad_package = {"repository": "not-owner-slash-repo", "name": "x"}
         with patch("orchestrator.httpx.AsyncClient") as mock_ctor:
             result = asyncio.run(o._fetch_project_config(bad_package))
@@ -221,7 +242,7 @@ class TestFetchProjectConfig:
         # Regression: a schema-valid file with an empty `collectors:` key
         # (parses to YAML null) previously reached _sub_enabled's dict
         # chaining as None and raised AttributeError instead of failing open.
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         yaml_text = "schema: 1\nrepo: HDFGroup/hdf5\ncollectors:\n"
         resp = _mock_response(content_b64=_b64(yaml_text))
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
@@ -230,7 +251,7 @@ class TestFetchProjectConfig:
         assert o._sub_enabled("quality", "supply_chain", {"project_config": result}) is True
 
     def test_null_overrides_block_is_sanitized_not_raised(self):
-        o = _orch()
+        o = _orch({"project_config": {"enabled": True, "metrics_file": ".metrics/metrics.yaml"}})
         yaml_text = "schema: 1\nrepo: HDFGroup/hdf5\noverrides:\n"
         resp = _mock_response(content_b64=_b64(yaml_text))
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):

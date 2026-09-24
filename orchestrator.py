@@ -154,7 +154,7 @@ class MetricsOrchestrator:
         # Whether to fetch each project's own metrics.yaml at all. Does
         # not affect the maintainer-authored package_config/ files, which are
         # operator-controlled regardless of this switch.
-        self.project_config = self.config.get("project_config", {})
+        self.project_config = self.config.get("project_config", {}) or {}
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
@@ -235,6 +235,7 @@ class MetricsOrchestrator:
 
         metrics_file = self.project_config.get("metrics_file")
         if not metrics_file:
+            logger.warning("missing metrics_file in configuration")
             return {}
 
         repo_name = package["repository"]

@@ -78,9 +78,10 @@ specifically -- as opposed to a collector that crashed, which leaves the same
 gap in `sub_results` but isn't a deliberate exclusion. Use this to tell the
 two apart when a section is unexpectedly empty.
 
-## Operator kill switch
+## Configuration
 
 Set `project_config.enabled: false` in `config/orchestrator.yaml` to stop
 fetching every project's `.metrics/metrics.yaml` (e.g. to pause the mechanism
-ecosystem-wide). This does not affect `package_config/`, which is
+ecosystem-wide). If the `project_config` section is omitted, collection will be disabled.
+This does not affect `package_config/`, which is
 operator-authored regardless.
