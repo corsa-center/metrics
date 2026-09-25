@@ -131,7 +131,7 @@ three)
 | Automated FAIR4RS Assessment | ✅ | ≥3 of the 4 FAIR4RS principles satisfied: **Findable** (a DOI in CITATION.cff, or `.zenodo.json`), **Accessible** (a license identified), **Interoperable** (a CITATION.cff exists, or `codemeta.json`), **Reusable** (a license identified **and** ≥1 release exists) | each principle is an AND/OR of independently-fetched signals; one that couldn't be fully checked (a gap on one signal, with the others not yet enough to decide it either way) is excluded rather than counted against the total |
 | OSI License Validation | ✅ | the identified license is on the SPDX/OSI-approved list | a text-resolved family counts as approved too |
 | License Exception Handling | ✅ | a license family is identified — from the API, or recovered from the text when GitHub returns `NOASSERTION` | plus exception / extra-terms markers surfaced as detail |
-| FAIR Metadata Assessment | ✅ | ≥4 of 6 CITATION.cff fields present (title, authors, version, license, repository-code, DOI) | CITATION.cff field completeness |
+| FAIR Metadata Assessment | ✅ | ≥4 of 6 citation fields present (title, authors, version, license, repository-code, DOI) | CITATION.cff; without one, BibTeX entries in a root-level citation file (`CITATION.bib`, `CITATIONS.md`, …). BibTeX fields are scored here only — not in FAIR4RS, since a cited paper's DOI identifies the paper, not the software |
 
 **GitHub returns `NOASSERTION` for any licence it cannot match verbatim.** HDF5's
 LICENSE states plainly that the software "is covered by the 3-clause BSD
