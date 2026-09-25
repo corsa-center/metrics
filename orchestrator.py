@@ -1860,7 +1860,10 @@ class MetricsOrchestrator:
                 if static_analysis.get("has_codeql"):
                     rel_pts += 1
                     url = static_analysis.get("workflow_url", "")
-                    link = f'<a href="{url}">CodeQL enabled</a>' if url else "CodeQL enabled"
+                    text = ("CodeQL enabled (default setup)"
+                            if static_analysis.get("workflow_file") == "CodeQL default setup"
+                            else "CodeQL enabled")
+                    link = f'<a href="{url}">{text}</a>' if url else text
                     section_431_lines.append(f'<p><strong>Enhanced Security Analysis:</strong> {link} ✓</p>')
                 elif static_analysis.get("not_collected"):
                     # A gap here isn't a confirmed "no CodeQL" -- don't
