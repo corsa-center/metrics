@@ -64,6 +64,16 @@ _ZENODO_PATHS = [".zenodo.json", "zenodo.json"]
 # Fields a citation record needs before it is genuinely reusable metadata.
 _CITATION_FIELDS = ["title", "authors", "version", "license", "repository-code", "doi"]
 
+# Root-level citation files that may carry BibTeX instead of CFF
+# (CITATION.bib, CITATIONS.md with ```bibtex blocks, a bare CITATION file).
+_BIBTEX_CITATION_FILE = r"^(?:citations?|citing|cite)(?:\.(?:bib|md|txt|rst))?$"
+_BIBTEX_ENTRY = re.compile(r"@\w+\s*\{")
+_BIBTEX_FIELD = re.compile(r"(?i)(?<![\w-])(title|author|version|license|doi|url|repository)\s*=\s*[{\"]?([^,}\"\n]*)")
+_BIBTEX_TO_CITATION_FIELD = {
+    "title": "title", "author": "authors", "version": "version",
+    "license": "license", "doi": "doi",
+}
+
 
 class FairLicensingCollector(GitHubCollectorBase):
     """Collects FAIR compliance and license-exception signals (Section 4.2.2)."""
@@ -113,6 +123,10 @@ class FairLicensingCollector(GitHubCollectorBase):
             exceptions, metadata, has_codemeta, has_zenodo, releases,
             codemeta_gap, zenodo_gap, releases_gap,
         )
+        bibtex = None
+        if not metadata.get("exists") and tree is not COLLECTION_GAP:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                bibtex = await self._get_bibtex_citation(client, owner, repo, tree)
 
         return {
             "package_name": repo_name,
@@ -120,8 +134,9 @@ class FairLicensingCollector(GitHubCollectorBase):
             "timestamp": self._get_timestamp(),
             "license_exceptions": exceptions,
             "citation_metadata": metadata,
+            "bibtex_citation": bibtex,
             "fair": fair,
-            "overall_score": self._calculate_score(exceptions, metadata, fair),
+            "overall_score": self._calculate_score(exceptions, metadata, fair, bibtex),
         }
 
     # ------------------------------------------------------------------ fetch
@@ -229,6 +244,48 @@ class FairLicensingCollector(GitHubCollectorBase):
         if not identified and saw_gap:
             result["not_collected"] = True
         return result
+
+    async def _get_bibtex_citation(
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+    ) -> Dict[str, Any]:
+        """Citation fields carried by BibTeX in a root-level citation file,
+        or None if there's no such file or it has no BibTeX entries.
+
+        Scored separately from CITATION.cff and not fed into FAIR4RS: the
+        entries usually cite papers, so their DOI identifies a paper rather
+        than the software.
+        """
+        paths = [p for p in tree.find(_BIBTEX_CITATION_FILE) if "/" not in p]
+        for path in paths:
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+            )
+            if not isinstance(data, dict):
+                continue
+            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+            if not _BIBTEX_ENTRY.search(text):
+                continue
+            return {"path": path, **self._analyze_bibtex(text, owner, repo)}
+        return None
+
+    @staticmethod
+    def _analyze_bibtex(text: str, owner: str, repo: str) -> Dict[str, Any]:
+        """Which _CITATION_FIELDS appear in any BibTeX entry. A url or
+        repository field counts as repository-code only if it points at
+        this repository."""
+        found = set()
+        repo_ref = f"github.com/{owner}/{repo}".lower()
+        for name, value in _BIBTEX_FIELD.findall(text):
+            name = name.lower()
+            if not value.strip():
+                continue
+            if name in ("url", "repository"):
+                if repo_ref in value.lower():
+                    found.add("repository-code")
+            else:
+                found.add(_BIBTEX_TO_CITATION_FIELD[name])
+        present = [f for f in _CITATION_FIELDS if f in found]
+        return {"present": present, "missing": [f for f in _CITATION_FIELDS if f not in found]}
 
     def _analyze_citation(
         self, citation: Dict[str, Any], saw_gap: bool = False
@@ -341,7 +398,7 @@ class FairLicensingCollector(GitHubCollectorBase):
     # ---------------------------------------------------------------- scoring
 
     def _calculate_score(
-        self, exceptions: Dict, metadata: Dict, fair: Dict
+        self, exceptions: Dict, metadata: Dict, fair: Dict, bibtex: Dict = None
     ) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
 
@@ -378,11 +435,18 @@ class FairLicensingCollector(GitHubCollectorBase):
         sub["license_exception_handling"] = exc_entry
 
         present = metadata.get("present", [])
+        if metadata.get("exists"):
+            meta_value = f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present"
+        elif bibtex:
+            present = bibtex["present"]
+            meta_value = (f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present "
+                          f"(BibTeX in {bibtex['path']}; no CITATION.cff)")
+        else:
+            meta_value = "No CITATION.cff found"
         meta_passing = len(present) >= get_threshold("4.2.2", "FAIR Metadata Assessment")
         meta_entry: Dict[str, Any] = {
             "label": "FAIR Metadata Assessment",
-            "value": f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present"
-                     if metadata.get("exists") else "No CITATION.cff found",
+            "value": meta_value,
             "detail": ", ".join(present) if present else None,
             "passing": meta_passing,
         }

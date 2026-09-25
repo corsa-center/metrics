@@ -17,8 +17,10 @@ import logging
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
+from urllib.parse import urlencode
 
-from collectors.ecosystem.base import RetryingTransport
+from collectors.ecosystem.base import RetryingTransport, get_threshold
+from collectors.rate_limit import search_get
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,10 @@ _CHANNEL_PATTERNS = {
     "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
     "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
 }
+
+# Maintainer-group author associations; issues from anyone else are community
+# traffic on the tracker.
+_INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 # The pass/fail thresholds for this collector's data (departure rate,
 # channel count, release cadence, etc.) live in config/thresholds.yaml under
@@ -68,6 +74,8 @@ class ActiveMaintenanceCollector:
             first_commit_date,
             contributor_stats,
             readme_text,
+            wiki_has_content,
+            community_issues,
         ) = await asyncio.gather(
             self._get_repo_info(owner, repo),
             self._get_commit_activity(owner, repo),
@@ -76,6 +84,8 @@ class ActiveMaintenanceCollector:
             self._get_first_commit_date(owner, repo),
             self._get_contributor_stats(owner, repo),
             self._get_readme(owner, repo),
+            self._wiki_has_content(owner, repo),
+            self._count_community_issues(owner, repo),
             return_exceptions=True,
         )
 
@@ -101,6 +111,10 @@ class ActiveMaintenanceCollector:
         if isinstance(readme_text, Exception):
             logger.error(f"README fetch failed: {readme_text}")
             readme_text = ""
+        if isinstance(wiki_has_content, Exception):
+            wiki_has_content = False
+        if isinstance(community_issues, Exception):
+            community_issues = None
 
         # Analyze
         maintenance_indicators = self._analyze_maintenance_indicators(repo_info, first_commit_date)
@@ -108,7 +122,7 @@ class ActiveMaintenanceCollector:
         release_analysis = self._analyze_releases(releases)
         contributor_analysis = self._analyze_contributors(contributors)
         abandonment = self._analyze_abandonment(contributor_stats)
-        channels = self._analyze_channels(repo_info, readme_text)
+        channels = self._analyze_channels(repo_info, readme_text, wiki_has_content, community_issues)
 
         # Calculate score
         score = self._calculate_score(
@@ -147,6 +161,44 @@ class ActiveMaintenanceCollector:
         except Exception as e:
             logger.debug(f"Error fetching contributor stats: {e}")
         return []
+
+    async def _wiki_has_content(self, owner: str, repo: str) -> bool:
+        """Whether the wiki has any pages. GitHub's has_wiki flag is on by
+        default for every repository, so it says nothing on its own; the
+        wiki's git endpoint only answers 200 once a page exists. Not a REST
+        API call, so it costs no rate-limit quota."""
+        url = f"https://github.com/{owner}/{repo}.wiki.git/info/refs?service=git-upload-pack"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(url)
+                return resp.status_code == 200
+        except Exception as e:
+            logger.debug(f"Could not check wiki for {owner}/{repo}: {e}")
+            return False
+
+    async def _count_community_issues(self, owner: str, repo: str) -> Optional[int]:
+        """Of the newest 100 issues opened in the last 365 days, how many came
+        from outside the maintainer group. None on failure.
+
+        Uses search rather than the issues endpoint, which also returns pull
+        requests -- on a busy repository the newest 100 items are mostly PRs.
+        """
+        since = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
+        query = urlencode({
+            "q": f"repo:{owner}/{repo} is:issue created:>={since}",
+            "sort": "created", "order": "desc", "per_page": 100,
+        })
+        try:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                resp = await search_get(
+                    client, f"https://api.github.com/search/issues?{query}", self.headers)
+            if resp is None or resp.status_code != 200:
+                return None
+            items = resp.json().get("items", [])
+        except Exception as e:
+            logger.debug(f"Could not search issues for {owner}/{repo}: {e}")
+            return None
+        return sum(1 for i in items if i.get("author_association") not in _INSIDE_ASSOCIATIONS)
 
     async def _get_readme(self, owner: str, repo: str) -> str:
         """README text, used to find community channels linked from it."""
@@ -198,18 +250,28 @@ class ActiveMaintenanceCollector:
             "departure_rate": round(departed / previously_active, 3),
         }
 
-    def _analyze_channels(self, repo_info: Dict, readme: str) -> Dict:
-        """Community channels the project runs, beyond the issue tracker."""
+    def _analyze_channels(
+        self, repo_info: Dict, readme: str,
+        wiki_has_content: bool = False, community_issues: Optional[int] = None,
+    ) -> Dict:
+        """Community channels the project runs. The issue tracker counts only
+        when people outside the maintainer group actually use it -- every
+        repository has one, so its mere presence says nothing."""
         found = []
         if repo_info.get("has_discussions"):
             found.append("GitHub Discussions")
-        if repo_info.get("has_wiki"):
+        if repo_info.get("has_wiki") and wiki_has_content:
             found.append("Wiki")
+        min_issues = get_threshold(
+            "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
+        if (repo_info.get("has_issues", True) and community_issues is not None
+                and community_issues >= min_issues):
+            found.append("GitHub Issues")
 
         for label, pattern in _CHANNEL_PATTERNS.items():
             if readme and pattern.search(readme):
                 found.append(label)
-        return {"found": found, "count": len(found)}
+        return {"found": found, "count": len(found), "community_issues_last_year": community_issues}
 
     async def _get_repo_info(self, owner: str, repo: str) -> Dict:
         """Get basic repository info (archived status, description, pushed_at)."""

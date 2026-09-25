@@ -65,10 +65,48 @@ class TestArchitectureDetection:
 
     @pytest.mark.parametrize("text", [
         "runs-on: ubuntu-latest", "runs-on: windows-2022", "job: warm-up", "swarm-node",
+        # Intel macOS runners and a workflow filename aren't Apple Silicon.
+        "runs-on: macos-13", "runs-on: macos-15-intel", "runs-on: macos-14-large",
+        "uses: ./.github/workflows/macos-latest.yml",
     ])
     def test_no_false_positives(self, text):
         from collectors.quality.deployment_environments import _ARCH_PATTERNS
         assert [a for a, p in _ARCH_PATTERNS.items() if p.search(text)] == []
+
+    @pytest.mark.parametrize("text", [
+        "runs-on: macos-latest", "runs-on: macos-14", "os: [macos-15, windows-latest]",
+        "runs-on: macos-26", "runs-on: macos-13-xlarge",
+        "os: [ubuntu-latest, macos-latest, macos-15-intel]",
+    ])
+    def test_apple_silicon_macos_runners_are_arm64(self, text):
+        from collectors.quality.deployment_environments import _ARCH_PATTERNS
+        assert _ARCH_PATTERNS["ARM64"].search(text)
+
+
+class TestAcceleratorDetection:
+    def _hits(self, text):
+        from collectors.quality.deployment_environments import _ACCELERATOR_PATTERNS
+        return sorted(a for a, p in _ACCELERATOR_PATTERNS.items() if p.search(text))
+
+    @pytest.mark.parametrize("text,expected", [
+        ('SPEC: "%gcc +mpi+cuda cuda_arch=70"', "NVIDIA GPU (CUDA)"),
+        ("cmake -DKokkos_ENABLE_CUDA=ON ..", "NVIDIA GPU (CUDA)"),
+        ("-DCMAKE_CUDA_ARCHITECTURES=80", "NVIDIA GPU (CUDA)"),
+        ("image: nvidia/cuda:12.4.0-devel-ubuntu22.04", "NVIDIA GPU (CUDA)"),
+        ("SPEC: +rocm amdgpu_target=gfx90a", "AMD GPU (ROCm/HIP)"),
+        ("-DENABLE_HIP=ON", "AMD GPU (ROCm/HIP)"),
+        ("-DAMReX_GPU_BACKEND=HIP", "AMD GPU (ROCm/HIP)"),
+        ("-DENABLE_SYCL=ON", "Intel GPU (SYCL)"),
+    ])
+    def test_detects_accelerator(self, text, expected):
+        assert self._hits(text) == [expected]
+
+    @pytest.mark.parametrize("text", [
+        "export CUDA_LAUNCH_BLOCKING=1", "name: cuda-build", "# TODO: add a ROCm job",
+        "-DENABLE_CUDA=OFF", "~cuda", "runs-on: ubuntu-latest",
+    ])
+    def test_no_false_positives(self, text):
+        assert self._hits(text) == []
 
 
 class TestArchitectureAndDocs:
@@ -86,6 +124,20 @@ class TestArchitectureAndDocs:
         info = s["sub_scores"]["architecture_compatibility"]
         assert not info["passing"]
         assert info["value"] == "x86-64 only"
+
+    def test_accelerator_alone_passes(self, collector):
+        s = collector._calculate_score(
+            {"Linux": ["ubuntu-latest"]}, [], [], ["AMD GPU (ROCm/HIP)"])
+        info = s["sub_scores"]["architecture_compatibility"]
+        assert info["passing"]
+        assert info["value"] == "x86-64 only; GPU targets: AMD GPU (ROCm/HIP)"
+
+    def test_accelerator_found_without_github_runners(self, collector):
+        # GPU testing configured only in GitLab CI, no GitHub-hosted runners.
+        info = collector._calculate_score({}, [], [], ["NVIDIA GPU (CUDA)"])["sub_scores"][
+            "architecture_compatibility"]
+        assert info["passing"]
+        assert "NVIDIA GPU (CUDA)" in info["value"]
 
     def test_platform_documentation_threshold(self, collector):
         one = collector._calculate_score({}, [], ["Windows"])

@@ -336,3 +336,58 @@ class TestFetchGapHandling:
         has_releases, saw_gap = asyncio.run(go())
         assert has_releases is False
         assert saw_gap is True
+
+
+class TestBibtexCitation:
+    PAPER = """
+```bibtex
+@article{gardner2022sundials,
+  title   = {Enabling new flexibility in the {SUNDIALS} suite},
+  author  = {Gardner, David J and Reynolds, Daniel R},
+  journal = {ACM TOMS},
+  doi     = {10.1145/3539801}
+}
+```
+"""
+
+    def test_paper_entries_give_title_authors_doi(self, collector):
+        result = collector._analyze_bibtex(self.PAPER, "LLNL", "sundials")
+        assert result["present"] == ["title", "authors", "doi"]
+
+    def test_software_entry_can_carry_version_and_repository(self, collector):
+        text = """@software{pkg,
+  title = {Pkg}, author = {A. Person},
+  version = {7.4.0},
+  url = {https://github.com/LLNL/sundials},
+  doi = {10.5281/zenodo.1}
+}"""
+        result = collector._analyze_bibtex(text, "LLNL", "sundials")
+        assert result["present"] == ["title", "authors", "version", "repository-code", "doi"]
+
+    def test_url_to_another_site_is_not_repository_code(self, collector):
+        text = "@article{x,\n  url = {https://doi.org/10.1/abc}\n}"
+        assert "repository-code" not in collector._analyze_bibtex(text, "o", "r")["present"]
+
+    def _score(self, collector, bibtex):
+        metadata = {"exists": False, "present": [], "missing": []}
+        fair = {"principles": {}, "principle_gaps": {}, "count": 0}
+        return collector._calculate_score({}, metadata, fair, bibtex)["sub_scores"]["fair_metadata"]
+
+    def test_bibtex_fields_are_reported_and_scored(self, collector):
+        row = self._score(collector, {"path": "CITATIONS.md", "present": ["title", "authors", "doi"]})
+        assert row["value"] == "3/6 citation fields present (BibTeX in CITATIONS.md; no CITATION.cff)"
+        assert row["passing"] is False
+
+    def test_no_bibtex_keeps_existing_message(self, collector):
+        assert self._score(collector, None)["value"] == "No CITATION.cff found"
+
+    def test_bibtex_does_not_feed_fair4rs(self, collector):
+        # A paper DOI identifies the paper, not the software.
+        metadata = collector._analyze_citation({})
+        fair = collector._assess_fair({"identified": True}, metadata, False, False, True)
+        assert fair["principles"]["Findable"] is False
+        assert fair["principles"]["Interoperable"] is False
+
+    def test_booktitle_is_not_title(self, collector):
+        text = "@inproceedings{x,\n  booktitle = {Proc. SC}\n}"
+        assert collector._analyze_bibtex(text, "o", "r")["present"] == []

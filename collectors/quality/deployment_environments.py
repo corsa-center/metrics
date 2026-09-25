@@ -5,8 +5,14 @@ Fills the three CI- and documentation-derived sub-metrics of section 4.3.5 by
 reading the workflow definitions once:
 
   - Deployment Environment Testing    : which OS families CI builds on
-  - Architecture Compatibility Analysis : which CPU architectures CI covers
+  - Architecture Compatibility Analysis : which non-x86 CPU architectures and
+                                          GPU accelerator targets CI covers
   - Platform Documentation Evaluation : whether the docs say what is supported
+
+Architecture and accelerator coverage also reads GitLab CI configuration kept
+in the repository (.gitlab-ci.yml, .gitlab/), since HPC projects often run
+their GPU and non-x86 testing on facility GitLab instances rather than on
+GitHub-hosted runners.
 
 Portable Build System Detection and Container Availability are collected by
 accessibility.py.
@@ -27,7 +33,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.ecosystem.base import GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +57,42 @@ _RUNNER_FAMILIES = {
 _ARCH_PATTERNS = {
     # The `-arm` runner suffix follows a version, not letters
     # (`ubuntu-24.04-arm`), so the prefix must not be constrained to [a-z].
-    "ARM64": re.compile(r"\barm64\b|\baarch64\b|-arm\b|\barm-", re.I),
+    # GitHub-hosted macos-14 and later (and macos-latest) run on Apple
+    # Silicon, as does any `-xlarge` macOS runner; `-large` and `-intel`
+    # are x86-64.
+    "ARM64": re.compile(
+        r"\barm64\b|\baarch64\b|-arm\b|\barm-"
+        r"|\bmacos-(?:latest|1[4-9]|[2-9]\d)(?![\w.-])"
+        r"|\bmacos-(?:latest|\d+)-xlarge\b",
+        re.I,
+    ),
     "POWER": re.compile(r"\b(?:ppc64le|ppc64|power[89])\b", re.I),
     "RISC-V": re.compile(r"\briscv(?:64)?\b", re.I),
     "s390x": re.compile(r"\bs390x\b", re.I),
 }
+
+# GPU build targets in CI configuration. Build-option tokens only (Spack
+# variants, CMake options, GPU arch targets, vendor images) -- a bare "cuda"
+# also appears in comments, job names and environment variables.
+_ACCELERATOR_PATTERNS = {
+    "NVIDIA GPU (CUDA)": re.compile(
+        r"\+cuda\b|\bcuda_arch=|CMAKE_CUDA_ARCHITECTURES\b|-D\w*_CUDA=ON\b"
+        r"|GPU_BACKEND=CUDA\b|\bnvidia/cuda:",
+        re.I,
+    ),
+    "AMD GPU (ROCm/HIP)": re.compile(
+        r"\+rocm\b|\bamdgpu_target=|CMAKE_HIP_ARCHITECTURES\b|-D\w*_HIP=ON\b"
+        r"|GPU_BACKEND=HIP\b|\bgfx9[0-4][0-9a-f]\b",
+        re.I,
+    ),
+    "Intel GPU (SYCL)": re.compile(
+        r"\+sycl\b|-D\w*_SYCL=ON\b|GPU_BACKEND=SYCL\b",
+        re.I,
+    ),
+}
+
+_GITLAB_CI_RE = re.compile(r"^(?:\.gitlab-ci\.ya?ml|\.gitlab/.*\.ya?ml)$", re.I)
+_MAX_GITLAB_FILES = 10
 
 # Platform names a project might document support for.
 _PLATFORM_DOC_TERMS = {
@@ -84,9 +121,10 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         logger.info(f"Collecting deployment environment metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            files, doc_text = await asyncio.gather(
+            files, doc_text, tree = await asyncio.gather(
                 self._list_workflows(client, owner, repo),
                 self._read_platform_docs(client, owner, repo),
+                RepoTree.fetch(client, self.github_headers, owner, repo),
                 return_exceptions=True,
             )
             if isinstance(files, Exception):
@@ -95,23 +133,41 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             if isinstance(doc_text, Exception):
                 logger.warning(f"Platform doc read failed: {doc_text}")
                 doc_text = ""
+            gitlab_paths = (
+                tree.find(_GITLAB_CI_RE.pattern)[:_MAX_GITLAB_FILES]
+                if isinstance(tree, RepoTree) else []
+            )
 
             contents = await asyncio.gather(
                 *[self._read_workflow(client, f["url"]) for f in files[:_MAX_WORKFLOW_FILES]],
                 return_exceptions=True,
             ) if files else []
+            gitlab_contents = await asyncio.gather(
+                *[self._read_workflow(
+                    client, f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
+                  for p in gitlab_paths],
+                return_exceptions=True,
+            ) if gitlab_paths else []
 
         families: Dict[str, set] = {name: set() for name in _RUNNER_FAMILIES}
-        architectures: set = set()
         for text in contents:
             if isinstance(text, Exception) or not text:
                 continue
             for family, pattern in _RUNNER_FAMILIES.items():
                 for label in pattern.findall(text):
                     families[family].add(label.lower())
+
+        architectures: set = set()
+        accelerators: set = set()
+        for text in list(contents) + list(gitlab_contents):
+            if isinstance(text, Exception) or not text:
+                continue
             for arch, pattern in _ARCH_PATTERNS.items():
                 if pattern.search(text):
                     architectures.add(arch)
+            for accel, pattern in _ACCELERATOR_PATTERNS.items():
+                if pattern.search(text):
+                    accelerators.add(accel)
 
         detected = {f: sorted(labels) for f, labels in families.items() if labels}
         documented = sorted(
@@ -124,10 +180,13 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             "timestamp": self._get_timestamp(),
             "workflow_count": len(files),
             "workflows_scanned": min(len(files), _MAX_WORKFLOW_FILES),
+            "gitlab_ci_files_scanned": len(gitlab_paths),
             "os_families": detected,
             "architectures": sorted(architectures),
+            "accelerators": sorted(accelerators),
             "documented_platforms": documented,
-            "overall_score": self._calculate_score(detected, sorted(architectures), documented),
+            "overall_score": self._calculate_score(
+                detected, sorted(architectures), documented, sorted(accelerators)),
         }
 
     async def _read_platform_docs(
@@ -182,6 +241,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         detected: Dict[str, List[str]],
         architectures: Optional[List[str]] = None,
         documented: Optional[List[str]] = None,
+        accelerators: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Summarise coverage by OS family.
 
@@ -198,12 +258,17 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             value = "No CI runner environments detected"
         architectures = architectures or []
         documented = documented or []
+        accelerators = accelerators or []
 
-        arch_ok = len(architectures) >= get_threshold("4.3.5", "Architecture Compatibility Analysis")
-        arch_value = (
-            "x86-64 plus " + ", ".join(architectures) if architectures
-            else "x86-64 only"
-        ) if detected else "No CI architectures detected"
+        arch_ok = (len(architectures) + len(accelerators)
+                   >= get_threshold("4.3.5", "Architecture Compatibility Analysis"))
+        if detected or architectures or accelerators:
+            arch_value = ("x86-64 plus " + ", ".join(architectures) if architectures
+                          else "x86-64 only")
+            if accelerators:
+                arch_value += "; GPU targets: " + ", ".join(accelerators)
+        else:
+            arch_value = "No CI architectures detected"
 
         docs_ok = len(documented) >= get_threshold("4.3.5", "Platform Documentation Evaluation")
         docs_value = (

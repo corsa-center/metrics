@@ -1,8 +1,11 @@
 """
 Static Analysis / CodeQL Collector (CASS Report Section 4.3.1 — Enhanced Security Analysis)
 
-Detects whether a repository runs GitHub CodeQL code scanning by checking
-for a CodeQL workflow file. GitHub's code-scanning alerts API
+Detects whether a repository runs GitHub CodeQL code scanning, either from a
+CodeQL workflow file or from GitHub's "default setup", which is enabled in
+repository settings and leaves no file in the tree -- it only appears in the
+Actions workflows list, under a dynamic/github-code-scanning/ path. GitHub's
+code-scanning alerts API
 (/repos/{owner}/{repo}/code-scanning/alerts) requires authentication even
 for public repos (returns 401 unauthenticated), so this uses the same
 workflow-presence proxy pattern as
@@ -24,6 +27,8 @@ _CODEQL_WORKFLOW_PATHS: List[str] = [
     ".github/workflows/codeql-analysis.yml",
     ".github/workflows/codeql-analysis.yaml",
 ]
+
+_DEFAULT_SETUP_PATH_PREFIX = "dynamic/github-code-scanning/codeql"
 
 _WORKFLOWS_DIR = ".github/workflows"
 # Bounds worst-case API calls per repo when falling back to a content scan.
@@ -62,6 +67,18 @@ class StaticAnalysisCollector(GitHubCollectorBase):
                         "workflow_url": html_url,
                     }
 
+            default_setup, setup_gap = await self._find_default_setup(client, owner, repo)
+            if default_setup:
+                return {
+                    "package_name": repo_name,
+                    "repository": f"{owner}/{repo}",
+                    "timestamp": self._get_timestamp(),
+                    "has_codeql": True,
+                    "workflow_file": "CodeQL default setup",
+                    "workflow_url": default_setup,
+                }
+            saw_gap = saw_gap or setup_gap
+
             # None of the common filenames matched — some projects bundle CodeQL
             # into a differently-named workflow (e.g. ADIOS2's `everything.yml`).
             # Fall back to scanning workflow file contents for a codeql-action
@@ -91,6 +108,24 @@ class StaticAnalysisCollector(GitHubCollectorBase):
         if saw_gap:
             result["not_collected"] = True
         return result
+
+    async def _find_default_setup(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> tuple:
+        """Actions page URL of an active CodeQL default setup, or None.
+
+        Returns (url_or_None, saw_gap). A disabled default setup doesn't count.
+        """
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/actions/workflows",
+            params={"per_page": 100},
+        )
+        if data is COLLECTION_GAP:
+            return None, True
+        for wf in (data or {}).get("workflows", []):
+            if wf.get("path", "").startswith(_DEFAULT_SETUP_PATH_PREFIX) and wf.get("state") == "active":
+                return wf.get("html_url") or f"https://github.com/{owner}/{repo}/actions", False
+        return None, False
 
     async def _scan_workflows_for_codeql(
         self, client: httpx.AsyncClient, owner: str, repo: str

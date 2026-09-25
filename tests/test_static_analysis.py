@@ -85,6 +85,44 @@ class TestCollect:
         assert "not_collected" not in result
 
 
+class TestFindDefaultSetup:
+    def _run(self, collector, data):
+        async def go():
+            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._find_default_setup(MagicMock(), "o", "r")
+        return asyncio.run(go())
+
+    def test_active_default_setup_found(self, collector):
+        data = {"workflows": [{
+            "path": "dynamic/github-code-scanning/codeql", "state": "active",
+            "html_url": "https://github.com/o/r/actions/workflows/github-code-scanning/codeql",
+        }]}
+        url, gap = self._run(collector, data)
+        assert url == "https://github.com/o/r/actions/workflows/github-code-scanning/codeql"
+        assert gap is False
+
+    def test_disabled_default_setup_not_counted(self, collector):
+        data = {"workflows": [{"path": "dynamic/github-code-scanning/codeql", "state": "disabled_manually"}]}
+        assert self._run(collector, data) == (None, False)
+
+    def test_other_dynamic_workflows_not_counted(self, collector):
+        data = {"workflows": [{"path": "dynamic/dependabot/dependabot-updates", "state": "active"}]}
+        assert self._run(collector, data) == (None, False)
+
+    def test_gap_is_tracked(self, collector):
+        assert self._run(collector, COLLECTION_GAP) == (None, True)
+
+    def test_collect_reports_default_setup(self, collector, monkeypatch):
+        monkeypatch.setattr(collector, "_check_file_exists", AsyncMock(return_value=None))
+        monkeypatch.setattr(collector, "_find_default_setup", AsyncMock(return_value=("https://x", False)))
+        result = asyncio.run(
+            collector.collect({"name": "MyPkg", "repo_url": "https://github.com/owner/repo"})
+        )
+        assert result["has_codeql"] is True
+        assert result["workflow_file"] == "CodeQL default setup"
+        assert result["workflow_url"] == "https://x"
+
+
 class TestScanWorkflowsForCodeqlGapHandling:
     def test_directory_listing_gap_is_tracked(self, collector):
         async def go():

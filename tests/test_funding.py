@@ -259,6 +259,8 @@ class TestGrantPatterns:
         ("Supported by DE-AC02-06CH11357", True),
         ("under NSF OAC-1836650", True),
         ("award R01GM123456 funded", True),
+        ("DOE award DE-SC0021354", True),
+        ("DOE awards DE-AC52-07NA27344 and DE-SC-0021354.", True),
         ("see version 1.14.3 and issue 12345", False),
         ("no funding here", False),
     ])
@@ -267,3 +269,24 @@ class TestGrantPatterns:
         from collectors.ecosystem.funding import _GRANT_PATTERNS
         hit = any(re.search(p, text, re.IGNORECASE) for p, _ in _GRANT_PATTERNS)
         assert hit is expected
+
+
+class TestFindGrantReferences:
+    def _grants(self, collector, readme):
+        import base64
+        from unittest.mock import AsyncMock, MagicMock, patch
+        data = {"content": base64.b64encode(readme.encode()).decode()}
+
+        async def go():
+            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._find_grant_references(MagicMock(), "o", "r")
+        grants, gap = asyncio.run(go())
+        return [g["value"] for g in grants]
+
+    def test_hyphenated_doe_award_counted_separately_from_contract(self, collector):
+        readme = "under DOE awards DE-AC52-07NA27344 and DE-SC-0021354."
+        assert self._grants(collector, readme) == ["DE-AC52-07NA27344", "DE-SC-0021354"]
+
+    def test_same_award_written_two_ways_counts_once(self, collector):
+        readme = "Supported by DE-SC0021354. See also award DE-SC-0021354."
+        assert len(self._grants(collector, readme)) == 1

@@ -330,3 +330,42 @@ class TestDefectTrendGapHandling:
         result = self._run(collector, AsyncMock(return_value=resp))
         assert result["measurable"] is False
         assert "not_collected" not in result
+
+
+class TestDefectTrendSignificance:
+    def _trend(self, collector, recent, previous):
+        def resp(n):
+            r = MagicMock()
+            r.status_code = 200
+            r.json.return_value = {"total_count": n}
+            return r
+
+        async def go():
+            with patch("collectors.quality.reliability.search_get",
+                       new=AsyncMock(side_effect=[resp(recent), resp(previous)])):
+                return await collector._defect_trend(MagicMock(), "o", "r")
+        return asyncio.run(go())
+
+    def test_small_rise_within_normal_variation_is_stable(self, collector):
+        t = self._trend(collector, 18, 11)
+        assert t["direction"] == "stable"
+        assert t["within_normal_variation"] is True
+
+    def test_significant_rise_is_increasing(self, collector):
+        t = self._trend(collector, 30, 10)
+        assert t["direction"] == "increasing"
+        assert t["within_normal_variation"] is False
+
+    def test_small_drop_within_normal_variation_is_stable(self, collector):
+        assert self._trend(collector, 5, 9)["direction"] == "stable"
+
+    def test_significant_drop_is_improving(self, collector):
+        assert self._trend(collector, 5, 25)["direction"] == "improving"
+
+    def test_within_variation_is_explained_in_the_value(self, collector):
+        info = collector._calculate_score([], [], {
+            "measurable": True, "recent": 18, "previous": 11, "direction": "stable",
+            "source": "label", "within_normal_variation": True,
+        })["sub_scores"]["reliability_trend"]
+        assert info["passing"]
+        assert "within normal variation" in info["value"]

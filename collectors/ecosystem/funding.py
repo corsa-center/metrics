@@ -42,7 +42,8 @@ _FUNDING_FILES = [
 # Deliberately narrow: a looser pattern matches version strings and issue numbers.
 _GRANT_PATTERNS = [
     (r"\bDE-[A-Z]{2}\d{2}-?\d{2}[A-Z]{2}\d{5}\b", "DOE contract"),
-    (r"\bDE-(?:AC|SC|EE|NA)\d{2}-?\d*[A-Z]*\d*\b", "DOE award"),
+    # Written both as DE-SC0021354 and DE-SC-0021354.
+    (r"\bDE-(?:AC|SC|EE|NA)-?\d{2}-?\d*[A-Z]*\d*\b", "DOE award"),
     (r"\b(?:NSF|OAC|ACI|SI2|CSSI)[- ]\d{6,7}\b", "NSF award"),
     (r"\b(?:R01|R50|U24|P41)[A-Z]{2}\d{6}\b", "NIH award"),
     (r"\bgrant (?:no\.?|number)?\s*#?\s*\d{6,}\b", "grant number"),
@@ -193,8 +194,9 @@ class FundingCollector(GitHubCollectorBase):
         for pattern, kind in _GRANT_PATTERNS:
             for match in re.findall(pattern, text, flags=re.IGNORECASE):
                 value = match.strip()
-                if value.lower() not in seen:
-                    seen.add(value.lower())
+                key = re.sub(r"[-\s]", "", value.lower())
+                if key not in seen:
+                    seen.add(key)
                     grants.append({"value": value, "kind": kind})
         return grants, False
 

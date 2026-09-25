@@ -131,7 +131,7 @@ three)
 | Automated FAIR4RS Assessment | ✅ | ≥3 of the 4 FAIR4RS principles satisfied: **Findable** (a DOI in CITATION.cff, or `.zenodo.json`), **Accessible** (a license identified), **Interoperable** (a CITATION.cff exists, or `codemeta.json`), **Reusable** (a license identified **and** ≥1 release exists) | each principle is an AND/OR of independently-fetched signals; one that couldn't be fully checked (a gap on one signal, with the others not yet enough to decide it either way) is excluded rather than counted against the total |
 | OSI License Validation | ✅ | the identified license is on the SPDX/OSI-approved list | a text-resolved family counts as approved too |
 | License Exception Handling | ✅ | a license family is identified — from the API, or recovered from the text when GitHub returns `NOASSERTION` | plus exception / extra-terms markers surfaced as detail |
-| FAIR Metadata Assessment | ✅ | ≥4 of 6 CITATION.cff fields present (title, authors, version, license, repository-code, DOI) | CITATION.cff field completeness |
+| FAIR Metadata Assessment | ✅ | ≥4 of 6 citation fields present (title, authors, version, license, repository-code, DOI) | CITATION.cff; without one, BibTeX entries in a root-level citation file (`CITATION.bib`, `CITATIONS.md`, …). BibTeX fields are scored here only — not in FAIR4RS, since a cited paper's DOI identifies the paper, not the software |
 
 **GitHub returns `NOASSERTION` for any licence it cannot match verbatim.** HDF5's
 LICENSE states plainly that the software "is covered by the 3-clause BSD
@@ -150,7 +150,7 @@ for every other project with a modified licence.)
 | Maintenance Mode Indicator Detection | ✅ | not archived, and no maintenance-mode keywords in the description | `archived` flag + description keywords |
 | Activity Trend Monitoring | ✅ | last 13 weeks' commit volume is stable or increasing vs. the previous 13 | `/stats/participation` |
 | Release Pattern Assessment | ✅ | ≥1 release in the last year | `/releases` |
-| Multi-Channel Communication Activity | ✅ | ≥2 of: Discussions, wiki, mailing list, chat, forum, help-desk link in the README | Discussions / wiki flags plus links detected in the README |
+| Multi-Channel Communication Activity | ✅ | ≥2 of: Discussions, wiki, GitHub Issues, mailing list, chat, forum, help-desk link in the README | Discussions flag; wiki only if it has pages (GitHub's `has_wiki` flag is on by default); issue tracker only if ≥5 of the newest issues from the last year were filed from outside the maintainer group; links detected in the README |
 | Contributor Abandonment Forecasting | ✅ | departure rate ≤50% (unmeasurable if there's no prior-year contributor history to compare against) | contributors active in the prior 52 weeks who committed nothing in the last 52, from `/stats/contributors` |
 
 ### 4.2.4 Engagement
@@ -322,10 +322,10 @@ the CI workflow definitions.
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers) | configs and analysis workflows |
-| Enhanced Security Analysis | ✅ | a CodeQL workflow is present | |
+| Enhanced Security Analysis | ✅ | CodeQL runs, from a workflow file or GitHub's default setup (enabled in repository settings, no file in the tree) | workflow files; Actions workflows list for default setup |
 | CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references — **practice indicators, not audited conformance** |
 | Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API |
-| Reliability Trend Analysis | ✅ | defect volume over the last 52 weeks is ≤1.25× the prior 52 weeks (falling counts too); unmeasurable below 5 total defects across both windows | defect reports over two 52-week windows, by issue type first then label |
+| Reliability Trend Analysis | ✅ | defect volume over the last 52 weeks is not significantly higher than the prior 52 weeks: over 1.25× **and** a one-sided binomial p < 0.05 counts as increasing; a rise within normal variation counts as stable. Unmeasurable below 5 total defects across both windows | defect reports over two 52-week windows, by issue type first then label. Only GitHub-filed reports are visible; defects reported by email or mailing list aren't |
 
 Codecov's `api.codecov.io/api/v2/github/{owner}/repos/{repo}/` is public and
 unauthenticated for public repos. Repos with no active Codecov integration
@@ -392,7 +392,7 @@ ecosyste.ms a second time for the same answer.
 |---|---|---|---|
 | Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found | |
 | Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
-| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture named in the CI workflows (ARM64, POWER, RISC-V, s390x) — x86-64 alone doesn't count | |
+| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build options only (Spack variants, CMake options, GPU arch targets, vendor images) |
 | Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | |
 | Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels | [`deployment_environments.py`](collectors/quality/deployment_environments.py) |
 

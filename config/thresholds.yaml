@@ -62,7 +62,10 @@
     - stable
     - increasing
   Release Pattern Assessment: 1              # releases in the last year, minimum
-  Multi-Channel Communication Activity: 2     # distinct channels found, minimum
+  Multi-Channel Communication Activity:
+    min_channels: 2              # distinct channels found, minimum
+    min_community_issues: 5      # issues opened from outside the maintainer group in the last
+                                 # 365 days before the issue tracker counts as a channel
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
 "4.2.4":
@@ -128,6 +131,7 @@
   Reliability Trend Analysis:
     min_trend_volume: 5        # combined recent+previous defect reports, minimum (below this the comparison is noise)
     trend_tolerance: 1.25      # recent:previous ratio at or under which the trend still counts as stable
+    significance: 0.05         # one-sided binomial p-value a rising/falling split must be under to count as a trend
     passing_directions:        # trend direction must be one of these to meet the threshold
       - stable
       - improving
