@@ -1,0 +1,34 @@
+config/thresholds.yaml
+  s_72fde105c4df10::t_a5598fa53775c7 65-68
+orchestrator.py
+  s_72fde105c4df10::t_a5598fa53775c7 1532
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_b07aa15a65e999 153
+tests/test_maintenance_channels.py
+  s_72fde105c4df10::t_e2bbfaa07a01ef 103
+  s_72fde105c4df10::t_6ca01f9cec3c89 84-102,104-106
+  s_72fde105c4df10::t_fc1491e479ef1b 45-46,49-66
+  s_72fde105c4df10::t_35666c8f12c506 67
+collectors/ecosystem/active_maintenance.py
+  s_72fde105c4df10::t_33e1b254a84429 22,35-38,77-78,87-88,114-117,125,165-179,191-192,198,200,253-259,263,265-269
+  s_72fde105c4df10::t_a5598fa53775c7 274
+  s_72fde105c4df10::t_e2bbfaa07a01ef 20,23,187,190,193-197
+  s_72fde105c4df10::t_68dff80b9e2d7d 180-186,188-189,199,201
+  s_72fde105c4df10::t_c3791cce7e0392 202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "eb95298da5289021398722edadf80cb63c39eff8",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
