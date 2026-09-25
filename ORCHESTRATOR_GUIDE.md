@@ -161,6 +161,9 @@ Options:
 
 ## Configuration Options
 
+The following sections describe the options available in the config/orchestrator.yaml file to control 
+the operation of the orchestrator.
+
 ### Enable/Disable Collectors
 
 ```yaml
@@ -250,6 +253,18 @@ filters:
   categories: ["Mathematical Libraries"]  # Only these categories
   exclude_repos: ["test/repo"]            # Skip these repos
   min_stars: 10                           # Minimum GitHub stars
+```
+
+### Project-specific configuration
+
+Per-project specification of metric collection (see [docs/PROJECT_CONFIG.md](docs/PROJECT_CONFIG.md)) is controlled
+by the `project_config` section. If this section is present in the configuration, per-project metrics
+will be enabled and each repository will be checked for the presence of a metrics file.
+
+```yaml
+project_config:
+  enabled: true                         # enable/disable project-specific configuration
+  metrics_file: ".metrics/metrics.yaml" # location of configuration file
 ```
 
 ## Workflow Examples

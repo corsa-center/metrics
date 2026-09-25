@@ -1,7 +1,7 @@
 # Project metric configuration
 
 A tracked project can narrow which sub-collectors run against its own repo by
-adding `.corsa/metrics.yaml` at the root of that repo. This closes
+adding `.metrics/metrics.yaml` at the root of that repo. This closes
 [#24](https://github.com/corsa-center/metrics/issues/24).
 
 ```yaml
@@ -45,7 +45,7 @@ re-enable a collector a higher layer turned off:
 1. **Global** `config/orchestrator.yaml` -- applies to every package.
 2. **Maintainer-authored** `package_config/<owner>_<repo>.yaml` (this repo).
    Same `collectors:` / `overrides:` shape as above.
-3. **Project-authored** `.corsa/metrics.yaml`, fetched from the project's own
+3. **Project-authored** `.metrics/metrics.yaml`, fetched from the project's own
    repo at collection time.
 
 For `overrides`, layer 2 (central) wins over layer 3 (project) on a
@@ -64,7 +64,7 @@ file at all.
 
 ## Fails open
 
-If `.corsa/metrics.yaml` is missing, unreachable, not valid YAML, declares an
+If `.metrics/metrics.yaml` is missing, unreachable, not valid YAML, declares an
 unsupported `schema`, or its `repo:` field doesn't match the package being
 collected, it is ignored entirely and every collector runs as if the file
 didn't exist. A project cannot break its own metrics collection by getting
@@ -73,14 +73,15 @@ this file wrong.
 ## Provenance
 
 Every package's output includes `config_exclusions`, listing which toggle
-keys were turned off by `package_config/` or `.corsa/metrics.yaml`
+keys were turned off by `package_config/` or `.metrics/metrics.yaml`
 specifically -- as opposed to a collector that crashed, which leaves the same
 gap in `sub_results` but isn't a deliberate exclusion. Use this to tell the
 two apart when a section is unexpectedly empty.
 
-## Operator kill switch
+## Configuration
 
 Set `project_config.enabled: false` in `config/orchestrator.yaml` to stop
-fetching every project's `.corsa/metrics.yaml` (e.g. to pause the mechanism
-ecosystem-wide). This does not affect `package_config/`, which is
+fetching every project's `.metrics/metrics.yaml` (e.g. to pause the mechanism
+ecosystem-wide). If the `project_config` section is omitted, collection will be disabled.
+This does not affect `package_config/`, which is
 operator-authored regardless.

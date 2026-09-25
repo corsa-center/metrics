@@ -84,12 +84,11 @@ PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
 
 # Path, within a tracked project's own repo, of its self-declared metrics
 # config (see docs/PROJECT_CONFIG.md). Fetched fresh per collection run.
-PROJECT_CONFIG_PATH = ".corsa/metrics.yaml"
 PROJECT_CONFIG_SCHEMA_VERSION = 1
 
 
 def _sanitize_metric_config(data: Dict) -> Dict:
-    """Coerce a package_config/ or PROJECT_CONFIG_PATH file's collectors:
+    """Coerce a package_config/ or metric file's collectors:
     and overrides: blocks into well-shaped dicts, dropping anything that
     isn't -- so every downstream reader can assume this shape without
     re-checking. Both files are hand-edited YAML (one by a maintainer, one
@@ -152,12 +151,10 @@ class MetricsOrchestrator:
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
         self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
         self.quality_collectors = self.config.get("quality_collectors", {})
-        # Whether to fetch each project's own PROJECT_CONFIG_PATH at all. Does
+        # Whether to fetch each project's own metrics.yaml at all. Does
         # not affect the maintainer-authored package_config/ files, which are
         # operator-controlled regardless of this switch.
-        self.project_config_enabled = (self.config.get("project_config") or {}).get(
-            "enabled", True
-        )
+        self.project_config = self.config.get("project_config", {}) or {}
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
@@ -224,7 +221,7 @@ class MetricsOrchestrator:
         return {}
 
     async def _fetch_project_config(self, package: Dict) -> Dict:
-        """Fetch a project's self-declared PROJECT_CONFIG_PATH from its own repo.
+        """Fetch a project's self-declared metrics file from its own repo.
 
         Lets a project narrow which collectors run for it and annotate
         sub-metric overrides, same shape as package_config/ (see
@@ -233,7 +230,12 @@ class MetricsOrchestrator:
         package being collected -- fails open and returns {}, i.e. collect
         everything, exactly as if the project had never added the file.
         """
-        if not self.project_config_enabled:
+        if not self.project_config.get("enabled"):
+            return {}
+
+        metrics_file = self.project_config.get("metrics_file")
+        if not metrics_file:
+            logger.warning("missing metrics_file in configuration")
             return {}
 
         repo_name = package["repository"]
@@ -245,7 +247,8 @@ class MetricsOrchestrator:
             # malformed one (no "/") must fail open like every other
             # problem here, not raise past this method.
             owner, repo = repo_name.split("/", 1)
-            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{PROJECT_CONFIG_PATH}"
+
+            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{metrics_file}"
             headers = {"Accept": "application/vnd.github.v3+json"}
             if token:
                 headers["Authorization"] = f"token {token}"
@@ -259,21 +262,21 @@ class MetricsOrchestrator:
             )
             data = yaml.safe_load(content) or {}
         except Exception as e:
-            logger.warning(f"Could not fetch {PROJECT_CONFIG_PATH} for {repo_name}: {e}")
+            logger.warning(f"Could not fetch {metrics_file} for {repo_name}: {e}")
             return {}
 
         if not isinstance(data, dict):
-            logger.warning(f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: not a mapping")
+            logger.warning(f"Ignoring {metrics_file} for {repo_name}: not a mapping")
             return {}
         if data.get("schema") != PROJECT_CONFIG_SCHEMA_VERSION:
             logger.warning(
-                f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: "
+                f"Ignoring {metrics_file} for {repo_name}: "
                 f"unsupported schema {data.get('schema')!r}"
             )
             return {}
         if str(data.get("repo", "")).lower() != repo_name.lower():
             logger.warning(
-                f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: "
+                f"Ignoring {metrics_file} for {repo_name}: "
                 f"repo field {data.get('repo')!r} does not match"
             )
             return {}
@@ -466,7 +469,7 @@ class MetricsOrchestrator:
         collector a higher layer turned off:
           1. Global config/orchestrator.yaml -- applies to every package.
           2. The maintainer's central package_config/<owner>_<repo>.yaml.
-          3. The project's own PROJECT_CONFIG_PATH, fetched from its repo.
+          3. The project's own metrics file, fetched from its repo.
         `package` carries (2) and (3) once collect_all_metrics has attached
         them; omit it (as the config-matching tests do) to check only (1).
         """
@@ -1137,7 +1140,7 @@ class MetricsOrchestrator:
         dims = metrics.get("dimensions", {})
 
         # Merge sub-metric text overrides from both config layers: the
-        # project's own PROJECT_CONFIG_PATH (fetched during collection, so it
+        # project's own metrics file (fetched during collection, so it
         # travels on `metrics`) and the maintainer's central
         # package_config/<owner>_<repo>.yaml (re-read fresh here since it's a
         # cheap local file). On a conflicting label within the same section,
