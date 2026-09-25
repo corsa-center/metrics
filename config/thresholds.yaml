@@ -62,7 +62,10 @@
     - stable
     - increasing
   Release Pattern Assessment: 1              # releases in the last year, minimum
-  Multi-Channel Communication Activity: 2     # distinct channels found, minimum
+  Multi-Channel Communication Activity:
+    min_channels: 2              # distinct channels found, minimum
+    min_community_issues: 5      # issues opened from outside the maintainer group in the last
+                                 # 365 days before the issue tracker counts as a channel
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
 "4.2.4":

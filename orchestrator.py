@@ -1529,7 +1529,7 @@ class MetricsOrchestrator:
             # 5. Multi-Channel Communication Activity
             channels = maintenance.get("channels", {})
             ch_found = channels.get("found", [])
-            ch_ok = len(ch_found) >= get_threshold("4.2.3", "Multi-Channel Communication Activity")
+            ch_ok = len(ch_found) >= get_threshold("4.2.3", "Multi-Channel Communication Activity", "min_channels")
             maint_pts += 1 if ch_ok else 0
             maint_lines.append(
                 f'<p><strong>Multi-Channel Communication Activity:</strong> '

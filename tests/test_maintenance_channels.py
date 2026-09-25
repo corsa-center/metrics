@@ -42,8 +42,28 @@ class TestAbandonment:
 
 class TestChannels:
     def test_repo_flags(self, collector):
-        out = collector._analyze_channels({"has_discussions": True, "has_wiki": True}, "")
+        out = collector._analyze_channels(
+            {"has_discussions": True, "has_wiki": True}, "", wiki_has_content=True)
         assert out["found"] == ["GitHub Discussions", "Wiki"]
+
+    def test_empty_wiki_is_not_a_channel(self, collector):
+        # has_wiki is on by default for every repository, pages or not.
+        out = collector._analyze_channels({"has_wiki": True}, "", wiki_has_content=False)
+        assert "Wiki" not in out["found"]
+
+    def test_issue_tracker_used_by_community_counts(self, collector):
+        out = collector._analyze_channels({"has_issues": True}, "", community_issues=12)
+        assert "GitHub Issues" in out["found"]
+        assert out["community_issues_last_year"] == 12
+
+    @pytest.mark.parametrize("repo_info,count", [
+        ({"has_issues": True}, 2),      # too little outside traffic
+        ({"has_issues": True}, None),   # couldn't be measured
+        ({"has_issues": False}, 50),    # tracker disabled
+    ])
+    def test_issue_tracker_not_counted(self, collector, repo_info, count):
+        out = collector._analyze_channels(repo_info, "", community_issues=count)
+        assert "GitHub Issues" not in out["found"]
 
     @pytest.mark.parametrize("text,label", [
         ("Join our mailing list at groups.google.com/g/x", "Mailing list"),
@@ -61,3 +81,26 @@ class TestChannels:
         out = collector._analyze_channels({"has_discussions": True},
                                           "our mailing list and forum")
         assert out["count"] == len(out["found"]) == 3
+
+
+class TestCountCommunityIssues:
+    def _run(self, collector, status, items):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        resp = MagicMock(status_code=status)
+        resp.json.return_value = {"items": items}
+        client = MagicMock()
+        client.get = AsyncMock(return_value=resp)
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        with patch("collectors.ecosystem.active_maintenance.httpx.AsyncClient", return_value=client):
+            return asyncio.run(collector._count_community_issues("o", "r")), client
+
+    def test_counts_only_outside_authors(self, collector):
+        items = [{"author_association": a} for a in ("NONE", "CONTRIBUTOR", "MEMBER", "OWNER", "FIRST_TIMER")]
+        count, client = self._run(collector, 200, items)
+        assert count == 3
+        assert "is%3Aissue" in client.get.call_args.args[0]
+
+    def test_failure_is_none_not_zero(self, collector):
+        assert self._run(collector, 403, [])[0] is None
