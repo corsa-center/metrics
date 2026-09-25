@@ -1,0 +1,26 @@
+tests/test_static_analysis.py
+  s_72fde105c4df10::t_9d338701deb529 88-125
+orchestrator.py
+  s_72fde105c4df10::t_4ace07396b089e 1863-1866
+collectors/quality/static_analysis.py
+  s_72fde105c4df10::t_e10e291eb0abeb 70-81
+  s_72fde105c4df10::t_d251ca49ea95b5 4-8
+  s_72fde105c4df10::t_012fad478e15b4 31-32
+  s_72fde105c4df10::t_dd8d9b32ac4cd4 112-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2e3b3678732aa82d07ce9454da27ece8cb40a1b6",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
