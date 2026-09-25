@@ -322,7 +322,7 @@ the CI workflow definitions.
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers) | configs and analysis workflows |
-| Enhanced Security Analysis | ✅ | a CodeQL workflow is present | |
+| Enhanced Security Analysis | ✅ | CodeQL runs, from a workflow file or GitHub's default setup (enabled in repository settings, no file in the tree) | workflow files; Actions workflows list for default setup |
 | CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references — **practice indicators, not audited conformance** |
 | Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API |
 | Reliability Trend Analysis | ✅ | defect volume over the last 52 weeks is ≤1.25× the prior 52 weeks (falling counts too); unmeasurable below 5 total defects across both windows | defect reports over two 52-week windows, by issue type first then label |
@@ -392,7 +392,7 @@ ecosyste.ms a second time for the same answer.
 |---|---|---|---|
 | Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found | |
 | Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
-| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture named in the CI workflows (ARM64, POWER, RISC-V, s390x) — x86-64 alone doesn't count | |
+| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build options only (Spack variants, CMake options, GPU arch targets, vendor images) |
 | Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | |
 | Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels | [`deployment_environments.py`](collectors/quality/deployment_environments.py) |
 
