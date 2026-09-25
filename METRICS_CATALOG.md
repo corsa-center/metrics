@@ -325,7 +325,7 @@ the CI workflow definitions.
 | Enhanced Security Analysis | ✅ | CodeQL runs, from a workflow file or GitHub's default setup (enabled in repository settings, no file in the tree) | workflow files; Actions workflows list for default setup |
 | CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references — **practice indicators, not audited conformance** |
 | Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API |
-| Reliability Trend Analysis | ✅ | defect volume over the last 52 weeks is ≤1.25× the prior 52 weeks (falling counts too); unmeasurable below 5 total defects across both windows | defect reports over two 52-week windows, by issue type first then label |
+| Reliability Trend Analysis | ✅ | defect volume over the last 52 weeks is not significantly higher than the prior 52 weeks: over 1.25× **and** a one-sided binomial p < 0.05 counts as increasing; a rise within normal variation counts as stable. Unmeasurable below 5 total defects across both windows | defect reports over two 52-week windows, by issue type first then label. Only GitHub-filed reports are visible; defects reported by email or mailing list aren't |
 
 Codecov's `api.codecov.io/api/v2/github/{owner}/repos/{repo}/` is public and
 unauthenticated for public repos. Repos with no active Codecov integration

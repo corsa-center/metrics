@@ -22,6 +22,7 @@ reporting a meaningless 0 vs 0.
 import asyncio
 import base64
 import logging
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -100,6 +101,14 @@ _DEFECT_LABELS = ["bug", "defect", "crash", "regression", "type: bug", "kind/bug
 _DEFECT_ISSUE_TYPES = ["Bug", "Defect"]
 
 _TREND_WINDOW_DAYS = 365
+
+
+def _binomial_tail(recent: int, total: int, direction: str) -> float:
+    """One-sided p-value for `recent` of `total` defect reports falling in the
+    recent window, if the defect rate were unchanged (each report equally
+    likely to land in either window)."""
+    ks = range(recent, total + 1) if direction == "increasing" else range(0, recent + 1)
+    return sum(math.comb(total, k) for k in ks) / 2 ** total
 
 
 class ReliabilityCollector(GitHubCollectorBase):
@@ -370,8 +379,16 @@ class ReliabilityCollector(GitHubCollectorBase):
                          else "increasing")
             if ratio < 0.75:
                 direction = "improving"
+        # At these volumes a large ratio is often chance: 18 vs 11 is within
+        # normal year-to-year variation. Only call a trend when the split
+        # between the two windows is unlikely under an unchanged rate.
+        within_variation = (direction != "stable" and _binomial_tail(recent, recent + previous, direction)
+                            >= get_threshold("4.3.1", "Reliability Trend Analysis", "significance"))
+        if within_variation:
+            direction = "stable"
         return {"measurable": True, "recent": recent, "previous": previous,
-                "direction": direction, "source": source}
+                "direction": direction, "source": source,
+                "within_normal_variation": within_variation}
 
     # ---------------------------------------------------------------- scoring
 
@@ -413,8 +430,11 @@ class ReliabilityCollector(GitHubCollectorBase):
             value = "Project does not record defect reports by type or label"
             passing = False
         else:
+            direction = trend["direction"]
+            if trend.get("within_normal_variation"):
+                direction += " -- change within normal variation"
             value = (f"{trend['recent']} defect reports in the last year vs "
-                     f"{trend['previous']} the year before ({trend['direction']}, "
+                     f"{trend['previous']} the year before ({direction}, "
                      f"by {trend.get('source', 'label')})")
             passing = trend["direction"] in get_threshold("4.3.1", "Reliability Trend Analysis", "passing_directions")
         trend_entry: Dict[str, Any] = {

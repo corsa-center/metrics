@@ -128,6 +128,7 @@
   Reliability Trend Analysis:
     min_trend_volume: 5        # combined recent+previous defect reports, minimum (below this the comparison is noise)
     trend_tolerance: 1.25      # recent:previous ratio at or under which the trend still counts as stable
+    significance: 0.05         # one-sided binomial p-value a rising/falling split must be under to count as a trend
     passing_directions:        # trend direction must be one of these to meet the threshold
       - stable
       - improving
