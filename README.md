@@ -4,7 +4,7 @@ A system for collecting and analyzing software sustainability metrics for scient
 
 ## Overview
 
-This framework collects metrics from multiple sources and integrates with the [CORSA Sustainability Dashboard](https://corsa.center/dashboard/).
+This framework collects metrics from multiple sources and integrates with the [CORSA Sustainability Dashboard](https://github.com/corsa-center/dashboard/).
 
 ### Key Features
 
