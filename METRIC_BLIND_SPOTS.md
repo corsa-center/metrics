@@ -586,3 +586,11 @@ zero the way there is for a path-matching heuristic.
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
 | [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ✅ Fixed (15/16; Albany has no real version tags to recover — see Phase 4) |
 | [#54](https://github.com/corsa-center/metrics/issues/54) | Documentation Completeness | F1 | 0 + 1 | ◐ `Docs`/`DOC/` fixed; heading-regex rigidity (F6) pending |
+| [#67](https://github.com/corsa-center/metrics/issues/67) | FAIR Metadata Assessment | F2 | — | ✅ Fixed — BibTeX citation files now read; SUNDIALS scores 3/6 (paper entries carry no software version/license/repository) |
+| [#68](https://github.com/corsa-center/metrics/issues/68) | Multi-Channel Communication Activity | F8 | — | ✅ Fixed — used issue tracker counts; empty wikis no longer do |
+| [#69](https://github.com/corsa-center/metrics/issues/69) | Funding Portfolio Analysis | F6 | — | ✅ Fixed — `DE-SC-0021354` award format |
+| [#70](https://github.com/corsa-center/metrics/issues/70) | Contributor Viability Assessment | F8 | — | No change — co-author credit, bot exclusion and recent windows all still give bus factor 2 |
+| [#71](https://github.com/corsa-center/metrics/issues/71) | Enhanced Security Analysis | F2 | — | ✅ Fixed — CodeQL default setup (no workflow file) detected |
+| [#72](https://github.com/corsa-center/metrics/issues/72) | Reliability Trend Analysis | F7 | — | ✅ Fixed — trend needs a significant change; off-GitHub bug reports remain unmeasurable |
+| [#73](https://github.com/corsa-center/metrics/issues/73) | Architecture Compatibility Analysis | F2 | — | ✅ Fixed — Apple Silicon runners, GPU targets, GitLab CI |
+| [#74](https://github.com/corsa-center/metrics/issues/74) | Knowledge Distribution Analysis | F8 | — | No change — same analysis as #70 |
