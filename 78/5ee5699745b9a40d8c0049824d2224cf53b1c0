@@ -1,0 +1,26 @@
+collectors/ecosystem/welcomeness.py
+  s_2fa826a25be3af::t_850f1a2c3a200e 15,21-24,59-63,108-114,123-136
+collectors/ecosystem/base.py
+  s_2fa826a25be3af::t_9a8db0fd3c643c 292-316
+collectors/ecosystem/active_maintenance.py
+  s_2fa826a25be3af::t_9a8db0fd3c643c 22-24,30,165
+tests/test_welcomeness.py
+  s_2fa826a25be3af::t_850f1a2c3a200e 99,106-128
+  s_2fa826a25be3af::t_da3382431f3ef3 129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "785ee5699745b9a40d8c0049824d2224cf53b1c0",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
