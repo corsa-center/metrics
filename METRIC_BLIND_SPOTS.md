@@ -598,3 +598,9 @@ zero the way there is for a path-matching heuristic.
 | — | Software Citation and Adoption | F2, F12 | — | ✅ Fixed — DOIs read from CITATION.cff; distinct citing works via OpenAlex `cites:` (AMReX 0 → 602); Zenodo concept DOIs; fork count no longer labelled "Dependent Packages" |
 | — | Enhanced Funding Documentation / Funding Portfolio | F2, F6 | — | ✅ Fixed — NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT read; agency named in a funding sentence counts without an award number |
 | — | Section Score lines (all sections) | F11 | — | ✅ Fixed — one rule: ✓ over ✓+✗; uncollected/N/A rows no longer count as misses (4.2.7/4.2.9/4.3.4 in all packages, 4.2.1 in 48) |
+| — | Containerization / Container Availability / Environment Management | F2 | — | ✅ Fixed — container definitions and environment specs searched tree-wide outside vendored code (SUNDIALS scripts/docker/Dockerfile, Spack environments, uberenv); portfolio-checked for false positives |
+| — | Testing Framework Excellence | F2 | — | ✅ Fixed — CTest/pytest/GoogleTest read from CMake modules, pyproject.toml and setup.cfg (SUNDIALS 1/4 → 4/4) |
+| — | CERT Guidelines Compliance | F3, F6 | — | ✅ Fixed — compiler-setup CMake modules read; CMake sanitizer and warnings-as-errors options recognised (SUNDIALS 0 → 2 indicators) |
+| — | Software Citation and Adoption | F2 | — | ✅ Fixed — DOIs from BibTeX citation files when there's no CITATION.cff (SUNDIALS 0 → 2,681 citing works) |
+| — | Decision-Making Visibility | F8 | — | ✅ Fixed — README-linked mailing lists/forums/chat count; empty wikis don't (same rule as #68) |
+| — | Platform Documentation Evaluation | F2 | — | ✅ Fixed — install guides read with the README (SUNDIALS 0 → 4 platforms) |
