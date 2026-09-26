@@ -190,7 +190,7 @@ class TestNewSubMetrics:
     def test_timely_response_wording(self, collector):
         info = self._score(collector, timely_response_share=0.43)["sub_scores"][
             "communication_patterns"]
-        assert info["value"] == "43% of issues answered within a week"
+        assert info["value"] == "43% of community issues answered within a week"
 
     def test_no_issues_to_assess(self, collector):
         info = self._score(collector)["sub_scores"]["communication_patterns"]
@@ -230,11 +230,11 @@ class TestIssueStats:
 
     def test_unanswered_issues_count_against_timeliness(self, collector):
         # Two answered quickly, two never answered -> 50%, not 100%.
-        stats = collector._compute_issue_stats(self._issues(4), [1.0, 2.0, None, None])
+        stats = collector._compute_issue_stats(self._issues(4, assoc="NONE"), [1.0, 2.0, None, None])
         assert stats["timely_response_share"] == 0.5
 
     def test_slow_responses_are_not_timely(self, collector):
-        stats = collector._compute_issue_stats(self._issues(2), [1.0, 500.0])
+        stats = collector._compute_issue_stats(self._issues(2, assoc="NONE"), [1.0, 500.0])
         assert stats["timely_response_share"] == 0.5
 
     def test_median_comments(self, collector):
@@ -287,6 +287,20 @@ class TestInternalTriageExclusion:
         assert stats["internal_triage_excluded"] == 0
         assert stats["outside_authors"] == 1
 
+    def test_internal_triage_excluded_from_timeliness(self, collector):
+        # AMReX's sample: 25 silent maintainer tickets, and every outside
+        # issue answered within hours. Was 3/28 = 11%; now 3/3.
+        issues = [self._issue("MEMBER", 0) for _ in range(25)] + [
+            self._issue("NONE", 2) for _ in range(3)
+        ]
+        stats = collector._compute_issue_stats(issues, [None] * 25 + [4.0, 10.0, 30.0])
+        assert stats["timely_response_share"] == 1.0
+
+    def test_unanswered_community_issue_still_counts_against_timeliness(self, collector):
+        issues = [self._issue("MEMBER", 0), self._issue("NONE", 0), self._issue("NONE", 1)]
+        stats = collector._compute_issue_stats(issues, [None, None, 5.0])
+        assert stats["timely_response_share"] == 0.5
+
     def test_all_internal_triage_reports_no_median(self, collector):
         issues = [self._issue("OWNER", 0) for _ in range(3)]
         stats = collector._compute_issue_stats(issues, [None] * 3)
@@ -314,3 +328,56 @@ class TestCollectInvalidUrl:
         )
         assert result["repository"] == "unknown"
         assert result["overall_score"]["score"] == 0
+
+
+class TestThinDiscussionSample:
+    """Discussion rows judged on one or two issues are noise, not evidence."""
+
+    def _score(self, collector, n, **issue_overrides):
+        issue_stats = {"median_first_response_hours": 1, "median_close_time_hours": 1,
+                       "sample_size": 30, "discussion_sample_size": n,
+                       "median_comments": 1, "timely_response_share": 0.0,
+                       "outside_authors": 0, **issue_overrides}
+        pr_stats = {"sample_size": 30, "merge_rate_pct": 90, "outside_authors": 0}
+        backlog = {"open_closed_ratio": 0.5}
+        return collector._score(issue_stats, pr_stats, backlog)
+
+    def test_thin_sample_rows_are_reported_but_unscored(self, collector):
+        result = self._score(collector, 3)
+        for key in ("engagement_quality", "communication_patterns"):
+            row = result["sub_scores"][key]
+            assert row["insufficient_sample"] is True
+            assert "only 3 community issue(s)" in row["value"]
+        assert result["max_score"] == 5
+
+    def test_adequate_sample_is_scored(self, collector):
+        result = self._score(collector, 5)
+        assert "insufficient_sample" not in result["sub_scores"]["engagement_quality"]
+        assert result["max_score"] == 7
+
+
+class TestFetchIssuesSamplesDiscussion:
+    """Paging continues past internal triage tickets until the discussion
+    sample is full, rather than stopping at 30 raw issues."""
+
+    def test_pages_until_enough_discussion_issues(self, collector):
+        triage = [{"number": n, "comments": 0, "author_association": "MEMBER"} for n in range(80)]
+        community = [{"number": 100 + n, "comments": 1, "author_association": "NONE"} for n in range(60)]
+        pages = [triage + community[:20], community[20:], []]
+
+        class Resp:
+            def __init__(self, body): self._body = body
+            def raise_for_status(self): pass
+            def json(self): return self._body
+
+        class Client:
+            def __init__(self): self.calls = 0
+            async def get(self, url, headers=None, params=None):
+                self.calls += 1
+                return Resp(pages[params["page"] - 1])
+
+        client = Client()
+        issues = asyncio.run(collector._fetch_issues(client, "https://api.github.com/repos/o/r"))
+        discussable = [i for i in issues if i["author_association"] == "NONE"]
+        assert len(discussable) == 30
+        assert client.calls == 2

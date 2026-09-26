@@ -1578,6 +1578,10 @@ class MetricsOrchestrator:
                 if s.get("not_collected"):
                     return f'<p><strong>{label}:</strong> Not yet collected</p>'
                 val = s.get("value", "N/A")
+                if s.get("insufficient_sample"):
+                    # Reported but unscored; carries no mark so the row
+                    # isn't counted by the Score-line recount either.
+                    return f'<p><strong>{label}:</strong> {val}</p>'
                 mark = "✓" if s.get("passing") else "✗"
                 return f'<p><strong>{label}:</strong> {val} {mark}</p>'
 
