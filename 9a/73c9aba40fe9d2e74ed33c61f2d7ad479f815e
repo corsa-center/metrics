@@ -1,0 +1,24 @@
+collectors/ecosystem/engagement.py
+  s_2fa826a25be3af::t_9a1a1c1e763e09 32-35,53-59,135-138,141,157-164,242-250,257-261,263,265-270,396-399,409-411,420,425-427,454,458-465
+  s_2fa826a25be3af::t_ded79b8fe61fed 466
+tests/test_engagement.py
+  s_2fa826a25be3af::t_d94ac8b560d9b1 193,233,237,290-303,331-383
+orchestrator.py
+  s_2fa826a25be3af::t_db7f1d92635cbd 1581-1584
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9a73c9aba40fe9d2e74ed33c61f2d7ad479f815e",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
