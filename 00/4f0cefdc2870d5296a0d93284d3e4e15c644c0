@@ -1,0 +1,31 @@
+collectors/quality/deployment_environments.py
+  s_2fa826a25be3af::t_e01f328a4e68ce 100-101,104-106
+collectors/ecosystem/base.py
+  s_2fa826a25be3af::t_a974dbfc69f989 277
+  s_2fa826a25be3af::t_e01f328a4e68ce 275-276,279-282,289-290,292
+tests/test_reproducibility.py
+  s_2fa826a25be3af::t_a974dbfc69f989 383-384
+  s_2fa826a25be3af::t_e01f328a4e68ce 381-382,385-393
+collectors/quality/reliability.py
+  s_2fa826a25be3af::t_e01f328a4e68ce 90-95,310-311
+tests/test_reliability.py
+  s_2fa826a25be3af::t_e01f328a4e68ce 312-317
+tests/test_deployment_environments.py
+  s_2fa826a25be3af::t_e01f328a4e68ce 204-205,214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "004f0cefdc2870d5296a0d93284d3e4e15c644c0",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
