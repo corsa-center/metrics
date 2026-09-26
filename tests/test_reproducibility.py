@@ -378,3 +378,16 @@ class TestScanFilesAnywhereInTree:
     def test_unrelated_yaml_is_not_an_environment(self, collector):
         out = self._scan(collector, [".github/workflows/ci.yml", "docs/spack-notes.yaml"])
         assert "Environment specification" not in out["reproducibility_docs"]["found"]
+
+    def test_documents_about_containers_are_not_definitions(self, collector):
+        out = self._scan(collector, ["docs/installation/singularity.html", "docs/Dockerfile.md",
+                                        "docs/_sources/installation/singularity.rst.txt"])
+        assert out["containers"]["found"] == []
+
+    def test_apptainer_def_file(self, collector):
+        assert "Singularity / Apptainer" in self._scan(
+            collector, ["scripts/ci/images/spack/Apptainer.def"])["containers"]["found"]
+
+    def test_docs_build_environment_is_not_the_software_environment(self, collector):
+        out = self._scan(collector, ["docs/environment.yml", "doc/source/environment.yaml"])
+        assert "Environment specification" not in out["reproducibility_docs"]["found"]

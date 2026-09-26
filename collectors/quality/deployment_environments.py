@@ -97,9 +97,13 @@ _ACCELERATOR_PATTERNS = {
 # SUNDIALS's README names no platforms, while its install guide
 # (doc/shared/sundials/Install.rst) has "Linux/Unix systems" and "Windows
 # Systems" sections.
+# "build" only as the whole name or "building_*": build_settings.rst,
+# build_requirements.txt and build_and_release.rst aren't install guides.
 _INSTALL_DOC = (
     r"(?:^|/)INSTALL(?:\.(?:md|rst|txt))?$"
-    r"|(?:^|/)(?:install(?:ation|ing)?|build(?:ing)?)(?:[-_][\w-]*)?\.(?:md|rst|txt)$"
+    r"|(?:^|/)install(?:ation|ing)?(?:[-_][\w-]*)?\.(?:md|rst|txt)$"
+    r"|(?:^|/)build(?:ing)?\.(?:md|rst|txt)$"
+    r"|(?:^|/)building[-_][\w-]*\.(?:md|rst|txt)$"
 )
 _MAX_INSTALL_DOCS = 2
 

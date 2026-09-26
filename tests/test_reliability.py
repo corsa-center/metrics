@@ -309,6 +309,12 @@ class TestFindFlagFiles:
         )
         assert collector._find_flag_files(tree)[0][0] == "cmake/deep/x/Warnings.cmake"
 
+    def test_unrelated_compiler_named_modules_are_not_read(self, collector):
+        tree = RepoTree("o", "r", ["cmake/Modules/HandleCompilerRT.cmake",
+                                   "build/CMakeFiles/3.22.1/CMakeCXXCompiler.cmake",
+                                   "cmake/CompilerFlags.cmake"], truncated=False)
+        assert collector._find_flag_files(tree)[0] == ["cmake/CompilerFlags.cmake"]
+
     def test_vendored_flag_files_are_skipped(self, collector):
         tree = RepoTree("o", "r", ["external/lib/cmake/Warnings.cmake"], truncated=False)
         assert collector._find_flag_files(tree)[0] == []

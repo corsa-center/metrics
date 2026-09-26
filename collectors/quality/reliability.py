@@ -87,7 +87,12 @@ _FLAG_FILE_HINT = re.compile(r"(sanitiz|warn|flag|harden|secur)", re.I)
 # matches -- SUNDIALS sets -Werror and -fsanitize=address in
 # cmake/SundialsSetupCompilers.cmake. Read after the stronger hints, so
 # they can't crowd those out of the cap.
-_COMPILER_FILE_HINT = re.compile(r"compil", re.I)
+_COMPILER_FILE_HINT = re.compile(
+    r"setup[-_]?compilers?|compiler[-_]?(?:flags|options|settings|warnings)", re.I
+)
+# CMake's generated build tree, sometimes committed by accident (TAU ships
+# CMakeFiles/3.22.1/CMakeCXXCompiler.cmake) -- not the project's settings.
+_GENERATED_CMAKE_DIR = re.compile(r"(?:^|/)CMakeFiles/")
 _MAX_FLAG_FILES = 6
 
 _HARDENING_MARKERS = {
@@ -302,7 +307,8 @@ class ReliabilityCollector(GitHubCollectorBase):
         """
         if tree is COLLECTION_GAP:
             return [], True
-        cmake = [p for p in tree.paths if p.endswith(".cmake") and not _VENDORED_DIR.search(p)]
+        cmake = [p for p in tree.paths if p.endswith(".cmake")
+                 and not _VENDORED_DIR.search(p) and not _GENERATED_CMAKE_DIR.search(p)]
         strong = [p for p in cmake if _FLAG_FILE_HINT.search(p.rsplit("/", 1)[-1])]
         compiler = [p for p in cmake if p not in strong
                     and _COMPILER_FILE_HINT.search(p.rsplit("/", 1)[-1])]

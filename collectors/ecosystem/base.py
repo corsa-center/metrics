@@ -272,17 +272,24 @@ _VENDORED_DIR = re.compile(
 # images from scripts/docker/Dockerfile, which a root/docker/.docker
 # candidate list never reached. Shared by reproducibility (4.3.3) and
 # accessibility (4.3.5) so the two sections can't disagree.
+# A suffix after the name is a variant (Dockerfile.cuda), unless it's a
+# document about containers (Chimbuko: docs/installation/singularity.html).
+_NOT_A_DEFINITION = r"(?![\w.-]*\.(?:html?|md|rst|txt|pdf|png|svg|py|sh)$)"
 CONTAINER_FILE_PATTERNS = {
-    "Docker": r"(?:^|/)(?:Dockerfile|Containerfile)(?:\.[\w.-]+)?$|\.(?:dockerfile|containerfile)$",
-    "Singularity / Apptainer": r"(?:^|/)(?:Singularity|Apptainer)(?:\.[\w.-]+)?$",
+    "Docker": rf"(?:^|/)(?:Dockerfile|Containerfile){_NOT_A_DEFINITION}(?:\.[\w.-]+)?$"
+              r"|\.(?:dockerfile|containerfile)$",
+    "Singularity / Apptainer": rf"(?:^|/)(?:Singularity|Apptainer){_NOT_A_DEFINITION}(?:\.[\w.-]+)?$"
+                               r"|(?:^|/)[\w.-]*(?:singularity|apptainer)[\w.-]*\.def$",
     "docker-compose": r"(?:^|/)(?:docker-)?compose\.ya?ml$",
 }
 
 # Declarative environment specifications (conda, Spack, devcontainer, and
 # LLNL's Spack-driven uberenv), anywhere outside vendored code -- SUNDIALS
 # keeps its Spack environments under scripts/docker/<config>/spack.yaml.
+# Not under doc/ or docs/: that environment.yml builds the documentation
+# (ADIOS2's Read the Docs config), not the software.
 ENVIRONMENT_SPEC_PATTERN = (
-    r"(?:^|/)(?:environment|conda[-_]env)[\w.-]*\.ya?ml$"
+    r"^(?!(?:.*/)?docs?/)(?:.*/)?(?:environment|conda[-_]env)[\w.-]*\.ya?ml$"
     r"|(?:^|/)spack\.(?:yaml|lock)$"
     r"|(?:^|/)\.devcontainer(?:/|\.json$)"
     r"|(?:^|/)\.uberenv_config\.json$"

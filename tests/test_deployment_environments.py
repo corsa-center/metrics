@@ -201,7 +201,8 @@ class TestEmptyResult:
 class TestInstallDocPattern:
     @pytest.mark.parametrize("path", [
         "INSTALL", "INSTALL.md", "doc/shared/sundials/Install.rst", "docs/installation.md",
-        "docs/building.rst", "doc/install_guide/source/Install_link.rst",
+        "docs/building.rst", "doc/install_guide/source/Install_link.rst", "BUILD.md",
+        "src/doc/building_visit/Building_Directly_With_CMake.rst",
     ])
     def test_install_guides_match(self, path):
         import re
@@ -210,6 +211,7 @@ class TestInstallDocPattern:
 
     @pytest.mark.parametrize("path", [
         "src/install.c", "scripts/install.sh", "cmake/SundialsInstall.cmake", "docs/uninstalling.md",
+        "lib/spack/docs/build_settings.rst", "docs/build_requirements.txt", "docs/build_and_release.rst",
     ])
     def test_non_guides_do_not_match(self, path):
         import re
