@@ -1,0 +1,23 @@
+tests/test_reliability.py
+  s_2fa826a25be3af::t_ae7685baea72fd 10,296-314,390-404
+collectors/quality/reliability.py
+  s_2fa826a25be3af::t_f589768f94317b 86-91,94,98-101,103-104,305-310
+  s_2fa826a25be3af::t_f8088224b29860 95,102
+  s_2fa826a25be3af::t_8011634c0abfa3 34-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4b18dbff5a6c2c428b943b9775a54fff598b2125",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
