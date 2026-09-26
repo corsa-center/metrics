@@ -1,0 +1,21 @@
+collectors/ecosystem/active_maintenance.py
+  s_2fa826a25be3af::t_4b5e22bf45c3f3 38-39,182-184,188-191,194-196,199-214,217-218
+tests/test_maintenance_channels.py
+  s_2fa826a25be3af::t_781b4bf992ecd5 107-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "36bd3cc0236e105d5376cb1168f4c09f2430004b",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
