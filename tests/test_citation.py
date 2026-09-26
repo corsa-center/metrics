@@ -96,3 +96,44 @@ class TestDeclaredDois:
         collector.github.get_file_content = AsyncMock(return_value=": : not yaml [")
         out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
         assert out == {"software": None, "all": []}
+
+
+SUNDIALS_CITATIONS_MD = """# Citing SUNDIALS
+```bibtex
+@article{gardner2022sundials,
+  doi       = {10.1145/3539801},
+  url       = {https://doi.org/10.1145/3539801}
+}
+@article{hindmarsh2005sundials,
+  doi       = {10.1145/1089014.1089020},
+}
+```
+See also (https://doi.org/10.1145/3594632).
+"""
+
+
+class TestBibtexCitationFileFallback:
+    def test_dois_from_text(self, collector):
+        assert collector._dois_from_text(SUNDIALS_CITATIONS_MD) == [
+            "10.1145/3539801", "10.1145/1089014.1089020", "10.1145/3594632",
+        ]
+
+    def test_used_when_there_is_no_citation_cff(self, collector):
+        async def fake(repo_url, name):
+            return SUNDIALS_CITATIONS_MD if name == "CITATIONS.md" else None
+        collector.github.get_file_content = fake
+        out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
+        assert out["software"] is None
+        assert out["all"][0] == "10.1145/3539801"
+
+    def test_citation_cff_dois_take_precedence(self, collector):
+        import yaml
+        calls = []
+
+        async def fake(repo_url, name):
+            calls.append(name)
+            return yaml.safe_dump(AMREX_CFF) if name == "CITATION.cff" else SUNDIALS_CITATIONS_MD
+        collector.github.get_file_content = fake
+        out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
+        assert out["software"] == "10.5281/zenodo.2555438"
+        assert calls == ["CITATION.cff"]

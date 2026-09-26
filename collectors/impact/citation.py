@@ -16,6 +16,13 @@ from integrations.zenodo import ZenodoClient
 from integrations.github_api import GitHubClient
 
 
+# Root citation files that carry BibTeX or prose instead of CFF. SUNDIALS
+# has no CITATION.cff; its CITATIONS.md lists four papers' DOIs in BibTeX.
+_BIBTEX_CITATION_FILES = ["CITATIONS.md", "CITATION.md", "CITATION.bib", "CITATIONS.bib", "CITATION"]
+_DOI_IN_TEXT = re.compile(r"10\.\d{4,9}/[^\s{}\"'<>()\[\],;]+")
+_MAX_DECLARED_DOIS = 10
+
+
 class CitationMetricCollector:
     """
     Collects citation metrics from academic sources
@@ -164,7 +171,8 @@ class CitationMetricCollector:
         }
 
     async def _declared_dois(self, package: Dict[str, Any]) -> Dict[str, Any]:
-        """DOIs the project asks to be cited by, from its CITATION.cff.
+        """DOIs the project asks to be cited by: from its CITATION.cff, or
+        failing that from a BibTeX/Markdown citation file at the root.
 
         Returns {"software": the record's own DOI or None, "all": every
         distinct DOI -- the software DOI, preferred-citation, references}.
@@ -178,10 +186,29 @@ class CitationMetricCollector:
             cff = yaml.safe_load(text) if text else None
         except Exception as e:
             self.logger.debug(f"Could not read CITATION.cff: {e}")
+            cff = None
+        if isinstance(cff, dict):
+            result = self._dois_from_cff(cff, package.get("doi"))
+        if result["all"]:
             return result
-        if not isinstance(cff, dict):
-            return result
-        return self._dois_from_cff(cff, package.get("doi"))
+
+        for name in _BIBTEX_CITATION_FILES:
+            try:
+                text = await self.github.get_file_content(repo_url, name)
+            except Exception as e:
+                self.logger.debug(f"Could not read {name}: {e}")
+                continue
+            dois = self._dois_from_text(text or "")
+            if dois:
+                # These cite papers, not the software record itself, so
+                # none of them is taken as the software DOI.
+                return {"software": None, "all": dois}
+        return result
+
+    @classmethod
+    def _dois_from_text(cls, text: str) -> List[str]:
+        found = [cls._normalize_doi(m) for m in _DOI_IN_TEXT.findall(text)]
+        return list(dict.fromkeys(d for d in found if d))[:_MAX_DECLARED_DOIS]
 
     @staticmethod
     def _normalize_doi(value: Any) -> Optional[str]:
