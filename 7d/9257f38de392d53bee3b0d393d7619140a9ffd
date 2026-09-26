@@ -1,0 +1,19 @@
+METRIC_BLIND_SPOTS.md
+  s_2fa826a25be3af::t_7f9d571ed98faf 601-606
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7d9257f38de392d53bee3b0d393d7619140a9ffd",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
