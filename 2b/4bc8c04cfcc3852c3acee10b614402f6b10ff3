@@ -1,0 +1,29 @@
+integrations/openalex.py
+  s_2fa826a25be3af::t_5cef5d08fc2ece 86-120
+  s_2fa826a25be3af::t_3f37bfe8c1577d 9
+collectors/impact/citation.py
+  s_2fa826a25be3af::t_294bf3050daacb 226-229,231-237,241-247
+  s_2fa826a25be3af::t_b25fac71a0642d 9-10,78-84,166-212,216,219
+integrations/zenodo.py
+  s_2fa826a25be3af::t_1c69ad1a10fe02 54-58
+tests/test_citation.py
+  s_2fa826a25be3af::t_16a4b764f79985 1-98
+orchestrator.py
+  s_2fa826a25be3af::t_294bf3050daacb 1210-1214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2b4bc8c04cfcc3852c3acee10b614402f6b10ff3",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
