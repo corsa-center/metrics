@@ -1207,11 +1207,11 @@ class MetricsOrchestrator:
                 citation_lines.append(
                     f'<p><strong>Informal Mentions:</strong> {informal["raw_value"]:,}</p>'
                 )
-            dependents = sub_metrics.get("dependent_packages", {})
-            if dependents.get("raw_value", 0) > 0:
-                citation_lines.append(
-                    f'<p><strong>Dependent Packages:</strong> {dependents["raw_value"]:,}</p>'
-                )
+            # The citation collector's "dependent_packages" is the fork
+            # count (GitHub exposes no used-by count); the real reverse
+            # dependencies are the Reverse-Dependency Analysis row below.
+            # It is already listed as GitHub Forks, so it isn't repeated
+            # under a name that claims more than it measures.
             dois = sub_metrics.get("doi_resolutions", {})
             if dois.get("raw_value", 0) > 0:
                 citation_lines.append(

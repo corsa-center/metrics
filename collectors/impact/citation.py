@@ -6,7 +6,8 @@ Collects and aggregates citation-related metrics from multiple academic sources.
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional
+import re
+from typing import Dict, Any, List, Optional
 import yaml
 
 from integrations.semantic_scholar import SemanticScholarClient
@@ -73,6 +74,13 @@ class CitationMetricCollector:
             Dict with citation metrics and sub-scores
         """
         self.logger.info(f"Collecting citation metrics for {package.get('name')}")
+
+        # The catalog carries no DOI, so without this every lookup fell back
+        # to a title search on the bare package name -- AMReX scored 0 formal
+        # citations while its JOSS paper has 500+ in OpenAlex.
+        declared = await self._declared_dois(package)
+        package = {**package, "dois": declared["all"],
+                   "doi": package.get("doi") or declared["software"]}
 
         # Collect all metrics concurrently
         results = await asyncio.gather(
@@ -155,33 +163,88 @@ class CitationMetricCollector:
             },
         }
 
+    async def _declared_dois(self, package: Dict[str, Any]) -> Dict[str, Any]:
+        """DOIs the project asks to be cited by, from its CITATION.cff.
+
+        Returns {"software": the record's own DOI or None, "all": every
+        distinct DOI -- the software DOI, preferred-citation, references}.
+        """
+        result: Dict[str, Any] = {"software": None, "all": []}
+        repo_url = package.get("repo_url")
+        if not repo_url:
+            return result
+        try:
+            text = await self.github.get_file_content(repo_url, "CITATION.cff")
+            cff = yaml.safe_load(text) if text else None
+        except Exception as e:
+            self.logger.debug(f"Could not read CITATION.cff: {e}")
+            return result
+        if not isinstance(cff, dict):
+            return result
+        return self._dois_from_cff(cff, package.get("doi"))
+
+    @staticmethod
+    def _normalize_doi(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        m = re.search(r"10\.\d{4,9}/\S+", value)
+        return m.group(0).rstrip(".,;").lower() if m else None
+
+    @classmethod
+    def _dois_from_cff(cls, cff: Dict[str, Any], catalog_doi: Optional[str] = None) -> Dict[str, Any]:
+        def record_dois(rec: Any) -> List[str]:
+            if not isinstance(rec, dict):
+                return []
+            found = [rec.get("doi")] + [
+                i.get("value") for i in rec.get("identifiers") or []
+                if isinstance(i, dict) and i.get("type") == "doi"
+            ]
+            return [d for d in (cls._normalize_doi(f) for f in found) if d]
+
+        own = record_dois(cff)
+        cited = own + record_dois(cff.get("preferred-citation"))
+        for ref in cff.get("references") or []:
+            cited += record_dois(ref)
+        catalog = cls._normalize_doi(catalog_doi)
+        if catalog:
+            cited.insert(0, catalog)
+        return {"software": own[0] if own else None, "all": list(dict.fromkeys(cited))}
+
     async def _get_formal_citations(self, package: Dict[str, Any]) -> int:
         """Get formal academic citations from Semantic Scholar and OpenAlex"""
         doi = package.get("doi")
+        dois = package.get("dois") or ([doi] if doi else [])
         name = package.get("name")
 
-        if not doi and not name:
+        if not dois and not name:
             self.logger.warning("No DOI or name provided for citation lookup")
             return 0
 
         # Query both services
         citations = []
 
-        if doi:
-            # Try OpenAlex first (often more comprehensive)
+        if dois:
+            # OpenAlex first (often more comprehensive): distinct works
+            # citing any declared DOI, or the best single DOI if the
+            # combined query can't be made.
             try:
-                openalex_data = await self.openalex.get_work_citations(doi)
-                citations.append(openalex_data.get("cited_by_count", 0))
+                distinct = await self.openalex.count_citing_works(dois)
+                if distinct is not None:
+                    citations.append(distinct)
+                else:
+                    for d in dois:
+                        openalex_data = await self.openalex.get_work_citations(d)
+                        citations.append(openalex_data.get("cited_by_count", 0))
             except Exception as e:
                 self.logger.warning(f"OpenAlex lookup failed: {e}")
 
-        if doi or name:
-            # Try Semantic Scholar
-            try:
-                ss_data = await self.semantic_scholar.get_citations(doi, name)
-                citations.append(ss_data.get("citation_count", 0))
-            except Exception as e:
-                self.logger.warning(f"Semantic Scholar lookup failed: {e}")
+        try:
+            # Semantic Scholar: by DOI when there is one, else by title --
+            # a title search on a bare package name is the weakest signal.
+            ss_data = await self.semantic_scholar.get_citations(dois[0] if dois else None, name)
+            citations.append(ss_data.get("citation_count", 0))
+        except Exception as e:
+            self.logger.warning(f"Semantic Scholar lookup failed: {e}")
 
         # Return the maximum count found (most authoritative source)
         return max(citations) if citations else 0
