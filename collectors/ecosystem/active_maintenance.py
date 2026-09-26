@@ -19,18 +19,15 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 from urllib.parse import urlencode
 
-from collectors.ecosystem.base import RetryingTransport, get_threshold
+from collectors.ecosystem.base import (
+    PUBLIC_CHANNEL_PATTERNS, RetryingTransport, get_threshold, wiki_has_content,
+)
 from collectors.rate_limit import search_get
 
 logger = logging.getLogger(__name__)
 
 # Community channels a project might link from its README, beyond the tracker.
-_CHANNEL_PATTERNS = {
-    "Mailing list": re.compile(r"mailing[- ]list|listserv|groups\.google\.com|majordomo|\bmailman\b", re.I),
-    "Chat (Slack/Discord/Matrix)": re.compile(r"slack\.com|discord\.(?:gg|com)|matrix\.to|gitter\.im|zulipchat", re.I),
-    "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
-    "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
-}
+_CHANNEL_PATTERNS = PUBLIC_CHANNEL_PATTERNS
 
 # Maintainer-group author associations; issues from anyone else are community
 # traffic on the tracker.
@@ -165,18 +162,7 @@ class ActiveMaintenanceCollector:
         return []
 
     async def _wiki_has_content(self, owner: str, repo: str) -> bool:
-        """Whether the wiki has any pages. GitHub's has_wiki flag is on by
-        default for every repository, so it says nothing on its own; the
-        wiki's git endpoint only answers 200 once a page exists. Not a REST
-        API call, so it costs no rate-limit quota."""
-        url = f"https://github.com/{owner}/{repo}.wiki.git/info/refs?service=git-upload-pack"
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url)
-                return resp.status_code == 200
-        except Exception as e:
-            logger.debug(f"Could not check wiki for {owner}/{repo}: {e}")
-            return False
+        return await wiki_has_content(owner, repo)
 
     async def _count_community_issues(self, owner: str, repo: str) -> Optional[int]:
         """How many issues opened in the last 365 days came from outside the

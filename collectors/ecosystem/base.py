@@ -289,6 +289,31 @@ ENVIRONMENT_SPEC_PATTERN = (
 )
 
 
+# Community channels a README can link to, shared by Multi-Channel
+# Communication (4.2.3) and Decision-Making Visibility (4.2.6).
+PUBLIC_CHANNEL_PATTERNS = {
+    "Mailing list": re.compile(r"mailing[- ]list|listserv|groups\.google\.com|majordomo|\bmailman\b", re.I),
+    "Chat (Slack/Discord/Matrix)": re.compile(r"slack\.com|discord\.(?:gg|com)|matrix\.to|gitter\.im|zulipchat", re.I),
+    "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
+    "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
+}
+
+
+async def wiki_has_content(owner: str, repo: str) -> bool:
+    """Whether the wiki has any pages. GitHub's has_wiki flag is on by
+    default for every repository, so it says nothing on its own; the wiki's
+    git endpoint only answers 200 once a page exists. Not a REST API call,
+    so it costs no rate-limit quota."""
+    url = f"https://github.com/{owner}/{repo}.wiki.git/info/refs?service=git-upload-pack"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url)
+            return resp.status_code == 200
+    except Exception as e:
+        logger.debug(f"Could not check wiki for {owner}/{repo}: {e}")
+        return False
+
+
 class RepoTree:
     """Case-insensitive index of every path in a repo's default-branch tree,
     fetched once and reused for every file/format check a collector needs.
