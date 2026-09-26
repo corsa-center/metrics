@@ -1,0 +1,26 @@
+orchestrator.py
+  s_2fa826a25be3af::t_ceec704e9845de 1452-1454
+collectors/ecosystem/fair_licensing.py
+  s_2fa826a25be3af::t_4170694cc1ca43 48-89
+  s_2fa826a25be3af::t_faa357072dab38 23
+  s_2fa826a25be3af::t_51a58bd5127068 162-164,257,259-264,269-279,292,303-332,507-510,512
+tests/test_fair_licensing.py
+  s_2fa826a25be3af::t_540a1aa52ef5f6 27-44
+  s_2fa826a25be3af::t_df3a6f299a8e86 75-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8e84cb919c6d541e490358ee1aeb57db7599d5e8",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
