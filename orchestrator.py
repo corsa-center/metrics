@@ -1449,7 +1449,9 @@ class MetricsOrchestrator:
                 osi = True
             osi_label = "Yes" if osi is True else ("No" if osi is False else "Unknown")
             if osi is True and resolved and not spdx_id:
-                osi_label = f"Yes (via {resolved} in licence text)"
+                via = fair_lic.get("license_exceptions", {}).get("resolved_via")
+                where = "CITATION.cff" if via == "citation" else "licence text"
+                osi_label = f"Yes (via {resolved} in {where})"
             osi_passing = osi is True
             lic_pts += 1 if osi_passing else 0
             lic_lines.append(

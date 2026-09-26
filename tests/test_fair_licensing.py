@@ -24,6 +24,24 @@ All rights reserved.
 This software library and utilities is covered by the 3-clause BSD License.
 """
 
+AMREX_LICENSE = """AMReX Copyright (c) 2024, The Regents of the University of California,
+through Lawrence Berkeley National Laboratory. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+(1) Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+
+(2) Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+(3) Neither the name of the copyright holder nor the names of its
+contributors may be used to endorse or promote products derived from this
+software without specific prior written permission.
+"""
+
 
 class TestLicenseTextResolution:
     def test_recovers_family_the_api_could_not_name(self, collector):
@@ -53,6 +71,55 @@ class TestLicenseTextResolution:
         )
         assert out["resolved_from_text"] is None
         assert out["identified"] is False
+
+    def test_unnamed_bsd3_body_is_recognised_by_its_clauses(self, collector):
+        # AMReX: verbatim BSD-3-Clause, "(1)" numbering, never says "BSD".
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": AMREX_LICENSE})
+        assert out["resolved_from_text"] == "BSD-3-Clause"
+        assert out["resolved_via"] == "clauses"
+        assert out["identified"] is True
+
+    def test_bsd2_body_without_endorsement_clause(self, collector):
+        text = AMREX_LICENSE.split("(3)")[0]
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": text})
+        assert out["resolved_from_text"] == "BSD-2-Clause"
+
+    def test_unnamed_mit_body(self, collector):
+        text = ("Permission is hereby granted, free of charge, to any person\nobtaining a copy "
+                "of this software ...\nThe above copyright notice and this permission notice\n"
+                "shall be included in all copies.")
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": text})
+        assert out["resolved_from_text"] == "MIT"
+
+    def test_name_in_text_wins_over_clauses(self, collector):
+        text = "Covered by the 3-clause BSD License.\n" + AMREX_LICENSE
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": text})
+        assert out["resolved_via"] == "text"
+
+    def test_citation_declaration_is_the_last_resort(self, collector):
+        out = collector._analyze_license_text(
+            {"spdx_id": "NOASSERTION", "text": "All rights reserved."}, declared="BSD-3-Clause",
+        )
+        assert out["resolved_from_text"] == "BSD-3-Clause"
+        assert out["resolved_via"] == "citation"
+
+    def test_citation_declaration_list_and_variants(self, collector):
+        out = collector._analyze_license_text(
+            {"spdx_id": None, "text": ""}, declared=["LicenseRef-custom", "GPL-3.0-or-later"],
+        )
+        assert out["resolved_from_text"] == "GPL"
+
+    def test_non_osi_declaration_stays_unresolved(self, collector):
+        # The dashboard reads any resolved family as OSI-approved.
+        out = collector._analyze_license_text(
+            {"spdx_id": "NOASSERTION", "text": ""}, declared="LicenseRef-proprietary",
+        )
+        assert out["identified"] is False
+
+    def test_declaration_does_not_override_api_classification(self, collector):
+        out = collector._analyze_license_text({"spdx_id": "MIT", "text": ""}, declared="GPL-3.0")
+        assert out["resolved_from_text"] is None
+        assert out["api_classified"] is True
 
     def test_exception_markers(self, collector):
         out = collector._analyze_license_text(
