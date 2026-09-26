@@ -31,7 +31,9 @@ from urllib.parse import quote
 import httpx
 
 from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +83,25 @@ _BUILD_FILES = ["CMakeLists.txt", "configure.ac", "Makefile.am", "meson.build"]
 # directories to list, any file anywhere in the tree whose name suggests
 # flags is read.
 _FLAG_FILE_HINT = re.compile(r"(sanitiz|warn|flag|harden|secur)", re.I)
-_MAX_FLAG_FILES = 4
+# Compiler-setup modules carry flags too, under names the hint above never
+# matches -- SUNDIALS sets -Werror and -fsanitize=address in
+# cmake/SundialsSetupCompilers.cmake. Read after the stronger hints, so
+# they can't crowd those out of the cap.
+_COMPILER_FILE_HINT = re.compile(r"compil", re.I)
+_MAX_FLAG_FILES = 6
 
 _HARDENING_MARKERS = {
-    "Warnings as errors": re.compile(r"-Werror\b"),
+    # CMAKE_COMPILE_WARNING_AS_ERROR is CMake's native switch (3.24+).
+    "Warnings as errors": re.compile(r"-Werror\b|COMPILE_WARNING_AS_ERROR\b|WARNINGS_AS_ERRORS\b"),
     "Fortify source": re.compile(r"_FORTIFY_SOURCE", re.I),
     "Stack protector": re.compile(r"-fstack-protector", re.I),
-    "Sanitizers": re.compile(r"-fsanitize=", re.I),
+    # Also the CMake options projects expose for them
+    # (SUNDIALS_ENABLE_ADDRESS_SANITIZER, ENABLE_UBSAN, ...).
+    "Sanitizers": re.compile(
+        r"-fsanitize=|\b\w*(?:ADDRESS|MEMORY|LEAK|THREAD|UNDEFINED(?:_BEHAVIOR)?)_SANITIZER\b"
+        r"|ENABLE_[AUMT]SAN\b",
+        re.I,
+    ),
     "CERT / MISRA reference": re.compile(r"\b(?:CERT[- ]?C\b|MISRA)\b", re.I),
 }
 
@@ -288,11 +302,12 @@ class ReliabilityCollector(GitHubCollectorBase):
         """
         if tree is COLLECTION_GAP:
             return [], True
-        hits = [
-            p for p in tree.paths
-            if p.endswith(".cmake") and _FLAG_FILE_HINT.search(p.rsplit("/", 1)[-1])
-        ]
-        return hits[:_MAX_FLAG_FILES], False
+        cmake = [p for p in tree.paths if p.endswith(".cmake") and not _VENDORED_DIR.search(p)]
+        strong = [p for p in cmake if _FLAG_FILE_HINT.search(p.rsplit("/", 1)[-1])]
+        compiler = [p for p in cmake if p not in strong
+                    and _COMPILER_FILE_HINT.search(p.rsplit("/", 1)[-1])]
+        compiler.sort(key=lambda p: (p.count("/"), p))
+        return (strong + compiler)[:_MAX_FLAG_FILES], False
 
     async def _defect_trend(
         self, client: httpx.AsyncClient, owner: str, repo: str
