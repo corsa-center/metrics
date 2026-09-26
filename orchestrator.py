@@ -87,6 +87,31 @@ PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
 PROJECT_CONFIG_SCHEMA_VERSION = 1
 
 
+_MAIN_ROW = re.compile(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>')
+_SCORE_LINE = re.compile(r'<p[^>]*><strong>Score:</strong>[^<]*</p>')
+
+
+def _rescore_section(html: Optional[str]) -> Optional[str]:
+    """Recompute a section's "Score: X/Y" line from its rendered rows.
+
+    X is the rows marked ✓; Y is the rows marked ✓ or ✗. A row with no
+    mark -- "Not yet collected", a gap, a config "N/A", a sample too thin
+    to judge -- is neither a pass nor a fail, so it is left out of Y.
+    Sections used to hard-code Y as their full row count, so 4.2.7, 4.2.9
+    and 4.3.4 read 0/5, 1/5 and 2/5 for packages that passed every row
+    actually measured, while 4.2.5 and 4.2.8 already excluded them.
+    Numerators are unchanged: across all 70 packages the ✓ count already
+    matched every section's own tally.
+    """
+    if not html or not _SCORE_LINE.search(html):
+        return html
+    rows = [l for l in html.split("\n") if _MAIN_ROW.match(l.strip())]
+    filled = sum(1 for l in rows if "✓" in l)
+    scored = sum(1 for l in rows if "✓" in l or "✗" in l)
+    shown = f"{filled}/{scored}" if scored else "Not collected"
+    return _SCORE_LINE.sub(lambda _: f'<p><strong>Score:</strong> {shown}</p>', html, count=1)
+
+
 def _sanitize_metric_config(data: Dict) -> Dict:
     """Coerce a package_config/ or metric file's collectors:
     and overrides: blocks into well-shaped dicts, dropping anything that
@@ -305,17 +330,7 @@ class MetricsOrchestrator:
             if not matched:
                 new_lines.append(line)
 
-        result = '\n'.join(new_lines)
-
-        # Recount ✓ hits and total main-metric lines (excludes sub-details and Score)
-        filled = sum(1 for l in new_lines if '✓' in l and 'sub-detail' not in l)
-        total  = len(re.findall(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>', result))
-        result = re.sub(
-            r'<p[^>]*><strong>Score:</strong>[^<]*</p>',
-            f'<p><strong>Score:</strong> {filled}/{total}</p>',
-            result,
-        )
-        return result
+        return _rescore_section('\n'.join(new_lines))
 
     @staticmethod
     def _build_stub_section(section_num: str, overrides: Dict[str, str]) -> str:
@@ -1167,7 +1182,8 @@ class MetricsOrchestrator:
             """Render one collector sub-score as a section row (plus any detail)."""
             info = sub.get(key, {})
             label = info.get("label", key)
-            if info.get("not_collected"):
+            # A sub-score the collector didn't return isn't a measured fail.
+            if not info or info.get("not_collected"):
                 return f'<p><strong>{label}:</strong> Not yet collected</p>'
             mark = "✓" if info.get("passing") else "✗"
             row = f'<p><strong>{label}:</strong> {info.get("value", "N/A")} {mark}</p>'
@@ -2252,7 +2268,7 @@ class MetricsOrchestrator:
             "quality": dims.get("quality", {}).get("excluded_by_config", []),
         }
 
-        return {
+        result = {
             "package": repo_name,
             "stars": github_stats.get("stars", 0),
             "forks": github_stats.get("forks", 0),
@@ -2293,6 +2309,12 @@ class MetricsOrchestrator:
                 "4.3.8": {"title": "Software Supply Chain Integrity",        "data": section_438_data or _stub("4.3.8")},
             },
         }
+        # One scoring rule for every section, instead of each builder's own
+        # denominator -- see _rescore_section.
+        for dim in ("impact", "ecosystem", "quality"):
+            for section in result[dim].values():
+                section["data"] = _rescore_section(section["data"])
+        return result
 
     def _write_dashboard_output(self, all_metrics: Dict):
         """Write per-package metrics.json files for the dashboard.
