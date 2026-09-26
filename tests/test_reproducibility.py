@@ -344,3 +344,37 @@ class TestSemanticVersioningGapHandling:
         result = asyncio.run(collector._check_semantic_versioning(empty_releases, "o", "r"))
         assert result["uses_semver"] is False
         assert "not_collected" not in result
+
+
+class TestScanFilesAnywhereInTree:
+    """Containers and environment specs are found wherever the project keeps
+    them, but not inside vendored code."""
+
+    def _scan(self, collector, paths):
+        return collector._scan_files(RepoTree("o", "r", paths, truncated=False))
+
+    def test_dockerfile_in_a_subdirectory(self, collector):
+        # SUNDIALS: scripts/docker/Dockerfile.
+        out = self._scan(collector, ["scripts/docker/Dockerfile", "src/a.c"])
+        assert out["containers"]["found"] == ["Dockerfile"]
+        assert out["containers"]["details"]["Dockerfile"]["file"] == "scripts/docker/Dockerfile"
+
+    def test_suffixed_and_containerfile_variants(self, collector):
+        for path in ["ci/Dockerfile.cuda", "docker/rocm.dockerfile", "Containerfile"]:
+            assert "Dockerfile" in self._scan(collector, [path])["containers"]["found"], path
+
+    def test_vendored_dockerfile_does_not_count(self, collector):
+        out = self._scan(collector, ["external/googletest/Dockerfile", "third_party/x/Dockerfile"])
+        assert out["containers"]["found"] == []
+
+    def test_spack_environment_in_a_subdirectory(self, collector):
+        out = self._scan(collector, ["scripts/docker/int64-double/spack.yaml"])
+        assert "Environment specification" in out["reproducibility_docs"]["found"]
+
+    def test_uberenv_and_devcontainer(self, collector):
+        for path in [".uberenv_config.json", ".devcontainer/devcontainer.json", "ci/environment-gpu.yml"]:
+            assert "Environment specification" in self._scan(collector, [path])["reproducibility_docs"]["found"], path
+
+    def test_unrelated_yaml_is_not_an_environment(self, collector):
+        out = self._scan(collector, [".github/workflows/ci.yml", "docs/spack-notes.yaml"])
+        assert "Environment specification" not in out["reproducibility_docs"]["found"]

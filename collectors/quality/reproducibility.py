@@ -19,7 +19,10 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
+from collectors.ecosystem.base import (
+    COLLECTION_GAP, CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN,
+    GitHubCollectorBase, RepoTree, RetryingTransport,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +135,14 @@ _FILE_CHECKS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+# Labels also searched across the whole tree when no candidate path matches.
+_TREE_PATTERNS = {
+    ("containers", "Dockerfile"): CONTAINER_FILE_PATTERNS["Docker"],
+    ("containers", "docker-compose"): CONTAINER_FILE_PATTERNS["docker-compose"],
+    ("containers", "Singularity / Apptainer"): CONTAINER_FILE_PATTERNS["Singularity / Apptainer"],
+    ("reproducibility_docs", "Environment specification"): ENVIRONMENT_SPEC_PATTERN,
+}
+
 # Weights used to compute the overall percentage score.
 _WEIGHTS = {
     "containers": 0.20,
@@ -205,12 +216,17 @@ class ReproducibilityCollector(GitHubCollectorBase):
                     details[label] = {"not_collected": True}
                     continue
                 matched_path = tree.match(paths)
+                url = tree.match_url(paths) if matched_path else None
+                pattern = _TREE_PATTERNS.get((category, label))
+                if not matched_path and pattern:
+                    matched_path = tree.find_owned(pattern)
+                    url = tree.url_for(matched_path) if matched_path else None
                 if matched_path:
                     found.append(label)
                     details[label] = {
                         "exists": True,
                         "file": matched_path,
-                        "url": tree.match_url(paths),
+                        "url": url,
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
                 else:

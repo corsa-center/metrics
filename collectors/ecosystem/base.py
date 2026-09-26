@@ -260,6 +260,35 @@ class GitHubCollectorBase:
         return datetime.now(timezone.utc).isoformat()
 
 
+# Directories holding someone else's code. A Dockerfile or spack.yaml inside
+# a vendored dependency says nothing about the project itself.
+_VENDORED_DIR = re.compile(
+    r"(?:^|/)(?:external|extern|third[_-]?party|3rd[_-]?party|vendor|vendored"
+    r"|node_modules|deps|tpls?|submodules)/",
+    re.I,
+)
+
+# Container definitions, anywhere a project keeps them: SUNDIALS builds its
+# images from scripts/docker/Dockerfile, which a root/docker/.docker
+# candidate list never reached. Shared by reproducibility (4.3.3) and
+# accessibility (4.3.5) so the two sections can't disagree.
+CONTAINER_FILE_PATTERNS = {
+    "Docker": r"(?:^|/)(?:Dockerfile|Containerfile)(?:\.[\w.-]+)?$|\.(?:dockerfile|containerfile)$",
+    "Singularity / Apptainer": r"(?:^|/)(?:Singularity|Apptainer)(?:\.[\w.-]+)?$",
+    "docker-compose": r"(?:^|/)(?:docker-)?compose\.ya?ml$",
+}
+
+# Declarative environment specifications (conda, Spack, devcontainer, and
+# LLNL's Spack-driven uberenv), anywhere outside vendored code -- SUNDIALS
+# keeps its Spack environments under scripts/docker/<config>/spack.yaml.
+ENVIRONMENT_SPEC_PATTERN = (
+    r"(?:^|/)(?:environment|conda[-_]env)[\w.-]*\.ya?ml$"
+    r"|(?:^|/)spack\.(?:yaml|lock)$"
+    r"|(?:^|/)\.devcontainer(?:/|\.json$)"
+    r"|(?:^|/)\.uberenv_config\.json$"
+)
+
+
 class RepoTree:
     """Case-insensitive index of every path in a repo's default-branch tree,
     fetched once and reused for every file/format check a collector needs.
@@ -365,6 +394,16 @@ class RepoTree:
         """
         rx = re.compile(pattern, flags)
         return [p for p in self.paths if rx.search(p)]
+
+    def find_owned(self, pattern: str, flags: int = re.IGNORECASE) -> Optional[str]:
+        """Shallowest path matching a regex outside vendored directories,
+        or None. For "does the project itself ship one of these, wherever
+        it keeps it" checks."""
+        hits = [p for p in self.find(pattern, flags) if not _VENDORED_DIR.search(p)]
+        return min(hits, key=lambda p: (p.count("/"), p)) if hits else None
+
+    def url_for(self, path: str) -> str:
+        return f"https://github.com/{self.owner}/{self.repo}/blob/HEAD/{path}"
 
     def find_url(self, pattern: str, flags: int = re.IGNORECASE) -> Optional[str]:
         """First find() hit, rendered as a browsable GitHub URL."""

@@ -414,3 +414,20 @@ class TestRepoTree:
         client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
         result = asyncio.run(RepoTree.fetch(client, {}, "o", "r"))
         assert result is COLLECTION_GAP
+
+
+class TestFindOwned:
+    def _tree(self, paths):
+        from collectors.ecosystem.base import RepoTree
+        return RepoTree("o", "r", paths, truncated=False)
+
+    def test_prefers_the_shallowest_match(self):
+        tree = self._tree(["a/b/c/Dockerfile", "docker/Dockerfile"])
+        assert tree.find_owned(r"(?:^|/)Dockerfile$") == "docker/Dockerfile"
+
+    def test_skips_vendored_directories(self):
+        tree = self._tree(["external/x/Dockerfile", "tpl/y/Dockerfile", "node_modules/z/Dockerfile"])
+        assert tree.find_owned(r"(?:^|/)Dockerfile$") is None
+
+    def test_url_for(self):
+        assert self._tree([]).url_for("a/b") == "https://github.com/o/r/blob/HEAD/a/b"
