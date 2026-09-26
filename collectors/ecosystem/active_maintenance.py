@@ -35,6 +35,8 @@ _CHANNEL_PATTERNS = {
 # Maintainer-group author associations; issues from anyone else are community
 # traffic on the tracker.
 _INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+# Search pages (100 issues each) read while counting community issues.
+_COMMUNITY_ISSUE_PAGES = 5
 
 # The pass/fail thresholds for this collector's data (departure rate,
 # channel count, release cadence, etc.) live in config/thresholds.yaml under
@@ -177,28 +179,43 @@ class ActiveMaintenanceCollector:
             return False
 
     async def _count_community_issues(self, owner: str, repo: str) -> Optional[int]:
-        """Of the newest 100 issues opened in the last 365 days, how many came
-        from outside the maintainer group. None on failure.
+        """How many issues opened in the last 365 days came from outside the
+        maintainer group, counted until the threshold is reached. None on
+        failure.
 
         Uses search rather than the issues endpoint, which also returns pull
         requests -- on a busy repository the newest 100 items are mostly PRs.
+        Pages past the newest 100 (up to _COMMUNITY_ISSUE_PAGES): a project
+        whose maintainers file their own tickets can bury its community
+        issues -- AMReX's newest 100 were 98 maintainer-filed, while the full
+        year held 51 from outside.
         """
         since = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
-        query = urlencode({
-            "q": f"repo:{owner}/{repo} is:issue created:>={since}",
-            "sort": "created", "order": "desc", "per_page": 100,
-        })
+        enough = get_threshold(
+            "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
+        outside = 0
         try:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                resp = await search_get(
-                    client, f"https://api.github.com/search/issues?{query}", self.headers)
-            if resp is None or resp.status_code != 200:
-                return None
-            items = resp.json().get("items", [])
+                for page in range(1, _COMMUNITY_ISSUE_PAGES + 1):
+                    query = urlencode({
+                        "q": f"repo:{owner}/{repo} is:issue created:>={since}",
+                        "sort": "created", "order": "desc", "per_page": 100, "page": page,
+                    })
+                    resp = await search_get(
+                        client, f"https://api.github.com/search/issues?{query}", self.headers)
+                    if resp is None or resp.status_code != 200:
+                        # A later page failing still leaves a real lower bound.
+                        return outside if page > 1 else None
+                    items = resp.json().get("items", [])
+                    outside += sum(
+                        1 for i in items if i.get("author_association") not in _INSIDE_ASSOCIATIONS
+                    )
+                    if outside >= enough or len(items) < 100:
+                        break
         except Exception as e:
             logger.debug(f"Could not search issues for {owner}/{repo}: {e}")
-            return None
-        return sum(1 for i in items if i.get("author_association") not in _INSIDE_ASSOCIATIONS)
+            return outside or None
+        return outside
 
     async def _get_readme(self, owner: str, repo: str) -> str:
         """README text, used to find community channels linked from it."""
