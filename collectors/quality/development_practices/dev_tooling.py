@@ -12,12 +12,16 @@ handled elsewhere (ci_cd.py and the OpenSSF badge respectively).
 """
 
 import asyncio
+import base64
 import logging
+import re
 from typing import Any, Dict, List
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +34,33 @@ _TESTING_PATHS = {
     "Test suite directory": ["test", "tests", "testing", "src/test"],
     "CTest / CMake testing": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
     "pytest configuration": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
-    "Test framework vendored": [
+    "Unit-test framework": [
         "test/googletest", "extern/googletest", "third_party/googletest",
         "test/catch2", "extern/Catch2",
     ],
 }
+
+# Most projects declare testing inside a build or config file rather than
+# with a dedicated one, so path matching alone found only SUNDIALS's test/
+# directory (1/4) although it runs CTest (`include(CTest)` in
+# cmake/SundialsSetupTesting.cmake), pytest (`[tool.pytest.ini_options]` in
+# pyproject.toml) and GoogleTest (FetchContent). These labels fall back to
+# the tree and then to the contents of a few build/config files.
+_FRAMEWORK_DIR = r"(?:^|/)(?:googletest|gtest|catch2?|doctest|cmocka|pfunit)(?:/|$)"
+_CONFTEST = r"(?:^|/)conftest\.py$"
+_CONTENT_MARKERS = {
+    "CTest / CMake testing": re.compile(r"^\s*(?:enable_testing\s*\(|include\s*\(\s*CTest\b)", re.M | re.I),
+    "pytest configuration": re.compile(r"^\[tool(?:\.|:)pytest", re.M),
+    "Unit-test framework": re.compile(
+        r"FetchContent_Declare\s*\(\s*(?:googletest|catch2|doctest)\b"
+        r"|find_package\s*\(\s*(?:GTest|Catch2|doctest)\b",
+        re.I,
+    ),
+}
+# CMake modules whose name mentions testing, read after the root CMakeLists.
+_TEST_CMAKE_FILE = r"(?:^|/)[^/]*test[^/]*\.cmake$"
+_MAX_TEST_CMAKE_FILES = 3
+_CONFIG_FILES = ["CMakeLists.txt", "pyproject.toml", "setup.cfg"]
 
 # Tooling that enforces consistency without a human in the loop.
 _TOOLING_PATHS = {
@@ -77,6 +103,9 @@ class DevToolingCollector(GitHubCollectorBase):
             logger.warning(f"COLLECTION-GAP category=testing,tooling reason=exception:{tree!r}")
             tree = COLLECTION_GAP
         testing = self._scan(tree, _TESTING_PATHS)
+        if tree is not COLLECTION_GAP and testing["missing"]:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                testing = await self._refine_testing(client, owner, repo, tree, testing)
         tooling = self._scan(tree, _TOOLING_PATHS)
         if isinstance(review, Exception):
             logger.warning(f"COLLECTION-GAP category=code_review reason=exception:{review!r}")
@@ -111,6 +140,63 @@ class DevToolingCollector(GitHubCollectorBase):
             else:
                 missing.append(label)
                 details[label] = {"exists": False}
+        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+
+    async def _refine_testing(
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree, testing: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Resolve testing labels the fixed paths missed, from the tree and
+        then from build/config file contents. A label still missing after a
+        read gapped is recorded as not collected rather than absent."""
+        found, missing = list(testing["found"]), list(testing["missing"])
+        not_collected, details = list(testing["not_collected"]), dict(testing["details"])
+
+        def mark(label: str, path: str):
+            missing.remove(label)
+            found.append(label)
+            details[label] = {"exists": True, "url": tree.url_for(path), "file": path}
+
+        # Tree-only evidence first; a vendored copy of a test framework is
+        # itself the signal, so that one isn't restricted to owned paths.
+        if "Unit-test framework" in missing:
+            dirs = {p[:m.end()].rstrip("/") for p in tree.find(_FRAMEWORK_DIR)
+                    if (m := re.search(_FRAMEWORK_DIR, p, re.I))}
+            if dirs:
+                mark("Unit-test framework", min(dirs, key=lambda p: (p.count("/"), p)))
+        if "pytest configuration" in missing:
+            path = tree.find_owned(_CONFTEST)
+            if path:
+                mark("pytest configuration", path)
+
+        wanted = [label for label in _CONTENT_MARKERS if label in missing]
+        if not wanted:
+            return {**testing, "found": found, "missing": missing, "details": details}
+
+        cmake_modules = sorted(
+            (p for p in tree.find(_TEST_CMAKE_FILE) if not _VENDORED_DIR.search(p)),
+            key=lambda p: (p.count("/"), p),
+        )[:_MAX_TEST_CMAKE_FILES]
+        paths = [p for p in (tree.match([c]) for c in _CONFIG_FILES) if p] + cmake_modules
+
+        async def read(path: str):
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+            )
+            if data is COLLECTION_GAP or data is None or not isinstance(data, dict):
+                return data if data is COLLECTION_GAP else ""
+            return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+
+        texts = await asyncio.gather(*[read(p) for p in paths])
+        for label in wanted:
+            for path, text in zip(paths, texts):
+                if text and text is not COLLECTION_GAP and _CONTENT_MARKERS[label].search(text):
+                    mark(label, path)
+                    break
+        if any(t is COLLECTION_GAP for t in texts):
+            for label in [l for l in wanted if l in missing]:
+                missing.remove(label)
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
         return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
 
     async def _analyze_review_coverage(
