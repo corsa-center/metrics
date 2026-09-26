@@ -1,0 +1,25 @@
+tests/test_dev_tooling.py
+  s_2fa826a25be3af::t_a0c306b085e911 153
+  s_2fa826a25be3af::t_19ec18fa8d7f05 212-269
+collectors/quality/development_practices/dev_tooling.py
+  s_2fa826a25be3af::t_59b80610ee004c 22-24,176
+  s_2fa826a25be3af::t_fac30646b9fc78 162-165
+  s_2fa826a25be3af::t_a0c306b085e911 15,17,37,43-64,106-108,145-161,166-175,177-199
+  s_2fa826a25be3af::t_51aa0de9a2a7cb 200-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "246c189efc15f08949c0670d1e34f2c4f1c5ffcf",
+  "prompts": {},
+  "sessions": {
+    "s_2fa826a25be3af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f841aea6-d4b5-4494-868b-85f64fe5337f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
