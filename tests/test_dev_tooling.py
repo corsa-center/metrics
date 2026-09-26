@@ -150,7 +150,7 @@ class TestScan:
     def test_vendored_test_framework_directory_is_found(self, collector):
         tree = RepoTree("o", "r", ["test/googletest/README.md"], truncated=False)
         result = collector._scan(tree, _TESTING_PATHS)
-        assert "Test framework vendored" in result["found"]
+        assert "Unit-test framework" in result["found"]
 
 
 class TestAnalyzeReviewCoverageGapHandling:
@@ -209,3 +209,61 @@ class TestAnalyzeReviewCoverageGapHandling:
 
         result = self._run(collector, fake)
         assert result["not_collected"] is True
+
+
+class TestRefineTesting:
+    """Testing declared inside build/config files (SUNDIALS: CTest in a
+    cmake module, pytest in pyproject.toml, GoogleTest via FetchContent)."""
+
+    def _run(self, collector, paths, files):
+        import base64 as b64
+        tree = RepoTree("o", "r", paths, truncated=False)
+
+        async def fake_get(client, url, params=None):
+            path = url.split("/contents/", 1)[1]
+            if files.get(path) is COLLECTION_GAP:
+                return COLLECTION_GAP
+            if path not in files:
+                return None
+            return {"content": b64.b64encode(files[path].encode()).decode()}
+
+        collector._github_get = fake_get
+        base = collector._scan(tree, _TESTING_PATHS)
+        return asyncio.run(collector._refine_testing(None, "o", "r", tree, base))
+
+    def test_sundials_shape_finds_all_four(self, collector):
+        out = self._run(
+            collector,
+            ["CMakeLists.txt", "cmake/SundialsSetupTesting.cmake", "pyproject.toml",
+             "test/unit_tests/arkode/gtest/test_a.cpp"],
+            {"CMakeLists.txt": "project(x)\n",
+             "cmake/SundialsSetupTesting.cmake": "include(CTest)\nFetchContent_Declare(\n  googletest\n",
+             "pyproject.toml": "[tool.pytest.ini_options]\naddopts = ''\n"},
+        )
+        assert set(out["found"]) == set(_TESTING_PATHS)
+        assert out["details"]["Unit-test framework"]["file"] == "test/unit_tests/arkode/gtest"
+        assert out["details"]["CTest / CMake testing"]["file"] == "cmake/SundialsSetupTesting.cmake"
+
+    def test_enable_testing_in_root_cmakelists(self, collector):
+        out = self._run(collector, ["CMakeLists.txt"], {"CMakeLists.txt": "enable_testing()\n"})
+        assert "CTest / CMake testing" in out["found"]
+
+    def test_find_package_gtest_and_conftest(self, collector):
+        out = self._run(collector, ["CMakeLists.txt", "python/tests/conftest.py"],
+                        {"CMakeLists.txt": "find_package(GTest REQUIRED)\n"})
+        assert "Unit-test framework" in out["found"]
+        assert "pytest configuration" in out["found"]
+
+    def test_mentions_in_comments_do_not_count(self, collector):
+        out = self._run(collector, ["CMakeLists.txt"],
+                        {"CMakeLists.txt": "# we might enable_testing() later\nproject(x)\n"})
+        assert "CTest / CMake testing" in out["missing"]
+
+    def test_vendored_conftest_does_not_count(self, collector):
+        out = self._run(collector, ["external/lib/conftest.py"], {})
+        assert "pytest configuration" in out["missing"]
+
+    def test_gapped_read_leaves_labels_not_collected(self, collector):
+        out = self._run(collector, ["CMakeLists.txt"], {"CMakeLists.txt": COLLECTION_GAP})
+        assert "CTest / CMake testing" in out["not_collected"]
+        assert "CTest / CMake testing" not in out["missing"]

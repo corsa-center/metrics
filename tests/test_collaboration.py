@@ -1,5 +1,6 @@
 """Unit tests for CollaborationCollector (CASS Section 4.2.7)."""
 
+import asyncio
 import pytest
 
 from collectors.ecosystem.collaboration import CollaborationCollector
@@ -180,3 +181,67 @@ class TestDropSpuriousGoEntries:
         registries = [_pkg("pypi", "foo")]
         result = collector._drop_spurious_go_entries(registries, "C++")
         assert len(result) == 1
+
+
+class _FakeJson:
+    """Stand-in for _get_json keyed by URL substring."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.urls = []
+
+    async def __call__(self, client, url):
+        self.urls.append(url)
+        for key, value in self.responses.items():
+            if key in url:
+                return value
+        return None
+
+
+class TestCondaForgeLookup:
+    AMREX = {"name": "amrex", "dev_url": "https://github.com/AMReX-Codes/amrex",
+             "home": "https://amrex-codes.github.io/amrex/", "source_git_url": None,
+             "html_url": "http://anaconda.org/conda-forge/amrex", "ndownloads": 1234}
+
+    def test_linked_package_is_credited(self, collector):
+        collector._get_json = _FakeJson({"conda-forge/amrex": self.AMREX})
+        rec = asyncio.run(collector._lookup_conda_forge(None, "AMReX-Codes", "amrex"))
+        assert rec["ecosystem"] == "conda"
+        assert rec["install_command"] == "conda install -c conda-forge amrex"
+        assert rec["downloads"] == 1234
+
+    def test_same_name_unrelated_package_is_not_credited(self, collector):
+        other = {**self.AMREX, "dev_url": "https://github.com/someone-else/amrex",
+                 "home": "https://example.org"}
+        collector._get_json = _FakeJson({"conda-forge/amrex": other})
+        assert asyncio.run(collector._lookup_conda_forge(None, "AMReX-Codes", "amrex")) is None
+
+    def test_absent_package(self, collector):
+        collector._get_json = _FakeJson({})
+        assert asyncio.run(collector._lookup_conda_forge(None, "o", "r")) is None
+
+    def test_points_at_normalizes_url_forms(self, collector):
+        t = "github.com/amrex-codes/amrex"
+        for link in ["https://github.com/AMReX-Codes/amrex", "http://www.github.com/amrex-codes/amrex/",
+                     "https://github.com/AMReX-Codes/amrex.git", "https://github.com/AMReX-Codes/amrex/tree/dev"]:
+            assert collector._points_at(link, t), link
+        assert not collector._points_at("https://github.com/AMReX-Codes/amrex-tutorials", t)
+
+
+class TestSpackDependents:
+    def test_spack_index_count_wins_when_higher(self, collector):
+        collector._get_json = _FakeJson({
+            "spack.io/packages/amrex": {"name": "amrex", "ecosystem": "spack",
+                                        "dependent_packages_count": 2},
+            "packages.spack.io/data/packages/amrex.json": {
+                "dependent_to": [{"name": n} for n in ["erf", "warpx", "py-amrex", "xsdk", "fastmath", "truchas-pbf"]]},
+        })
+        rec = asyncio.run(collector._lookup_spack(None, "amrex"))
+        assert rec["dependent_packages"] == 6
+
+    def test_ecosystems_count_kept_when_spack_index_unavailable(self, collector):
+        collector._get_json = _FakeJson({
+            "spack.io/packages/amrex": {"name": "amrex", "ecosystem": "spack",
+                                        "dependent_packages_count": 2},
+        })
+        assert asyncio.run(collector._lookup_spack(None, "amrex"))["dependent_packages"] == 2

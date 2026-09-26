@@ -17,7 +17,9 @@ import httpx
 import logging
 from typing import Any, Dict, List
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
+from collectors.ecosystem.base import (
+    COLLECTION_GAP, CONTAINER_FILE_PATTERNS, GitHubCollectorBase, RepoTree, RetryingTransport,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,12 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+
+# Labels also searched across the whole tree when no candidate path matches.
+_TREE_PATTERNS = {
+    ("containers", label): pattern
+    for label, pattern in CONTAINER_FILE_PATTERNS.items() if label != "docker-compose"
+}
 
 class AccessibilityCollector(GitHubCollectorBase):
     """Detects portable build systems and container configs (Section 4.3.5)."""
@@ -109,12 +117,17 @@ class AccessibilityCollector(GitHubCollectorBase):
                     details[label] = {"not_collected": True}
                     continue
                 matched_path = tree.match(paths)
+                url = tree.match_url(paths) if matched_path else None
+                pattern = _TREE_PATTERNS.get((category, label))
+                if not matched_path and pattern:
+                    matched_path = tree.find_owned(pattern)
+                    url = tree.url_for(matched_path) if matched_path else None
                 if matched_path:
                     found.append(label)
                     details[label] = {
                         "exists": True,
                         "file": matched_path,
-                        "url": tree.match_url(paths),
+                        "url": url,
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
                 else:

@@ -20,7 +20,7 @@ import asyncio
 import base64
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 import yaml
@@ -43,6 +43,48 @@ _LICENSE_TEXT_PATTERNS = [
     ("GPL", r"\bGNU General Public Licen[sc]e\b"),
     ("MPL-2.0", r"\bMozilla Public Licen[sc]e,? (?:Version )?2\.0\b"),
     ("BSD", r"\bBSD Licen[sc]e\b"),
+]
+
+# The operative clauses of the standard licences, for text that reproduces a
+# licence body without ever naming it. AMReX's LICENSE is verbatim
+# BSD-3-Clause with "(1)"-style numbering and never says "BSD", so GitHub
+# returns NOASSERTION and the name patterns above find nothing. Every phrase
+# in a family must appear (matched against whitespace-collapsed text, since
+# licences wrap mid-clause); ordered most specific first so BSD-3's extra
+# endorsement clause is checked before BSD-2's subset.
+_LICENSE_CLAUSE_FINGERPRINTS = [
+    ("BSD-3-Clause", [
+        r"redistributions of source code must retain the above copyright notice",
+        r"redistributions in binary form must reproduce the above copyright notice",
+        r"neither the name of .{1,200}? may be used to endorse or promote products derived",
+    ]),
+    ("BSD-2-Clause", [
+        r"redistributions of source code must retain the above copyright notice",
+        r"redistributions in binary form must reproduce the above copyright notice",
+    ]),
+    ("MIT", [
+        r"permission is hereby granted, free of charge, to any person obtaining a copy",
+        r"the above copyright notice and this permission notice shall be included",
+    ]),
+    ("ISC", [
+        r"permission to use, copy, modify, and(?:/or)? distribute this software for any purpose "
+        r"with or without fee is hereby granted",
+    ]),
+]
+
+# SPDX ids a project may declare in CITATION.cff, mapped to the family the
+# rest of the pipeline reasons about. Limited to OSI-approved licences: the
+# dashboard treats every resolved family as OSI-approved, so an unlisted or
+# LicenseRef-* declaration must stay unresolved rather than pass that row.
+_DECLARED_SPDX_FAMILIES = [
+    (r"BSD-3-Clause(?:-LBNL)?", "BSD-3-Clause"),
+    (r"BSD-2-Clause", "BSD-2-Clause"),
+    (r"Apache-2\.0", "Apache-2.0"),
+    (r"MIT", "MIT"),
+    (r"ISC", "ISC"),
+    (r"LGPL-(?:2\.1|3\.0)(?:-only|-or-later|\+)?", "LGPL"),
+    (r"GPL-(?:2\.0|3\.0)(?:-only|-or-later|\+)?", "GPL"),
+    (r"MPL-2\.0", "MPL-2.0"),
 ]
 
 # Markers that the licence carries terms beyond the standard grant.
@@ -117,7 +159,9 @@ class FairLicensingCollector(GitHubCollectorBase):
         has_codemeta, codemeta_gap = self._any_exists(tree, _CODEMETA_PATHS)
         has_zenodo, zenodo_gap = self._any_exists(tree, _ZENODO_PATHS)
 
-        exceptions = self._analyze_license_text(license_data, license_gap)
+        exceptions = self._analyze_license_text(
+            license_data, license_gap, declared=(citation or {}).get("license"),
+        )
         metadata = self._analyze_citation(citation, citation_gap)
         fair = self._assess_fair(
             exceptions, metadata, has_codemeta, has_zenodo, releases,
@@ -210,19 +254,29 @@ class FairLicensingCollector(GitHubCollectorBase):
     # ---------------------------------------------------------------- analyze
 
     def _analyze_license_text(
-        self, license_data: Dict[str, Any], saw_gap: bool = False
+        self, license_data: Dict[str, Any], saw_gap: bool = False, declared: Any = None,
     ) -> Dict[str, Any]:
-        """Recover a license family the API could not name, and flag extra terms."""
+        """Recover a license family the API could not name, and flag extra terms.
+
+        Tried in order of how directly the evidence names the licence: a
+        licence named in its own text, then the standard clauses reproduced
+        without a name, then the SPDX id the project declares in CITATION.cff.
+        """
         spdx = license_data.get("spdx_id")
         text = license_data.get("text") or ""
         classified = spdx not in _UNCLASSIFIED
 
-        resolved = None
-        if not classified and text:
-            for name, pattern in _LICENSE_TEXT_PATTERNS:
-                if re.search(pattern, text, re.IGNORECASE):
-                    resolved = name
-                    break
+        resolved, resolved_via = None, None
+        if not classified:
+            if text:
+                resolved = self._license_named_in_text(text)
+                resolved_via = "text" if resolved else None
+            if not resolved and text:
+                resolved = self._license_from_clauses(text)
+                resolved_via = "clauses" if resolved else None
+            if not resolved:
+                resolved = self._license_from_declaration(declared)
+                resolved_via = "citation" if resolved else None
 
         markers = [
             label for label, pattern in _EXCEPTION_MARKERS
@@ -235,6 +289,7 @@ class FairLicensingCollector(GitHubCollectorBase):
             "api_spdx": spdx,
             "api_classified": classified,
             "resolved_from_text": resolved,
+            "resolved_via": resolved_via,
             "exception_markers": markers,
             "identified": identified,
         }
@@ -244,6 +299,36 @@ class FairLicensingCollector(GitHubCollectorBase):
         if not identified and saw_gap:
             result["not_collected"] = True
         return result
+
+    @staticmethod
+    def _license_named_in_text(text: str) -> Optional[str]:
+        for name, pattern in _LICENSE_TEXT_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                return name
+        return None
+
+    @staticmethod
+    def _license_from_clauses(text: str) -> Optional[str]:
+        flat = re.sub(r"\s+", " ", text).lower()
+        # "(1)" / "1." / "*" list markers sit between clauses, not inside
+        # them, so collapsing whitespace is enough for the phrases to match.
+        for name, phrases in _LICENSE_CLAUSE_FINGERPRINTS:
+            if all(re.search(p, flat) for p in phrases):
+                return name
+        return None
+
+    @staticmethod
+    def _license_from_declaration(declared: Any) -> Optional[str]:
+        # CITATION.cff allows a single id or a list; a list is an OR of
+        # licences, so any recognised entry is enough.
+        ids = declared if isinstance(declared, list) else [declared]
+        for spdx_id in ids:
+            if not isinstance(spdx_id, str):
+                continue
+            for pattern, family in _DECLARED_SPDX_FAMILIES:
+                if re.fullmatch(pattern, spdx_id.strip(), re.IGNORECASE):
+                    return family
+        return None
 
     async def _get_bibtex_citation(
         self, client: httpx.AsyncClient, owner: str, repo: str, tree
@@ -419,8 +504,12 @@ class FairLicensingCollector(GitHubCollectorBase):
         if exceptions.get("api_classified"):
             value = f"{exceptions['api_spdx']} recognised by the GitHub classifier"
         elif exceptions.get("resolved_from_text"):
+            source = {
+                "clauses": "licence clauses match",
+                "citation": "CITATION.cff declares",
+            }.get(exceptions.get("resolved_via"), "text identifies")
             value = (f"Reported as \"{exceptions.get('api_spdx') or 'none'}\"; "
-                     f"text identifies {exceptions['resolved_from_text']}")
+                     f"{source} {exceptions['resolved_from_text']}")
         else:
             value = "License could not be identified from the API or the text"
         exc_passing = exceptions.get("identified", False)

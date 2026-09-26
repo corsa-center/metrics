@@ -66,6 +66,27 @@ class TestScoring:
         assert "2 distinct" in s["sub_scores"]["funding_portfolio"]["value"]
         assert s["sub_scores"]["funding_portfolio"]["passing"]
 
+    def test_acknowledgment_alone_documents_funding(self, collector):
+        s = self._score(collector, grants=[{"value": "DOE", "kind": "acknowledgment"}])
+        row = s["sub_scores"]["funding_documentation"]
+        assert row["passing"]
+        assert row["value"] == "funding acknowledged: DOE"
+        assert row["detail"] is None
+
+    def test_acknowledged_agency_already_covered_by_an_award_counts_once(self, collector):
+        s = self._score(collector, grants=[
+            {"value": "DE-SC0021354", "kind": "DOE award"},
+            {"value": "DOE", "kind": "acknowledgment"},
+        ])
+        assert "1 distinct" in s["sub_scores"]["funding_portfolio"]["value"]
+
+    def test_distinct_acknowledged_agencies_count_separately(self, collector):
+        s = self._score(collector, grants=[
+            {"value": "DE-SC0021354", "kind": "DOE award"},
+            {"value": "NSF", "kind": "acknowledgment"},
+        ])
+        assert s["sub_scores"]["funding_portfolio"]["passing"]
+
     def test_single_source_fails_portfolio(self, collector):
         s = self._score(collector, files={"found": [], "platforms": ["github"]})
         assert not s["sub_scores"]["funding_portfolio"]["passing"]
@@ -290,3 +311,56 @@ class TestFindGrantReferences:
     def test_same_award_written_two_ways_counts_once(self, collector):
         readme = "Supported by DE-SC0021354. See also award DE-SC-0021354."
         assert len(self._grants(collector, readme)) == 1
+
+
+class TestAcknowledgedAgencies:
+    @pytest.mark.parametrize("text,expected", [
+        # AMReX's NOTICE: "U.S." must not end the sentence early.
+        ("This Software was developed under funding from the U.S. Department\nof Energy.", ["DOE"]),
+        ("This work was supported by the National Science Foundation and NASA.", ["NSF", "NASA"]),
+        ("Funded in part by the Exascale Computing Project (17-SC-20-SC).", ["DOE"]),
+        # Named, but not as a funder.
+        ("AMReX is deployed on DOE HPC systems.", []),
+        ("AMReX supports several Exascale Computing Project applications.", []),
+        ("Funding for travel is available. Later, unrelated: see the NSF site.", []),
+    ])
+    def test_agencies(self, collector, text, expected):
+        assert collector._acknowledged_agencies(text) == expected
+
+
+class TestAcknowledgmentFiles:
+    def test_notice_file_is_read_alongside_the_readme(self, collector):
+        import base64
+        from unittest.mock import MagicMock
+        from collectors.ecosystem.base import RepoTree
+
+        def enc(t):
+            return {"content": base64.b64encode(t.encode()).decode()}
+
+        responses = {
+            "/readme": enc("AMReX is deployed on DOE HPC systems."),
+            "/contents/NOTICE": enc("developed under funding from the U.S. Department of Energy"),
+        }
+
+        async def fake_get(client, url, params=None):
+            for key, value in responses.items():
+                if url.endswith(key):
+                    return value
+            return None
+
+        collector._github_get = fake_get
+        tree = RepoTree("o", "r", ["NOTICE", "docs/NOTICE"], truncated=False)
+        grants, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o", "r", tree))
+        assert grants == [{"value": "DOE", "kind": "acknowledgment"}]
+        assert gap is False
+
+    def test_gapped_tree_is_a_gap(self, collector):
+        from unittest.mock import MagicMock
+        from collectors.ecosystem.base import COLLECTION_GAP
+
+        async def fake_get(client, url, params=None):
+            return None
+
+        collector._github_get = fake_get
+        _, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o", "r", COLLECTION_GAP))
+        assert gap is True

@@ -51,7 +51,11 @@ class ZenodoClient(BaseAPIClient):
             async with httpx.AsyncClient(timeout=30.0) as client:
                 # Search for records by DOI
                 search_url = f"{self.BASE_URL}/records"
-                params = {"q": f'doi:"{doi}"', "size": 1}
+                # Projects usually publish the concept DOI (every version),
+                # which lives in `conceptdoi`, not `doi` -- AMReX's
+                # 10.5281/zenodo.2555438 matched nothing under doi: alone.
+                # A concept hit's stats are already all-version totals.
+                params = {"q": f'doi:"{doi}" OR conceptdoi:"{doi}"', "size": 1}
 
                 response = await client.get(
                     search_url, headers=self.headers, params=params

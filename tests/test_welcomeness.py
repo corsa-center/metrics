@@ -96,12 +96,36 @@ class TestGetPublicChannelsGapHandling:
     def test_confirmed_flags_are_not_a_gap(self, collector):
         async def go():
             data = {"has_discussions": True, "has_wiki": False, "has_pages": False}
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+            with patch.object(collector, "_github_get", new=AsyncMock(side_effect=[data, None])):
                 return await collector._get_public_channels(None, "o", "r")
 
         channels, saw_gap = asyncio.run(go())
         assert channels == ["GitHub Discussions"]
         assert saw_gap is False
+
+    def _channels(self, collector, repo_flags, readme, wiki_pages):
+        import base64
+        readme_data = {"content": base64.b64encode(readme.encode()).decode()} if readme else None
+
+        async def go():
+            with patch.object(collector, "_github_get", new=AsyncMock(side_effect=[repo_flags, readme_data])), \
+                 patch("collectors.ecosystem.welcomeness.wiki_has_content", new=AsyncMock(return_value=wiki_pages)):
+                return await collector._get_public_channels(None, "o", "r")
+        return asyncio.run(go())[0]
+
+    def test_empty_wiki_is_not_a_channel(self, collector):
+        assert self._channels(collector, {"has_wiki": True}, "", wiki_pages=False) == []
+
+    def test_wiki_with_pages_is_a_channel(self, collector):
+        assert self._channels(collector, {"has_wiki": True}, "", wiki_pages=True) == ["Wiki"]
+
+    def test_readme_linked_mailing_list_counts(self, collector):
+        # SUNDIALS: "SUNDIALS [mailing list](https://computing.llnl.gov/...)".
+        out = self._channels(collector, {}, "Questions? Use the SUNDIALS mailing list.", wiki_pages=False)
+        assert out == ["Mailing list"]
+
+    def test_help_desk_is_not_a_decision_channel(self, collector):
+        assert self._channels(collector, {}, "File a ticket with our help desk.", wiki_pages=False) == []
 
 
 class TestFindDecisionDocuments:

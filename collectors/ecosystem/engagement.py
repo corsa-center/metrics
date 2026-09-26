@@ -29,6 +29,10 @@ _SAMPLE = 30
 # Pages of 100 to pull while filtering out pull requests. Four is enough to
 # reach 30 issues even when ~87% of recent activity is PRs, as on HDF5.
 _MAX_ISSUE_PAGES = 4
+# Below this many discussion-shaped issues (see _is_internal_triage), a
+# median comment count or an answered-within-a-week share is one or two
+# issues' worth of noise, so those rows are reported but not scored.
+_MIN_DISCUSSION_SAMPLE = 5
 _MAINTAINER_ROLES = {"COLLABORATOR", "MEMBER", "OWNER"}
 _API = "https://api.github.com/repos/{owner}/{repo}"
 
@@ -44,6 +48,13 @@ def _parse_dt(s: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _is_internal_triage(issue: Dict) -> bool:
+    """Maintainer-filed, zero-comment issues are self-contained triage
+    records -- a defect ticket immediately closed by the PR that fixes it --
+    not a conversation anyone was waiting on an answer to."""
+    return issue.get("author_association") in _INSIDE_ASSOCIATIONS and issue.get("comments", 0) == 0
 
 
 def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
@@ -121,9 +132,13 @@ class EngagementCollector(GitHubCollectorBase):
         them, so a single page of _SAMPLE items yields almost no issues on a
         PR-heavy repository — HDF5's most recent 30 entries are 26 PRs and 4
         issues, which is far too small a sample for a median to mean anything.
-        Pages of 100 are pulled until _SAMPLE issues are in hand.
+        Pages of 100 are pulled until _SAMPLE discussion-shaped issues are in
+        hand: on a repository whose maintainers file their own triage tickets
+        (AMReX: 25 of its newest 30 issues), a flat 30-issue cut leaves the
+        discussion metrics judging a handful of real conversations.
         """
         issues: List[Dict] = []
+        discussable = 0
         try:
             for page in range(1, _MAX_ISSUE_PAGES + 1):
                 resp = await client.get(
@@ -139,10 +154,14 @@ class EngagementCollector(GitHubCollectorBase):
                 if not batch:
                     break
                 # Exclude pull requests (GitHub issues API returns both)
-                issues.extend(i for i in batch if "pull_request" not in i)
-                if len(issues) >= _SAMPLE:
-                    break
-            return issues[:_SAMPLE]
+                for item in batch:
+                    if "pull_request" in item:
+                        continue
+                    issues.append(item)
+                    discussable += not _is_internal_triage(item)
+                    if discussable >= _SAMPLE:
+                        return issues
+            return issues
         except Exception as e:
             logger.warning(f"Issues fetch failed: {e}")
             return []
@@ -220,32 +239,35 @@ class EngagementCollector(GitHubCollectorBase):
 
         valid_responses = [t for t in response_times if t is not None]
 
-        # Maintainer-filed, zero-comment issues are self-contained triage
-        # records -- a defect ticket immediately closed by the PR that fixes
-        # it -- not a conversation. Counting them the same as an unanswered
-        # community question misreads a deliberate, effective triage
-        # workflow as disengagement. Excluded only from the discussion-shaped
-        # metrics below (comment depth, outside-participation share); close
-        # time and first-response time aren't affected -- a fast, silent
-        # close doesn't misrepresent those the same way.
-        discussable = [
-            i for i in issues
-            if not (i.get("author_association") in _INSIDE_ASSOCIATIONS and i.get("comments", 0) == 0)
-        ]
+        # Internal triage tickets (_is_internal_triage) counted the same as
+        # an unanswered community question misread a deliberate, effective
+        # triage workflow as disengagement. Excluded only from the
+        # discussion-shaped metrics below (comment depth, timely-answer
+        # share, outside-participation share); close time and first-response
+        # time aren't affected -- a fast, silent close doesn't misrepresent
+        # those the same way.
+        discussable_idx = [n for n, i in enumerate(issues) if not _is_internal_triage(i)]
+        discussable = [issues[n] for n in discussable_idx]
 
         # Interaction depth and how evenly responses are distributed.
         comment_counts = [i.get("comments", 0) for i in discussable]
         median_comments = (
             round(statistics.median(comment_counts), 1) if comment_counts else None
         )
-        # Share of the whole sample answered inside the window. Issues with no
-        # response at all count against it — they are the clearest case of
-        # inconsistent engagement.
+        # Share of the discussion-shaped sample answered inside the window.
+        # A community issue with no response at all counts against it -- the
+        # clearest case of inconsistent engagement. Computed over the same
+        # issues as comment depth: dividing by the whole sample scored AMReX
+        # at 10% although every outside issue had been answered.
         timely_share = None
-        if issues:
+        if discussable:
             response_window_hours = get_threshold("4.2.4", "Communication Pattern Analysis", "response_window_hours")
-            timely = sum(1 for t in valid_responses if t <= response_window_hours)
-            timely_share = round(timely / len(issues), 3)
+            timely = sum(
+                1 for n in discussable_idx
+                if n < len(response_times) and response_times[n] is not None
+                and response_times[n] <= response_window_hours
+            )
+            timely_share = round(timely / len(discussable), 3)
 
         outside = sum(
             1 for i in discussable
@@ -371,6 +393,10 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["support_closure"]["pts"]
 
+        discussion_n = issue_stats.get("discussion_sample_size", 0)
+        thin_sample = 0 < discussion_n < _MIN_DISCUSSION_SAMPLE
+        unscored = 0
+
         # 5. Engagement Quality Metrics — depth of discussion per issue
         mc = issue_stats.get("median_comments")
         passing = mc is not None and mc >= get_threshold("4.2.4", "Engagement Quality Metrics")
@@ -380,6 +406,9 @@ class EngagementCollector(GitHubCollectorBase):
             "passing": passing,
             "pts": 1 if passing else 0,
         }
+        if thin_sample:
+            self._mark_thin_sample(sub["engagement_quality"], discussion_n)
+            unscored += 1
         pts += sub["engagement_quality"]["pts"]
 
         # 6. Communication Pattern Analysis — whether everyone gets an answer,
@@ -388,11 +417,14 @@ class EngagementCollector(GitHubCollectorBase):
         passing = timely is not None and timely >= get_threshold("4.2.4", "Communication Pattern Analysis", "min_timely_response_share")
         sub["communication_patterns"] = {
             "label": "Communication Pattern Analysis",
-            "value": f"{timely * 100:.0f}% of issues answered within a week"
+            "value": f"{timely * 100:.0f}% of community issues answered within a week"
                      if timely is not None else "No issues to assess",
             "passing": passing,
             "pts": 1 if passing else 0,
         }
+        if thin_sample:
+            self._mark_thin_sample(sub["communication_patterns"], discussion_n)
+            unscored += 1
         pts += sub["communication_patterns"]["pts"]
 
         # 7. Community Participation Assessment — work arriving from outside the
@@ -419,9 +451,18 @@ class EngagementCollector(GitHubCollectorBase):
 
         return {
             "score": pts,
-            "max_score": 7,
+            "max_score": 7 - unscored,
             "sub_scores": sub,
         }
+
+    @staticmethod
+    def _mark_thin_sample(entry: Dict[str, Any], n: int) -> None:
+        """Keep the measured value visible but take the row out of the score."""
+        entry["value"] = (f"{entry['value']} -- only {n} community issue(s) sampled, "
+                          f"too few to judge")
+        entry["insufficient_sample"] = True
+        entry["passing"] = False
+        entry["pts"] = 0
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {
