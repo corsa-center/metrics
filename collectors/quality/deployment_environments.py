@@ -33,7 +33,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,16 @@ _ACCELERATOR_PATTERNS = {
     ),
 }
 
+# Installation guides, read with the README for Platform Documentation:
+# SUNDIALS's README names no platforms, while its install guide
+# (doc/shared/sundials/Install.rst) has "Linux/Unix systems" and "Windows
+# Systems" sections.
+_INSTALL_DOC = (
+    r"(?:^|/)INSTALL(?:\.(?:md|rst|txt))?$"
+    r"|(?:^|/)(?:install(?:ation|ing)?|build(?:ing)?)(?:[-_][\w-]*)?\.(?:md|rst|txt)$"
+)
+_MAX_INSTALL_DOCS = 2
+
 _GITLAB_CI_RE = re.compile(r"^(?:\.gitlab-ci\.ya?ml|\.gitlab/.*\.ya?ml)$", re.I)
 _MAX_GITLAB_FILES = 10
 
@@ -142,6 +154,21 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
                 *[self._read_workflow(client, f["url"]) for f in files[:_MAX_WORKFLOW_FILES]],
                 return_exceptions=True,
             ) if files else []
+            install_docs = []
+            if isinstance(tree, RepoTree):
+                install_docs = sorted(
+                    (p for p in tree.find(_INSTALL_DOC) if not _VENDORED_DIR.search(p)),
+                    key=lambda p: (p.count("/"), p),
+                )[:_MAX_INSTALL_DOCS]
+            install_texts = await asyncio.gather(
+                *[self._read_workflow(
+                    client, f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
+                  for p in install_docs],
+                return_exceptions=True,
+            ) if install_docs else []
+            doc_text = "\n".join(
+                [doc_text] + [t for t in install_texts if isinstance(t, str)]
+            )
             gitlab_contents = await asyncio.gather(
                 *[self._read_workflow(
                     client, f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
@@ -274,7 +301,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         docs_value = (
             f"{len(documented)} platform{'s' if len(documented) != 1 else ''} named: "
             + ", ".join(documented)
-        ) if documented else "No supported platforms named in the README"
+        ) if documented else "No supported platforms named in the README or install guide"
 
         sub = {
             "deployment_environment_testing": {

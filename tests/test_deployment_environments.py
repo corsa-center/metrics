@@ -196,3 +196,22 @@ class TestEmptyResult:
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "nope"}))
         assert r["os_families"] == {}
         assert r["overall_score"]["score"] == 0
+
+
+class TestInstallDocPattern:
+    @pytest.mark.parametrize("path", [
+        "INSTALL", "INSTALL.md", "doc/shared/sundials/Install.rst", "docs/installation.md",
+        "docs/building.rst", "doc/install_guide/source/Install_link.rst",
+    ])
+    def test_install_guides_match(self, path):
+        import re
+        from collectors.quality.deployment_environments import _INSTALL_DOC
+        assert re.search(_INSTALL_DOC, path, re.I), path
+
+    @pytest.mark.parametrize("path", [
+        "src/install.c", "scripts/install.sh", "cmake/SundialsInstall.cmake", "docs/uninstalling.md",
+    ])
+    def test_non_guides_do_not_match(self, path):
+        import re
+        from collectors.quality.deployment_environments import _INSTALL_DOC
+        assert not re.search(_INSTALL_DOC, path, re.I), path
