@@ -579,9 +579,9 @@ zero the way there is for a path-matching heuristic.
 
 | Issue | Metric | Class | Phase | Status |
 |---|---|---|---|---|
-| [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality / Community Participation | F9 | 6 | 🔲 Todo |
+| [#48](https://github.com/corsa-center/metrics/issues/48) | Engagement Quality / Community Participation / Communication Pattern | F9, F10 | 6 | ◐ Triage tickets excluded from all three discussion rows (Communication Pattern divided by them: AMReX 10% with every outside issue answered); paging continues until 30 community issues; under 5, the rows are reported but unscored. Median-comments threshold unchanged |
 | [#49](https://github.com/corsa-center/metrics/issues/49) | Onboarding Infrastructure | F1, F2 | 1 | ✅ Fixed |
-| [#50](https://github.com/corsa-center/metrics/issues/50) | Collaboration Network Analysis | F8, F12 | 6 | 🔲 Todo |
+| [#50](https://github.com/corsa-center/metrics/issues/50) | Advanced Dependency / Collaboration Network Analysis | F8, F12 | 6 | ◐ conda-forge found by name on anaconda.org, credited only if it links back to the repo (AMReX: 2 ecosystems); Spack dependents from Spack's own index (AMReX 2 → 6). Source-level consumers (submodules, `AMREX_HOME`) still invisible |
 | [#51](https://github.com/corsa-center/metrics/issues/51) | CERT Guidelines Compliance | F3, F4 | 1 + 2 | ✅ Fixed |
 | [#52](https://github.com/corsa-center/metrics/issues/52) | Reliability Trend Analysis | F7 | 0 | ✅ Fixed |
 | [#53](https://github.com/corsa-center/metrics/issues/53) | Version Control Best Practices | F6 | 0 + 3 | ✅ Fixed (15/16; Albany has no real version tags to recover — see Phase 4) |
@@ -594,3 +594,13 @@ zero the way there is for a path-matching heuristic.
 | [#72](https://github.com/corsa-center/metrics/issues/72) | Reliability Trend Analysis | F7 | — | ✅ Fixed — trend needs a significant change; off-GitHub bug reports remain unmeasurable |
 | [#73](https://github.com/corsa-center/metrics/issues/73) | Architecture Compatibility Analysis | F2 | — | ✅ Fixed — Apple Silicon runners, GPU targets, GitLab CI |
 | [#74](https://github.com/corsa-center/metrics/issues/74) | Knowledge Distribution Analysis | F8 | — | No change — same analysis as #70 |
+| — | OSI License Validation / License Exception Handling / FAIR4RS | F6 | — | ✅ Fixed — unnamed licence bodies matched by clause (AMReX's verbatim BSD-3 never says "BSD"); CITATION.cff `license` used as last resort, OSI families only |
+| — | Software Citation and Adoption | F2, F12 | — | ✅ Fixed — DOIs read from CITATION.cff; distinct citing works via OpenAlex `cites:` (AMReX 0 → 602); Zenodo concept DOIs; fork count no longer labelled "Dependent Packages" |
+| — | Enhanced Funding Documentation / Funding Portfolio | F2, F6 | — | ✅ Fixed — NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT read; agency named in a funding sentence counts without an award number |
+| — | Section Score lines (all sections) | F11 | — | ✅ Fixed — one rule: ✓ over ✓+✗; uncollected/N/A rows no longer count as misses (4.2.7/4.2.9/4.3.4 in all packages, 4.2.1 in 48) |
+| — | Containerization / Container Availability / Environment Management | F2 | — | ✅ Fixed — container definitions and environment specs searched tree-wide outside vendored code (SUNDIALS scripts/docker/Dockerfile, Spack environments, uberenv); portfolio-checked for false positives |
+| — | Testing Framework Excellence | F2 | — | ✅ Fixed — CTest/pytest/GoogleTest read from CMake modules, pyproject.toml and setup.cfg (SUNDIALS 1/4 → 4/4) |
+| — | CERT Guidelines Compliance | F3, F6 | — | ✅ Fixed — compiler-setup CMake modules read; CMake sanitizer and warnings-as-errors options recognised (SUNDIALS 0 → 2 indicators) |
+| — | Software Citation and Adoption | F2 | — | ✅ Fixed — DOIs from BibTeX citation files when there's no CITATION.cff (SUNDIALS 0 → 2,681 citing works) |
+| — | Decision-Making Visibility | F8 | — | ✅ Fixed — README-linked mailing lists/forums/chat count; empty wikis don't (same rule as #68) |
+| — | Platform Documentation Evaluation | F2 | — | ✅ Fixed — install guides read with the README (SUNDIALS 0 → 4 platforms) |

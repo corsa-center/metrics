@@ -122,3 +122,14 @@ class TestScanGapHandling:
         assert result["overall_score"]["max_score"] == 0
         assert result["overall_score"]["percentage"] is None
         assert result["overall_score"]["status"] == "not_collected"
+
+
+class TestContainersAnywhereInTree:
+    def test_dockerfile_in_a_subdirectory_counts(self):
+        tree = RepoTree("o", "r", ["scripts/docker/Dockerfile", "CMakeLists.txt"], truncated=False)
+        out = AccessibilityCollector()._scan(tree, "r", "o", "r")
+        assert out["has_container"] is True
+
+    def test_vendored_dockerfile_does_not_count(self):
+        tree = RepoTree("o", "r", ["extern/tool/Dockerfile", "CMakeLists.txt"], truncated=False)
+        assert AccessibilityCollector()._scan(tree, "r", "o", "r")["has_container"] is False

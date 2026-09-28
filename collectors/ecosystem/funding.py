@@ -9,7 +9,9 @@ and one pass over the contributor list rather than fetching it twice.
 
 Collected:
   4.2.8  Enhanced Funding Documentation Analysis  : FUNDING.yml, funding.json,
-                                                    grant/award numbers in the README
+                                                    grant/award numbers and funding
+                                                    acknowledgments in the README and
+                                                    root NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT files
          Institutional Affiliation Tracking       : contributor `company` fields
          Corporate Sponsorship Detection          : funding platforms, org ownership
          Funding Portfolio Analysis               : count of distinct sources
@@ -49,6 +51,31 @@ _GRANT_PATTERNS = [
     (r"\bgrant (?:no\.?|number)?\s*#?\s*\d{6,}\b", "grant number"),
 ]
 
+# Which agency an award-number kind belongs to, so an acknowledgment naming
+# the same agency isn't counted as a second funding source.
+_GRANT_AGENCY = {"DOE contract": "DOE", "DOE award": "DOE", "NSF award": "NSF", "NIH award": "NIH"}
+
+# Root files where projects acknowledge funding besides the README. Federal
+# lab codes usually carry it in NOTICE: AMReX's says "developed under funding
+# from the U.S. Department of Energy", with no award number anywhere.
+_ACKNOWLEDGMENT_FILE = r"^(?:notice|acknowledge?ments?|funding|copyright)(?:\.(?:md|txt|rst))?$"
+
+# Funding agencies an acknowledgment can name, as (agency, pattern).
+_AGENCIES = [
+    ("DOE", r"(?:US |United States )?Department of Energy|\bDOE\b|Office of Science|Exascale Computing Project"),
+    ("NSF", r"National Science Foundation|\bNSF\b"),
+    ("NIH", r"National Institutes? of Health|\bNIH\b"),
+    ("NASA", r"\bNASA\b|National Aeronautics and Space Administration"),
+    ("DoD", r"Department of Defense|\bDoD\b|\bDARPA\b|Office of Naval Research|Army Research|Air Force"),
+    ("NNSA", r"National Nuclear Security Administration|\bNNSA\b"),
+    ("European Commission", r"European (?:Commission|Research Council|Union)|Horizon (?:2020|Europe)|\bERC\b"),
+]
+# An agency counts only inside a funding sentence, not wherever it's named:
+# "deployed on DOE HPC systems" or "supports ECP applications" isn't funding.
+# `supports` is excluded by the word boundary after `support(ed)`.
+_FUNDING_VERB = r"\b(?:fund(?:ed|ing)?|support(?:ed)?|sponsor(?:ed|ship)?|grants?|awards?|financed)\b"
+_SENTENCE_WINDOW = 160
+
 # Contributors sampled for affiliation. The GitHub Users API is one call each,
 # so this is capped; top contributors carry most of the signal anyway.
 _AFFILIATION_SAMPLE = 25
@@ -74,7 +101,7 @@ class FundingCollector(GitHubCollectorBase):
             tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
             results = await asyncio.gather(
                 self._find_funding_files(client, owner, repo, tree),
-                self._find_grant_references(client, owner, repo),
+                self._find_grant_references(client, owner, repo, tree),
                 self._get_affiliations(client, owner, repo),
                 self._get_owner_type(client, owner),
                 return_exceptions=True,
@@ -173,32 +200,69 @@ class FundingCollector(GitHubCollectorBase):
         return [k for k, v in parsed.items() if v], False
 
     async def _find_grant_references(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree=None
     ) -> tuple:
-        """Award and contract numbers acknowledged in the README.
+        """Award numbers and agency funding acknowledgments in the README
+        and in root NOTICE / ACKNOWLEDGMENTS / FUNDING files.
 
-        Returns (grants, saw_gap).
+        Returns (grants, saw_gap). Each entry is {"value", "kind"}; kind is
+        an award-number kind or "acknowledgment" (agency named in a funding
+        sentence, no number).
         """
+        texts, saw_gap = [], False
         data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
         if data is COLLECTION_GAP:
-            return [], True
-        if data is None:
-            return [], False
-        try:
-            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
-        except Exception as e:
-            logger.debug(f"Could not decode README: {e}")
-            return [], False
+            saw_gap = True
+        elif data is not None:
+            texts.append(self._decode(data, "README"))
+
+        if tree is COLLECTION_GAP:
+            saw_gap = True
+        elif tree is not None:
+            for path in [p for p in tree.find(_ACKNOWLEDGMENT_FILE) if "/" not in p]:
+                data = await self._github_get(
+                    client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+                )
+                if data is COLLECTION_GAP:
+                    saw_gap = True
+                elif isinstance(data, dict):
+                    texts.append(self._decode(data, path))
 
         seen, grants = set(), []
-        for pattern, kind in _GRANT_PATTERNS:
-            for match in re.findall(pattern, text, flags=re.IGNORECASE):
-                value = match.strip()
-                key = re.sub(r"[-\s]", "", value.lower())
-                if key not in seen:
-                    seen.add(key)
-                    grants.append({"value": value, "kind": kind})
-        return grants, False
+        for text in texts:
+            for pattern, kind in _GRANT_PATTERNS:
+                for match in re.findall(pattern, text, flags=re.IGNORECASE):
+                    value = match.strip()
+                    key = re.sub(r"[-\s]", "", value.lower())
+                    if key not in seen:
+                        seen.add(key)
+                        grants.append({"value": value, "kind": kind})
+        for agency in self._acknowledged_agencies("\n".join(texts)):
+            if agency not in seen:
+                seen.add(agency)
+                grants.append({"value": agency, "kind": "acknowledgment"})
+        return grants, saw_gap
+
+    @staticmethod
+    def _decode(data: Dict[str, Any], label: str) -> str:
+        try:
+            return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+        except Exception as e:
+            logger.debug(f"Could not decode {label}: {e}")
+            return ""
+
+    @staticmethod
+    def _acknowledged_agencies(text: str) -> List[str]:
+        """Agencies named near a funding verb, in first-seen order."""
+        # "U.S." would otherwise read as sentence ends inside the window.
+        flat = re.sub(r"\bU\.\s?S\.", "US", re.sub(r"\s+", " ", text))
+        found: List[str] = []
+        for verb in re.finditer(_FUNDING_VERB, flat, re.IGNORECASE):
+            window = flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0]
+            for agency, pattern in _AGENCIES:
+                if agency not in found and re.search(pattern, window, re.IGNORECASE):
+                    found.append(agency)
+        return found
 
     async def _get_affiliations(
         self, client: httpx.AsyncClient, owner: str, repo: str
@@ -301,13 +365,17 @@ class FundingCollector(GitHubCollectorBase):
         doc_parts = []
         if files:
             doc_parts.append(", ".join(f["path"] for f in files))
-        if grants:
-            doc_parts.append(f"{len(grants)} award reference(s)")
+        awards = [g for g in grants if g["kind"] != "acknowledgment"]
+        acknowledged = [g for g in grants if g["kind"] == "acknowledgment"]
+        if awards:
+            doc_parts.append(f"{len(awards)} award reference(s)")
+        if acknowledged:
+            doc_parts.append("funding acknowledged: " + ", ".join(g["value"] for g in acknowledged))
         doc_passing = bool(files or grants)
         doc_entry: Dict[str, Any] = {
             "label": "Enhanced Funding Documentation Analysis",
             "value": "; ".join(doc_parts) if doc_parts else "No funding documentation found",
-            "detail": ", ".join(g["value"] for g in grants) if grants else None,
+            "detail": ", ".join(g["value"] for g in awards) if awards else None,
             "passing": doc_passing,
         }
         if not doc_passing and (files_gap or grants_gap):
@@ -344,8 +412,12 @@ class FundingCollector(GitHubCollectorBase):
             corp_entry["not_collected"] = True
         sub["corporate_sponsorship"] = corp_entry
 
-        # Distinct sources: each declared platform, plus each award reference.
-        source_count = len(platforms) + len(grants)
+        # Distinct sources: each declared platform, each award reference, and
+        # each acknowledged agency none of those awards already belongs to.
+        award_agencies = {_GRANT_AGENCY.get(g["kind"]) for g in awards}
+        source_count = len(platforms) + len(awards) + sum(
+            1 for g in acknowledged if g["value"] not in award_agencies
+        )
         portfolio_passing = source_count >= get_threshold("4.2.8", "Funding Portfolio Analysis")
         portfolio_entry: Dict[str, Any] = {
             "label": "Funding Portfolio Analysis",

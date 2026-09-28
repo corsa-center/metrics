@@ -88,81 +88,107 @@ class TestChaossCategoryScoresGapHandling:
         assert "Documentation Usability" in section_data
 
 
+def _rows(passing, failing=(), gapped=()):
+    """sub_scores with the given keys passing / failing / not_collected."""
+    rows = {k: {"label": k, "value": "v", "passing": True} for k in passing}
+    rows.update({k: {"label": k, "value": "v", "passing": False} for k in failing})
+    rows.update({k: {"label": k, "value": None, "passing": False, "not_collected": True}
+                 for k in gapped})
+    return rows
+
+
 class TestScoreLineUsesDynamicMaxScore:
-    """outreach/welcomeness/funding max_score shrank when their permanently
-    not_collected placeholders were excluded from the denominator -- the
-    dashboard must show the collector's own max_score, not a stale constant.
+    """A section's Score line counts only rows actually measured -- see
+    orchestrator._rescore_section. Uncollected placeholders used to inflate
+    the denominator (4.2.7 0/5, 4.2.9 1/5, 4.3.4 2/5 for packages passing
+    every measured row).
     """
 
-    def test_outreach_score_line_uses_collector_max_score(self, orchestrator):
+    def test_outreach_score_line_excludes_uncollected_rows(self, orchestrator):
         metrics = _base_metrics(ecosystem_sub={
-            "outreach": {
-                "overall_score": {
-                    "score": 2, "max_score": 5, "percentage": 40.0,
-                    "sub_scores": {},
-                }
-            }
+            "outreach": {"overall_score": {"score": 2, "max_score": 5, "sub_scores": _rows(
+                ["new_contributor_tracking", "contributor_lifecycle"],
+                ["contributor_retention", "good_first_issue", "onboarding_infrastructure"],
+                ["contribution_type_diversity", "external_event_participation", "training_material_integration"],
+            )}}
         })
         result = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        assert "2/5" in result["ecosystem"]["4.2.5"]["data"]
-        assert "2/8" not in result["ecosystem"]["4.2.5"]["data"]
+        assert "Score:</strong> 2/5" in result["ecosystem"]["4.2.5"]["data"]
 
     def test_outreach_fully_gapped_score_renders_as_text_not_none(self, orchestrator):
         metrics = _base_metrics(ecosystem_sub={
-            "outreach": {
-                "overall_score": {
-                    "score": None, "max_score": 0, "percentage": None,
-                    "status": "not_collected", "sub_scores": {},
-                }
-            }
+            "outreach": {"overall_score": {
+                "score": None, "max_score": 0, "percentage": None,
+                "status": "not_collected", "sub_scores": {},
+            }}
         })
         result = orchestrator._transform_for_dashboard("owner/repo", metrics)
         assert "None/0" not in result["ecosystem"]["4.2.5"]["data"]
-        assert "Not collected" in result["ecosystem"]["4.2.5"]["data"]
+        assert "Score:</strong> Not collected" in result["ecosystem"]["4.2.5"]["data"]
 
-    def test_welcomeness_score_line_uses_collector_max_score(self, orchestrator):
+    def test_missing_sub_score_is_not_rendered_as_a_fail(self, orchestrator):
         metrics = _base_metrics(ecosystem_sub={
-            "welcomeness": {
-                "overall_score": {
-                    "score": 1, "max_score": 1, "percentage": 100.0,
-                    "sub_scores": {},
-                }
-            }
+            "welcomeness": {"overall_score": {"score": 1, "max_score": 1,
+                                              "sub_scores": _rows(["decision_making_visibility"])}}
+        })
+        data = orchestrator._transform_for_dashboard("owner/repo", metrics)["ecosystem"]["4.2.6"]["data"]
+        assert "✗" not in data
+        assert "Score:</strong> 1/1" in data
+
+    def test_funding_score_line_matches_its_rows(self, orchestrator):
+        metrics = _base_metrics(ecosystem_sub={
+            "funding": {"overall_score": {"score": 3, "max_score": 4, "sub_scores": _rows(
+                ["funding_documentation", "institutional_affiliation", "corporate_sponsorship",
+                 "institutional_support"],
+                ["funding_portfolio"], ["nih_r50"],
+            )}}
         })
         result = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        assert "1/1" in result["ecosystem"]["4.2.6"]["data"]
-        assert "1/7" not in result["ecosystem"]["4.2.6"]["data"]
+        assert "Score:</strong> 3/4" in result["ecosystem"]["4.2.8"]["data"]
+        assert "Score:</strong> 1/1" in result["ecosystem"]["4.2.9"]["data"]
 
-    def test_funding_score_line_uses_collector_max_score(self, orchestrator):
-        metrics = _base_metrics(ecosystem_sub={
-            "funding": {
-                "overall_score": {
-                    "score": 3, "max_score": 4, "percentage": 75.0,
-                    "sub_scores": {
-                        "institutional_support": {"passing": True},
-                    },
-                }
-            }
-        })
+    def test_collaboration_and_usability_exclude_uncollected_rows(self, orchestrator):
+        collab = _rows(["advanced_dependency_analysis", "installation_success"],
+                       ["collaboration_network"],
+                       ["cross_project_reference", "interoperability", "standards_compliance"])
+        usab = _rows(["documentation_completeness"], [],
+                     ["user_experience", "accessibility_features", "usage_analytics"])
+        metrics = _base_metrics(
+            ecosystem_sub={"collaboration": {"overall_score": {"score": 1, "sub_scores": collab}}},
+            quality_sub={"usability": {"overall_score": {"score": 1, "sub_scores": usab}}},
+        )
         result = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        assert "3/4" in result["ecosystem"]["4.2.8"]["data"]
-        assert "3/5" not in result["ecosystem"]["4.2.8"]["data"]
+        assert "Score:</strong> 1/2" in result["ecosystem"]["4.2.7"]["data"]
+        assert "Score:</strong> 2/2" in result["quality"]["4.3.4"]["data"]
 
     def test_institutional_support_gap_does_not_render_as_confirmed_zero(self, orchestrator):
         metrics = _base_metrics(ecosystem_sub={
-            "funding": {
-                "overall_score": {
-                    "score": 2, "max_score": 3, "percentage": 66.7,
-                    "sub_scores": {
-                        "institutional_support": {"passing": False, "not_collected": True},
-                    },
-                }
-            }
+            "funding": {"overall_score": {"score": 2, "max_score": 3, "sub_scores": _rows(
+                [], [], ["institutional_support"])}}
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        section_429 = result["ecosystem"]["4.2.9"]["data"]
+        section_429 = orchestrator._transform_for_dashboard("owner/repo", metrics)["ecosystem"]["4.2.9"]["data"]
         assert "0/5" not in section_429
-        assert "N/A/5" in section_429
+        assert "Score:</strong> Not collected" in section_429
+
+
+class TestRescoreSection:
+    def test_counts_marked_rows_only(self):
+        from orchestrator import _rescore_section
+        html = "\n".join([
+            "<p><strong>A:</strong> x ✓</p>",
+            '<p class="sub-detail">detail ✓</p>',
+            "<p><strong>B:</strong> y ✗</p>",
+            "<p><strong>C:</strong> Not yet collected</p>",
+            "<p><strong>D:</strong> N/A</p>",
+            "<p><strong>Score:</strong> 1/4</p>",
+        ])
+        assert "<p><strong>Score:</strong> 1/2</p>" in _rescore_section(html)
+
+    def test_sections_without_a_score_line_are_untouched(self):
+        from orchestrator import _rescore_section
+        html = "<p><strong>Citation Score:</strong> 70.0/100</p>"
+        assert _rescore_section(html) == html
+        assert _rescore_section(None) is None
 
 
 class TestStaticAnalysisGapNotShownAsConfirmedFail:

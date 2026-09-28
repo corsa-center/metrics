@@ -12,12 +12,16 @@ about maintainers, and stay uncollected.
 """
 
 import asyncio
+import base64
 import logging
 from typing import Any, Dict, List
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import (
+    COLLECTION_GAP, PUBLIC_CHANNEL_PATTERNS, GitHubCollectorBase, RepoTree, RetryingTransport,
+    get_threshold, wiki_has_content,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,11 @@ _PUBLIC_CHANNELS = {
     "has_wiki": "Wiki",
     "has_pages": "GitHub Pages",
 }
+
+# README-linked venues where a community can see decisions being made --
+# the same definitions 4.2.3 counts. Help desks are support, not
+# deliberation, so they're left out.
+_README_CHANNELS = ("Mailing list", "Forum", "Chat (Slack/Discord/Matrix)")
 
 
 class WelcomenessCollector(GitHubCollectorBase):
@@ -96,7 +105,13 @@ class WelcomenessCollector(GitHubCollectorBase):
     async def _get_public_channels(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> tuple:
-        """Discussions / wiki / pages flags, straight off the repository object.
+        """Discussions / wiki / pages flags off the repository object, plus
+        channels the README links to.
+
+        The wiki counts only if it has pages: has_wiki is on by default, so
+        an empty wiki was credited as a decision-making channel (AMReX),
+        the same false positive #68 removed from 4.2.3. A public mailing
+        list (SUNDIALS) wasn't counted at all.
 
         Returns (channels, saw_gap).
         """
@@ -105,7 +120,20 @@ class WelcomenessCollector(GitHubCollectorBase):
             return [], True
         if data is None:
             return [], False
-        return [label for flag, label in _PUBLIC_CHANNELS.items() if data.get(flag)], False
+        flags = dict(data)
+        if flags.get("has_wiki"):
+            flags["has_wiki"] = await wiki_has_content(owner, repo)
+        channels = [label for flag, label in _PUBLIC_CHANNELS.items() if flags.get(flag)]
+
+        readme = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
+        if isinstance(readme, dict):
+            try:
+                text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")
+            except Exception:
+                text = ""
+            channels += [label for label in _README_CHANNELS
+                         if PUBLIC_CHANNEL_PATTERNS[label].search(text)]
+        return channels, False
 
     def _find_decision_documents(self, tree) -> Dict[str, Any]:
         """Roadmaps, meeting notes, decision records and governance docs,

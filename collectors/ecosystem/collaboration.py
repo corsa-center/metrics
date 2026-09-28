@@ -18,6 +18,12 @@ record the project's own homepage as their repository URL rather than the GitHub
 repo — HDF5's Spack entry points at support.hdfgroup.org, so the repository-URL
 lookup alone misses the single most relevant package manager for this portfolio.
 
+conda-forge is looked up by name on anaconda.org too, because ecosyste.ms does
+not index every feedstock: AMReX ships `amrex` on conda-forge but ecosyste.ms
+has no record of it. A name match is only accepted when the package's own
+metadata (dev_url / home / source_git_url) points back at this repository, so
+an unrelated package that happens to share the name is not credited.
+
 The collector also produces the Installation Success Tracking figure that CASS
 section 4.3.4 needs, since it rests on the same registry data.
 
@@ -38,6 +44,8 @@ from collectors.ecosystem.base import GitHubCollectorBase, get_threshold
 logger = logging.getLogger(__name__)
 
 _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
+_ANACONDA_API = "https://api.anaconda.org/package/conda-forge"
+_SPACK_PACKAGES = "https://packages.spack.io/data/packages"
 
 # ecosyste.ms publishes a low per-second rate limit; one retry with a pause
 # covers the throttling seen when several lookups run back to back.
@@ -59,9 +67,10 @@ class CollaborationCollector(GitHubCollectorBase):
         logger.info(f"Collecting collaboration metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            by_repo, spack = await asyncio.gather(
+            by_repo, spack, conda = await asyncio.gather(
                 self._lookup_by_repository(client, owner, repo),
                 self._lookup_spack(client, repo),
+                self._lookup_conda_forge(client, owner, repo),
                 return_exceptions=True,
             )
 
@@ -71,8 +80,11 @@ class CollaborationCollector(GitHubCollectorBase):
         if isinstance(spack, Exception):
             logger.warning(f"Spack lookup failed: {spack}")
             spack = None
+        if isinstance(conda, Exception):
+            logger.warning(f"conda-forge lookup failed: {conda}")
+            conda = None
 
-        registries = self._merge(by_repo + ([spack] if spack else []))
+        registries = self._merge(by_repo + [r for r in (spack, conda) if r])
         registries = self._drop_spurious_go_entries(registries, package.get("primary_language"))
         return {
             "package_name": repo_name,
@@ -139,8 +151,52 @@ class CollaborationCollector(GitHubCollectorBase):
                 client, f"{_PACKAGES_API}/registries/spack.io/packages/{quote(name)}"
             )
             if isinstance(data, dict) and data.get("name"):
-                return self._normalize(data)
+                record = self._normalize(data)
+                # ecosyste.ms's Spack dependents lag Spack's own index
+                # (AMReX 2 vs 6, HDF5 161 vs 222); take the larger.
+                own = await self._get_json(client, f"{_SPACK_PACKAGES}/{quote(record['name'])}.json")
+                if isinstance(own, dict) and isinstance(own.get("dependent_to"), list):
+                    record["dependent_packages"] = max(
+                        record["dependent_packages"], len(own["dependent_to"])
+                    )
+                return record
         return None
+
+    async def _lookup_conda_forge(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Optional[Dict[str, Any]]:
+        """conda-forge package for this repository, looked up by name and
+        accepted only if its metadata links back to the repository."""
+        target = f"github.com/{owner}/{repo}".lower()
+        for name in dict.fromkeys([repo.lower(), repo]):
+            data = await self._get_json(client, f"{_ANACONDA_API}/{quote(name)}")
+            if not isinstance(data, dict) or not data.get("name"):
+                continue
+            links = [data.get(k) or "" for k in ("dev_url", "home", "source_git_url")]
+            if not any(self._points_at(link, target) for link in links):
+                logger.debug(f"conda-forge '{name}' does not link to {target}; not credited")
+                continue
+            return {
+                "ecosystem": "conda",
+                "name": data["name"],
+                # anaconda.org has no reverse-dependency count; _merge keeps
+                # any higher figure ecosyste.ms has for the same package.
+                "dependent_packages": 0,
+                "dependent_repos": 0,
+                "install_command": f"conda install -c conda-forge {data['name']}",
+                "registry_url": data.get("html_url"),
+                "downloads": data.get("ndownloads") or 0,
+                "downloads_period": "total",
+            }
+        return None
+
+    @staticmethod
+    def _points_at(link: str, target: str) -> bool:
+        """Whether a URL is this GitHub repository (scheme, www, .git and a
+        trailing slash or subpath ignored)."""
+        link = link.lower().split("://", 1)[-1].removeprefix("www.")
+        link = link.removesuffix("/").removesuffix(".git")
+        return link == target or link.startswith(target + "/")
 
     @staticmethod
     def _normalize(p: Dict[str, Any]) -> Dict[str, Any]:

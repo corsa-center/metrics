@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.reliability import (
     ReliabilityCollector, _ANALYSIS_WORKFLOW_HINT, _HARDENING_MARKERS,
-    _FLAG_FILE_HINT, _DEFECT_LABELS, _ANALYSIS_CONFIGS,
+    _FLAG_FILE_HINT, _DEFECT_LABELS, _ANALYSIS_CONFIGS, _MAX_FLAG_FILES,
 )
 
 
@@ -293,7 +293,31 @@ class TestFindFlagFiles:
             truncated=False,
         )
         paths, _ = collector._find_flag_files(tree)
-        assert len(paths) == 4
+        assert len(paths) == _MAX_FLAG_FILES
+
+    def test_compiler_setup_modules_are_read(self, collector):
+        # SUNDIALS keeps -Werror and -fsanitize in SundialsSetupCompilers.cmake.
+        tree = RepoTree("o", "r", ["cmake/SundialsSetupCompilers.cmake", "cmake/Other.cmake"],
+                        truncated=False)
+        assert collector._find_flag_files(tree)[0] == ["cmake/SundialsSetupCompilers.cmake"]
+
+    def test_stronger_hints_come_before_compiler_modules(self, collector):
+        tree = RepoTree(
+            "o", "r",
+            [f"cmake/SetupCompilers{i}.cmake" for i in range(10)] + ["cmake/deep/x/Warnings.cmake"],
+            truncated=False,
+        )
+        assert collector._find_flag_files(tree)[0][0] == "cmake/deep/x/Warnings.cmake"
+
+    def test_unrelated_compiler_named_modules_are_not_read(self, collector):
+        tree = RepoTree("o", "r", ["cmake/Modules/HandleCompilerRT.cmake",
+                                   "build/CMakeFiles/3.22.1/CMakeCXXCompiler.cmake",
+                                   "cmake/CompilerFlags.cmake"], truncated=False)
+        assert collector._find_flag_files(tree)[0] == ["cmake/CompilerFlags.cmake"]
+
+    def test_vendored_flag_files_are_skipped(self, collector):
+        tree = RepoTree("o", "r", ["external/lib/cmake/Warnings.cmake"], truncated=False)
+        assert collector._find_flag_files(tree)[0] == []
 
     def test_non_cmake_files_do_not_crowd_out_the_cap(self, collector):
         # SECURITY.md ("secur") and a CI workflow named flag_prs_to_master.yml
@@ -369,3 +393,18 @@ class TestDefectTrendSignificance:
         })["sub_scores"]["reliability_trend"]
         assert info["passing"]
         assert "within normal variation" in info["value"]
+
+
+class TestHardeningMarkerVariants:
+    @pytest.mark.parametrize("text,label", [
+        ("option(SUNDIALS_ENABLE_ADDRESS_SANITIZER ...)", "Sanitizers"),
+        ("-DENABLE_UNDEFINED_BEHAVIOR_SANITIZER=ON", "Sanitizers"),
+        ("cmake -DENABLE_ASAN=ON", "Sanitizers"),
+        ("set(CMAKE_COMPILE_WARNING_AS_ERROR ON)", "Warnings as errors"),
+        ("-DENABLE_WARNINGS_AS_ERRORS=ON", "Warnings as errors"),
+    ])
+    def test_cmake_option_spellings(self, text, label):
+        assert _HARDENING_MARKERS[label].search(text)
+
+    def test_plain_prose_is_not_a_sanitizer(self):
+        assert not _HARDENING_MARKERS["Sanitizers"].search("we sanitize user input")

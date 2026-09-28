@@ -104,3 +104,47 @@ class TestCountCommunityIssues:
 
     def test_failure_is_none_not_zero(self, collector):
         assert self._run(collector, 403, [])[0] is None
+
+
+class TestCountCommunityIssuesPaging:
+    """Maintainer-filed tickets can fill the newest 100 issues (AMReX: 98 of
+    100) while the year holds plenty from outside -- keep paging."""
+
+    def _run(self, collector, pages):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        responses = []
+        for status, items in pages:
+            resp = MagicMock(status_code=status)
+            resp.json.return_value = {"items": items}
+            responses.append(resp)
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=responses)
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        with patch("collectors.ecosystem.active_maintenance.httpx.AsyncClient", return_value=client):
+            return asyncio.run(collector._count_community_issues("o", "r")), client
+
+    @staticmethod
+    def _page(outside, inside):
+        return [{"author_association": "NONE"}] * outside + [{"author_association": "MEMBER"}] * inside
+
+    def test_pages_past_a_maintainer_filled_first_page(self, collector):
+        count, client = self._run(collector, [(200, self._page(2, 98)), (200, self._page(10, 90))])
+        assert count == 12
+        assert client.get.await_count == 2
+        assert "page=2" in client.get.call_args.args[0]
+
+    def test_stops_once_the_threshold_is_met(self, collector):
+        count, client = self._run(collector, [(200, self._page(6, 94))])
+        assert count == 6
+        assert client.get.await_count == 1
+
+    def test_stops_on_a_short_page(self, collector):
+        count, client = self._run(collector, [(200, self._page(1, 30))])
+        assert count == 1
+        assert client.get.await_count == 1
+
+    def test_later_page_failure_keeps_the_lower_bound(self, collector):
+        count, _ = self._run(collector, [(200, self._page(2, 98)), (403, [])])
+        assert count == 2

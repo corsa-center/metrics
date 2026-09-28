@@ -260,6 +260,67 @@ class GitHubCollectorBase:
         return datetime.now(timezone.utc).isoformat()
 
 
+# Directories holding someone else's code. A Dockerfile or spack.yaml inside
+# a vendored dependency says nothing about the project itself.
+_VENDORED_DIR = re.compile(
+    r"(?:^|/)(?:external|extern|third[_-]?party|3rd[_-]?party|vendor|vendored"
+    r"|node_modules|deps|tpls?|submodules)/",
+    re.I,
+)
+
+# Container definitions, anywhere a project keeps them: SUNDIALS builds its
+# images from scripts/docker/Dockerfile, which a root/docker/.docker
+# candidate list never reached. Shared by reproducibility (4.3.3) and
+# accessibility (4.3.5) so the two sections can't disagree.
+# A suffix after the name is a variant (Dockerfile.cuda), unless it's a
+# document about containers (Chimbuko: docs/installation/singularity.html).
+_NOT_A_DEFINITION = r"(?![\w.-]*\.(?:html?|md|rst|txt|pdf|png|svg|py|sh)$)"
+CONTAINER_FILE_PATTERNS = {
+    "Docker": rf"(?:^|/)(?:Dockerfile|Containerfile){_NOT_A_DEFINITION}(?:\.[\w.-]+)?$"
+              r"|\.(?:dockerfile|containerfile)$",
+    "Singularity / Apptainer": rf"(?:^|/)(?:Singularity|Apptainer){_NOT_A_DEFINITION}(?:\.[\w.-]+)?$"
+                               r"|(?:^|/)[\w.-]*(?:singularity|apptainer)[\w.-]*\.def$",
+    "docker-compose": r"(?:^|/)(?:docker-)?compose\.ya?ml$",
+}
+
+# Declarative environment specifications (conda, Spack, devcontainer, and
+# LLNL's Spack-driven uberenv), anywhere outside vendored code -- SUNDIALS
+# keeps its Spack environments under scripts/docker/<config>/spack.yaml.
+# Not under doc/ or docs/: that environment.yml builds the documentation
+# (ADIOS2's Read the Docs config), not the software.
+ENVIRONMENT_SPEC_PATTERN = (
+    r"^(?!(?:.*/)?docs?/)(?:.*/)?(?:environment|conda[-_]env)[\w.-]*\.ya?ml$"
+    r"|(?:^|/)spack\.(?:yaml|lock)$"
+    r"|(?:^|/)\.devcontainer(?:/|\.json$)"
+    r"|(?:^|/)\.uberenv_config\.json$"
+)
+
+
+# Community channels a README can link to, shared by Multi-Channel
+# Communication (4.2.3) and Decision-Making Visibility (4.2.6).
+PUBLIC_CHANNEL_PATTERNS = {
+    "Mailing list": re.compile(r"mailing[- ]list|listserv|groups\.google\.com|majordomo|\bmailman\b", re.I),
+    "Chat (Slack/Discord/Matrix)": re.compile(r"slack\.com|discord\.(?:gg|com)|matrix\.to|gitter\.im|zulipchat", re.I),
+    "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
+    "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
+}
+
+
+async def wiki_has_content(owner: str, repo: str) -> bool:
+    """Whether the wiki has any pages. GitHub's has_wiki flag is on by
+    default for every repository, so it says nothing on its own; the wiki's
+    git endpoint only answers 200 once a page exists. Not a REST API call,
+    so it costs no rate-limit quota."""
+    url = f"https://github.com/{owner}/{repo}.wiki.git/info/refs?service=git-upload-pack"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url)
+            return resp.status_code == 200
+    except Exception as e:
+        logger.debug(f"Could not check wiki for {owner}/{repo}: {e}")
+        return False
+
+
 class RepoTree:
     """Case-insensitive index of every path in a repo's default-branch tree,
     fetched once and reused for every file/format check a collector needs.
@@ -365,6 +426,16 @@ class RepoTree:
         """
         rx = re.compile(pattern, flags)
         return [p for p in self.paths if rx.search(p)]
+
+    def find_owned(self, pattern: str, flags: int = re.IGNORECASE) -> Optional[str]:
+        """Shallowest path matching a regex outside vendored directories,
+        or None. For "does the project itself ship one of these, wherever
+        it keeps it" checks."""
+        hits = [p for p in self.find(pattern, flags) if not _VENDORED_DIR.search(p)]
+        return min(hits, key=lambda p: (p.count("/"), p)) if hits else None
+
+    def url_for(self, path: str) -> str:
+        return f"https://github.com/{self.owner}/{self.repo}/blob/HEAD/{path}"
 
     def find_url(self, pattern: str, flags: int = re.IGNORECASE) -> Optional[str]:
         """First find() hit, rendered as a browsable GitHub URL."""
