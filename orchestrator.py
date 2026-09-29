@@ -1930,6 +1930,13 @@ class MetricsOrchestrator:
                     section_431_lines.append(
                         f'<p class="sub-detail">{test_coverage.get("lines_covered", 0):,}/{lines_total:,} lines covered</p>'
                     )
+            elif test_coverage.get("coverage_in_ci"):
+                # Measured, just not somewhere this can read -- not a fail.
+                section_431_lines.append(
+                    '<p><strong>Test Coverage Excellence:</strong> Not yet collected</p>'
+                    f'<p class="sub-detail">Coverage is measured in CI '
+                    f'({test_coverage["coverage_in_ci"]}) but not published to Codecov</p>'
+                )
             else:
                 section_431_lines.append(
                     '<p><strong>Test Coverage Excellence:</strong> No Codecov data found ✗</p>'
