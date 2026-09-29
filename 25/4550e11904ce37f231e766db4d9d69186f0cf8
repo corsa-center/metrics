@@ -1,0 +1,30 @@
+package_config/spack_spack.yaml
+  s_72fde105c4df10::t_1473de0d6d0678 1-6
+collectors/ecosystem/active_maintenance.py
+  s_72fde105c4df10::t_d7bd274e0480eb 66-70,128-132,134-135,234-252
+  s_72fde105c4df10::t_9c0fec817169ed 253
+orchestrator.py
+  s_72fde105c4df10::t_226df1e5e8510c 1579-1581
+tests/test_maintenance_channels.py
+  s_72fde105c4df10::t_226df1e5e8510c 151-185
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_0d2aad209e5dc4 584-589
+docs/PROJECT_CONFIG.md
+  s_72fde105c4df10::t_f72c769ef5403e 47-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "254550e11904ce37f231e766db4d9d69186f0cf8",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
