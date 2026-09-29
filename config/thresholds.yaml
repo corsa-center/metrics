@@ -70,9 +70,11 @@
 
 "4.2.4":
   Response Time Tracking: 168           # median hours to first response, maximum (one week, strictly under)
-  Issue Resolution Analysis: 720        # median hours to close, maximum (30 days, strictly under)
+  Issue Resolution Analysis: 720        # median hours to close, maximum (30 days, strictly under), over
+                                        # issues opened between a year ago and this many hours ago
   Pull Request Flow Assessment: 50      # PR merge rate %, minimum (strictly over)
-  Support Request Closure Analysis: 2.0 # open/closed issue ratio, maximum (strictly under)
+  Support Request Closure Analysis: 2.0 # issues opened per issue closed, over the same window as
+                                        # Issue Resolution, maximum (strictly under)
   Engagement Quality Metrics: 2         # median comments per issue, minimum
   Communication Pattern Analysis:
     response_window_hours: 168          # "timely" response window (one week)

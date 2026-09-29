@@ -159,9 +159,9 @@ for every other project with a modified licence.)
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | Response Time Tracking | ✅ | median time to first response < 168 hours (1 week) | `/issues`, time to first response |
-| Issue Resolution Analysis | ✅ | median time to close < 720 hours (30 days) | `/issues`, close rate |
+| Issue Resolution Analysis | ✅ | median time to close < 720 hours (30 days), over up to 100 of the newest issues opened between a year ago and 30 days ago; still-open issues count as unresolved | search API, fixed cohort — not the recently-updated sample, which only sees recent closures of any age |
 | Pull Request Flow Assessment | ✅ | merge rate > 50% | `/pulls`, median cycle time |
-| Support Request Closure Analysis | ✅ | open/closed issue ratio < 2.0 | `/issues` |
+| Support Request Closure Analysis | ✅ | issues opened per issue closed between a year ago and 30 days ago < 2.0 | search API totals for that window (the report's "closed versus opened ... over time") |
 | Engagement Quality Metrics | ✅ | median comments per issue ≥2 | |
 | Communication Pattern Analysis | ✅ | ≥70% of issues answered within a week | |
 | Community Participation Assessment | ✅ | ≥15% of issues and PRs opened by non-maintainers (`author_association`) | |
@@ -321,10 +321,10 @@ the CI workflow definitions.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers) | configs and analysis workflows |
+| Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers; mypy, Pyright, Bandit for Python) | configs and analysis workflows; style linters (ruff, black, flake8) deliberately not counted |
 | Enhanced Security Analysis | ✅ | CodeQL runs, from a workflow file or GitHub's default setup (enabled in repository settings, no file in the tree) | workflow files; Actions workflows list for default setup |
-| CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references — **practice indicators, not audited conformance** |
-| Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API |
+| CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references. Not applicable (excluded, not failed) when none are found and the primary language is one CERT has no standard for (Python, R, Julia, JavaScript/TypeScript, MATLAB, notebooks) |
+| Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API. With no Codecov project, "not collected" rather than failed if CI shows coverage being measured (`--coverage`, gcovr/lcov, pytest-cov, Coveralls, a Coverage build) |
 | Reliability Trend Analysis | ✅ | defect volume over the last 52 weeks is not significantly higher than the prior 52 weeks: over 1.25× **and** a one-sided binomial p < 0.05 counts as increasing; a rise within normal variation counts as stable. Unmeasurable below 5 total defects across both windows | defect reports over two 52-week windows, by issue type first then label. Only GitHub-filed reports are visible; defects reported by email or mailing list aren't |
 
 Codecov's `api.codecov.io/api/v2/github/{owner}/repos/{repo}/` is public and
@@ -340,10 +340,10 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | CI/CD Effectiveness Assessment | ✅ | ≥1 of 6 internal checks met (workflow present, a recent successful run, deploy/release cadence at or above 1/year, elite-tier <24h cycle time, etc.) | `.github/workflows/` parsing + run status |
-| Testing Framework Excellence | ✅ | ≥2 of 4: test directory, CTest/CMake config, pytest config, vendored test framework | |
+| Testing Framework Excellence | ✅ | ≥2 of 4: test directory (at the root, or the shallowest `test/`/`tests/`/`testing/`/`unit_test(s)/` outside vendored and hidden trees), CTest/CMake config, pytest config, vendored test framework | |
 | Code Review Quality Analysis | ✅ | ≥70% of the last 50 merged PRs had ≥1 review | |
 | Development Tool Integration | ✅ | ≥2 of 4: pre-commit hooks, formatter config, linter config, Dependabot/Renovate config | |
-| Community Contribution Facilitation | ✅ | OpenSSF Best Practices badge progress = 100% (the *passing* level) | proxy — the report's own metric needs data this framework doesn't have another source for |
+| Community Contribution Facilitation | ✅ | OpenSSF Best Practices badge progress = 100% (the *passing* level) | proxy — the report's own metric needs data this framework doesn't have another source for. A badge registered at 0% gets the repository scan for its criteria, like no badge |
 
 ### 4.3.3 Reproducibility
 **Collector:** [`reproducibility.py`](collectors/quality/reproducibility.py)
@@ -369,7 +369,7 @@ both the score and its weight, not counted as 0.
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | User Experience Assessment | 🔲 | — | the report specifies the UEQ instrument, which needs a survey |
-| Documentation Completeness Analysis | ✅ | README covers ≥3 of 4 core sections (installation / usage / examples / support); or, with ≥1 section, a `docs/` tree **and** a published site | README headings, `docs/` tree, published documentation site |
+| Documentation Completeness Analysis | ✅ | README covers ≥3 of 4 core sections (installation / usage / examples / support); or, with ≥1 section, a `docs/` tree **and** a published site | README headings, and link text that starts with a section keyword ("Getting Started…", "Contact Us"); `docs/` tree, published site |
 | Accessibility Feature Detection | 🔲 | — | — |
 | Installation Success Tracking | ✅ | ≥1 package manager with a documented install command | from 4.2.7's registry data |
 | Usage Analytics Integration | 🔲 | — | — |
@@ -390,9 +390,9 @@ ecosyste.ms a second time for the same answer.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found | |
+| Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found; failing those, a pip-installable Python package (`setup.py`, or `pyproject.toml` with `[project]`/`[build-system]`) | |
 | Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
-| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build options only (Spack variants, CMake options, GPU arch targets, vendor images) |
+| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build configuration only (Spack variants, CMake options, GPU arch targets, vendor images, GPU model names in runner labels, Kokkos architecture names) |
 | Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | |
 | Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels | [`deployment_environments.py`](collectors/quality/deployment_environments.py) |
 
@@ -402,8 +402,8 @@ plus the bus factor reused from `active_maintenance.py`.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Advanced Complexity Analysis | ✅ | <5% of source files over 100 KB, **and** directory tree depth ≤10 | source-file size distribution and tree depth |
-| Code Quality Assessment | ✅ | test-file-to-source-file ratio ≥0.20 | |
+| Advanced Complexity Analysis | ✅ | <5% of source files over 100 KB, **and** directory depth ≤10 | source-file size distribution; depth over non-test source files, so test-data fixtures don't set it |
+| Code Quality Assessment | ✅ | test-file-to-source-file ratio ≥0.20 | tests by directory (`test(s)/`, `testing/`, `unit_test(s)/`) or name (`test_*`, `*_test(s)`, `*UnitTest(s)*`) |
 | Documentation Quality Evaluation | ✅ | a doc generator (Doxygen / Sphinx / MkDocs) is configured, **or** doc-file-to-source-file ratio ≥5% | |
 | Knowledge Distribution Analysis | ✅ | bus factor ≥3 (same threshold as 4.2.3 and 4.2.10) | top-contributor share shown as context, not scored separately |
 | Refactoring and Evolution Tracking | ✅ | ≥2% of a 300-commit sample are refactor-intent commits | |
