@@ -1,0 +1,28 @@
+collectors/ecosystem/collaboration.py
+  s_72fde105c4df10::t_7f869c25819cf0 50-57,78,82,85-87,107-108,281-283,286-289,308-311,363-391
+  s_72fde105c4df10::t_7ed6a3a9c64dff 351-355,358-359
+  s_72fde105c4df10::t_d94b2c643e0a16 314-322
+  s_72fde105c4df10::t_998735aa298951 392
+orchestrator.py
+  s_72fde105c4df10::t_d94b2c643e0a16 1188
+tests/test_collaboration.py
+  s_72fde105c4df10::t_ca102f8358a52a 80,82-83,92-93,252-294
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_8627256af14f64 223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2913df247b9782495823cbd9737bd805f248a663",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
