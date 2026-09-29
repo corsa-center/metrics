@@ -447,3 +447,26 @@ class TestIssueFlowQueries:
         with patch("collectors.ecosystem.engagement.search_get", new=AsyncMock(return_value=None)):
             flow = asyncio.run(collector._issue_flow(MagicMock(), "o", "r"))
         assert "cohort_size" not in flow and "opened" not in flow
+
+
+class TestThinWindows:
+    def test_single_issue_window_is_reported_but_unscored(self, collector):
+        result = collector._score({}, {}, {}, {"cohort_size": 1, "cohort_still_open": 1,
+                                               "median_close_hours": float("inf"),
+                                               "opened": 1, "closed": 0})
+        for key in ("issue_resolution", "support_closure"):
+            row = result["sub_scores"][key]
+            assert row["insufficient_sample"] is True
+            assert "too few to judge" in row["value"]
+        assert result["max_score"] == 5
+
+    def test_response_time_with_no_replies_says_so(self, collector):
+        row = collector._score({"median_first_response_hours": None, "sample_size": 30}, {}, {})[
+            "sub_scores"]["response_time_tracking"]
+        assert row["value"] == "no response to any of 30 sampled issue(s)"
+        assert row["passing"] is False
+
+    def test_response_time_on_one_issue_is_unscored(self, collector):
+        row = collector._score({"median_first_response_hours": None, "sample_size": 1}, {}, {})[
+            "sub_scores"]["response_time_tracking"]
+        assert row["insufficient_sample"] is True

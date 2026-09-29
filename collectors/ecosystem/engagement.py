@@ -408,13 +408,18 @@ class EngagementCollector(GitHubCollectorBase):
 
         # 1. Response Time Tracking — passing if median first response is under the cap
         frt = issue_stats.get("median_first_response_hours")
+        sampled = issue_stats.get("sample_size", 0)
         passing = frt is not None and frt < get_threshold("4.2.4", "Response Time Tracking")
         sub["response_time_tracking"] = {
             "label": "Response Time Tracking",
-            "value": f"{frt:.0f} hours" if frt is not None else None,
+            "value": (f"{frt:.0f} hours" if frt is not None
+                      else f"no response to any of {sampled} sampled issue(s)" if sampled else None),
             "passing": passing,
             "pts": 1 if passing else 0,
         }
+        if 0 < sampled < _MIN_DISCUSSION_SAMPLE:
+            self._mark_thin_sample(sub["response_time_tracking"], sampled, "issue(s) sampled")
+            unscored += 1
         pts += sub["response_time_tracking"]["pts"]
 
         # 2. Issue Resolution Analysis — median time to close, over a cohort of
@@ -436,6 +441,9 @@ class EngagementCollector(GitHubCollectorBase):
                 "passing": passing,
                 "pts": 1 if passing else 0,
             }
+            if n < _MIN_DISCUSSION_SAMPLE:
+                self._mark_thin_sample(sub["issue_resolution"], n, "issue(s) in the window")
+                unscored += 1
             pts += sub["issue_resolution"]["pts"]
 
         # 3. Pull Request Flow Assessment — passing if merge rate is above the floor
@@ -466,6 +474,9 @@ class EngagementCollector(GitHubCollectorBase):
                 "passing": passing,
                 "pts": 1 if passing else 0,
             }
+            if opened + closed < _MIN_DISCUSSION_SAMPLE:
+                self._mark_thin_sample(sub["support_closure"], opened + closed, "issue(s) in the window")
+                unscored += 1
             pts += sub["support_closure"]["pts"]
 
         discussion_n = issue_stats.get("discussion_sample_size", 0)
@@ -530,10 +541,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
 
     @staticmethod
-    def _mark_thin_sample(entry: Dict[str, Any], n: int) -> None:
+    def _mark_thin_sample(entry: Dict[str, Any], n: int, noun: str = "community issue(s) sampled") -> None:
         """Keep the measured value visible but take the row out of the score."""
-        entry["value"] = (f"{entry['value']} -- only {n} community issue(s) sampled, "
-                          f"too few to judge")
+        entry["value"] = f"{entry['value']} -- only {n} {noun}, too few to judge"
         entry["insufficient_sample"] = True
         entry["passing"] = False
         entry["pts"] = 0
