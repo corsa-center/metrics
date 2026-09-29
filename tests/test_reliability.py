@@ -138,12 +138,13 @@ class TestDefectTrendScoring:
     def _score(self, collector, trend):
         return collector._calculate_score([], [], trend)["sub_scores"]["reliability_trend"]
 
-    def test_unmeasurable_is_reported_not_faked(self, collector):
-        # Reporting "0 vs 0, stable" for a project that records no defects
-        # would be a fabricated pass.
-        info = self._score(collector, {"measurable": False, "recent": 0, "previous": 0})
+    def test_unmeasurable_is_reported_neither_passed_nor_failed(self, collector):
+        # "0 vs 0, stable" would be a fabricated pass; failing it would claim
+        # a problem the data can't show. Too few reports is excluded.
+        info = self._score(collector, {"measurable": False, "recent": 1, "previous": 2})
         assert not info["passing"]
-        assert "does not record defect reports" in info["value"]
+        assert info["not_collected"] is True and info["insufficient_sample"] is True
+        assert info["value"].startswith("3 defect report(s)")
 
     def test_stable_passes(self, collector):
         info = self._score(collector, {"measurable": True, "recent": 10,
@@ -454,3 +455,20 @@ class TestCertApplicability:
 
     def test_hardening_found_in_a_python_project_still_counts(self, collector):
         assert self._cert(collector, ["-fstack-protector-strong"], "Python")["passing"] is True
+
+
+class TestRepoDefectLabels:
+    def _labels(self, collector, pages):
+        async def fake_get(client, url, params=None):
+            return pages.pop(0) if pages else []
+        with patch.object(collector, "_github_get", new=fake_get):
+            return asyncio.run(collector._repo_defect_labels(MagicMock(), "o", "r"))
+
+    def test_project_spellings_are_found(self, collector):
+        names = ["type-bug", "is:bug", "kind/bug", "Bug", "regression", "enhancement",
+                 "not-a-bug", "is:bugfix", "debugger", "wontfix"]
+        found = self._labels(collector, [[{"name": n} for n in names]])
+        assert found == ["type-bug", "is:bug", "kind/bug", "Bug", "regression"]
+
+    def test_failed_listing_falls_back_to_the_defaults(self, collector):
+        assert self._labels(collector, [COLLECTION_GAP]) == []

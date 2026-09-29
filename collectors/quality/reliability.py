@@ -136,6 +136,14 @@ _DEFECT_LABELS = ["bug", "defect", "crash", "regression", "type: bug", "kind/bug
 # has 479 Bug-typed issues, so a label-only query reported it as unmeasurable.
 _DEFECT_ISSUE_TYPES = ["Bug", "Defect"]
 
+# A repository's own labels are matched by shape rather than exact spelling:
+# projects write "type-bug", "is:bug", "kind/bug", "Bug". Negations
+# ("not-a-bug", "no bug") are excluded; "bugfix" and "debugger" don't match.
+_BUG_LABEL = re.compile(
+    r"(?:^|[\s:/_.-])(?:bugs?|defects?|regressions?|crash(?:es)?)(?:[\s_-]*reports?)?$", re.I)
+_NEGATED_LABEL = re.compile(r"(?:^|[\s:/_-])(?:not|no|non)(?:[\s_-]|$)", re.I)
+_MAX_LABEL_PAGES = 3
+
 _TREND_WINDOW_DAYS = 365
 
 
@@ -334,6 +342,27 @@ class ReliabilityCollector(GitHubCollectorBase):
         compiler.sort(key=lambda p: (p.count("/"), p))
         return (strong + compiler)[:_MAX_FLAG_FILES], False
 
+    async def _repo_defect_labels(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> List[str]:
+        """The repository's own labels that mark a defect, or [] if none (or
+        the listing failed), in which case the conventional list is used."""
+        found: List[str] = []
+        for page in range(1, _MAX_LABEL_PAGES + 1):
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/labels",
+                params={"per_page": 100, "page": page},
+            )
+            if not isinstance(data, list):
+                break
+            found += [l["name"] for l in data if isinstance(l, dict)
+                      and _BUG_LABEL.search(l.get("name", ""))
+                      and not _NEGATED_LABEL.search(l.get("name", ""))]
+            if len(data) < 100:
+                break
+        # Search queries are limited to 256 characters.
+        return found[:8]
+
     async def _defect_trend(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
@@ -351,7 +380,8 @@ class ReliabilityCollector(GitHubCollectorBase):
         # parser splits it and silently drops the rest of the label list —
         # which returned 0 for every project until it was caught.
         labels = ",".join(
-            f'"{l}"' if (" " in l or ":" in l) else l for l in _DEFECT_LABELS
+            f'"{l}"' if (" " in l or ":" in l) else l
+            for l in (await self._repo_defect_labels(client, owner, repo) or _DEFECT_LABELS)
         )
 
         async def count(qualifier: str, date_range: str) -> tuple:
@@ -473,7 +503,11 @@ class ReliabilityCollector(GitHubCollectorBase):
             value = "Defect trend could not be measured (search rate limited)"
             passing = False
         elif not trend.get("measurable"):
-            value = "Project does not record defect reports by type or label"
+            # Too few typed or labelled defect reports to compare two years.
+            # Unmeasurable, not a failure: excluded from the score below.
+            n = trend.get("recent", 0) + trend.get("previous", 0)
+            value = (f"{n} defect report(s) found by issue type or label over two years, "
+                     f"too few to judge a trend")
             passing = False
         else:
             direction = trend["direction"]
@@ -490,6 +524,8 @@ class ReliabilityCollector(GitHubCollectorBase):
         }
         if trend.get("not_collected"):
             trend_entry["not_collected"] = True
+        elif not trend.get("measurable"):
+            trend_entry.update({"not_collected": True, "insufficient_sample": True})
         sub["reliability_trend"] = trend_entry
 
         scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}

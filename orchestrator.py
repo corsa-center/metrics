@@ -1185,7 +1185,8 @@ class MetricsOrchestrator:
             info = sub.get(key, {})
             label = info.get("label", key)
             # A sub-score the collector didn't return isn't a measured fail.
-            if info.get("not_applicable"):
+            if info.get("not_applicable") or info.get("insufficient_sample"):
+                # Reported, but neither a pass nor a fail -- no mark.
                 return f'<p><strong>{label}:</strong> {info.get("value", "Not applicable")}</p>'
             if not info or info.get("not_collected"):
                 return f'<p><strong>{label}:</strong> Not yet collected</p>'
@@ -1576,9 +1577,11 @@ class MetricsOrchestrator:
                     f'{"✓" if ab_ok else "✗"}</p>'
                 )
             else:
+                # Needs a full year of activity before the year being judged;
+                # unmeasurable is excluded, not scored as a failure.
                 maint_lines.append(
                     '<p><strong>Contributor Abandonment Forecasting:</strong> '
-                    'Not enough contributor history to assess ✗</p>'
+                    'Not enough contributor history to assess (needs two years)</p>'
                 )
 
             maint_lines.append(f'<p><strong>Score:</strong> {maint_pts}/6</p>')
