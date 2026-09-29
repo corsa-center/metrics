@@ -267,3 +267,28 @@ class TestRefineTesting:
         out = self._run(collector, ["CMakeLists.txt"], {"CMakeLists.txt": COLLECTION_GAP})
         assert "CTest / CMake testing" in out["not_collected"]
         assert "CTest / CMake testing" not in out["missing"]
+
+
+class TestNestedTestSuite:
+    def _run(self, collector, paths):
+        tree = RepoTree("o", "r", paths, truncated=False)
+
+        async def fake_get(client, url, params=None):
+            return None
+        collector._github_get = fake_get
+        base = collector._scan(tree, _TESTING_PATHS)
+        return asyncio.run(collector._refine_testing(None, "o", "r", tree, base))
+
+    def test_suite_beside_the_package_is_found(self, collector):
+        out = self._run(collector, ["lib/spack/spack/test/concretize.py", "lib/spack/spack/spec.py"])
+        assert "Test suite directory" in out["found"]
+        assert out["details"]["Test suite directory"]["file"] == "lib/spack/spack/test"
+
+    def test_vendored_test_directory_does_not_count(self, collector):
+        out = self._run(collector, ["external/fmt/test/format-test.cc", "src/main.cc"])
+        assert "Test suite directory" in out["missing"]
+
+    def test_hidden_tooling_directory_is_not_the_suite(self, collector):
+        out = self._run(collector, [".github/workflows/requirements/unit_tests/requirements.txt",
+                                    "lib/pkg/test/test_a.py"])
+        assert out["details"]["Test suite directory"]["file"] == "lib/pkg/test"

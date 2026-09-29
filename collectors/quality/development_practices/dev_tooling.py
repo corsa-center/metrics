@@ -48,6 +48,7 @@ _TESTING_PATHS = {
 # the tree and then to the contents of a few build/config files.
 _FRAMEWORK_DIR = r"(?:^|/)(?:googletest|gtest|catch2?|doctest|cmocka|pfunit)(?:/|$)"
 _CONFTEST = r"(?:^|/)conftest\.py$"
+_NESTED_TEST_DIR = r"(?:^|/)(?:tests?|testing|unit_?tests?)/"
 _CONTENT_MARKERS = {
     "CTest / CMake testing": re.compile(r"^\s*(?:enable_testing\s*\(|include\s*\(\s*CTest\b)", re.M | re.I),
     "pytest configuration": re.compile(r"^\[tool(?:\.|:)pytest", re.M),
@@ -163,6 +164,16 @@ class DevToolingCollector(GitHubCollectorBase):
                     if (m := re.search(_FRAMEWORK_DIR, p, re.I))}
             if dirs:
                 mark("Unit-test framework", min(dirs, key=lambda p: (p.count("/"), p)))
+        if "Test suite directory" in missing:
+            # A suite kept beside the package it tests (Spack's 231 test
+            # modules live in lib/spack/spack/test/) rather than at the root.
+            # Hidden trees (.github/, .agents/) hold tooling, not the suite.
+            hits = [p for p in tree.find(_NESTED_TEST_DIR)
+                    if not _VENDORED_DIR.search(p) and not re.search(r"(?:^|/)\.", p)]
+            if hits:
+                path = min(hits, key=lambda p: (p.count("/"), p))
+                m = re.search(_NESTED_TEST_DIR, path, re.I)
+                mark("Test suite directory", path[:m.end()].rstrip("/"))
         if "pytest configuration" in missing:
             path = tree.find_owned(_CONFTEST)
             if path:
