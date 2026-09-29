@@ -246,11 +246,11 @@ only 9 packages); both are real evidence of ecosystem integration.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Enhanced Funding Documentation Analysis | ✅ | a funding file exists, **or** ≥1 award reference found in the README | FUNDING.yml / funding.json, plus DOE/NSF/NIH award numbers in the README |
+| Enhanced Funding Documentation Analysis | ✅ | a funding file exists, **or** ≥1 award reference or funder acknowledgment found | FUNDING.yml / funding.json; award numbers in the README and root NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT files, in formats used by US (DOE, NNSA, NSF, NIH, DoD), EU/ERC, UKRI, DFG, ANR, NSERC, JSPS/JST, ARC, NSFC, SNSF and Wellcome awards, or given in context ("grant agreement No …", "project number …"); funders named in a funding sentence or under an Acknowledgments/Funding heading |
 | Institutional Affiliation Tracking | ✅ | ≥3 distinct organizations found | `company` field of the top 25 contributors |
 | NIH R50 Award Tracking | 🔲 | — | NIH RePORTER API is public and unauthenticated — a Tier 2 win, not yet wired |
 | Corporate Sponsorship Detection | ✅ | ≥1 declared funding platform, **or** the repository is organization-owned | |
-| Funding Portfolio Analysis | ✅ | ≥2 distinct sources (funding platforms + award references, combined) | |
+| Funding Portfolio Analysis | ✅ | ≥2 distinct sources (funding platforms, award references, and acknowledged funders not already represented by an award) | |
 
 > Contributor affiliations are folded onto a canonical key, so "The HDF Group",
 > "HDFGroup" and "The HDFgroup" count as one organization. Without that the
