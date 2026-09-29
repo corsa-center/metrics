@@ -1,0 +1,25 @@
+tests/test_test_coverage.py
+  s_72fde105c4df10::t_3fe62b3b9d8cbb 89-124
+collectors/quality/test_coverage.py
+  s_72fde105c4df10::t_88139e7d767b7c 12-13,19,22-23,25,31-35,40-43,61-83
+  s_72fde105c4df10::t_b14408b93e0e49 36
+  s_72fde105c4df10::t_a99c8408d4429d 14-16,37-39
+orchestrator.py
+  s_72fde105c4df10::t_88139e7d767b7c 1933-1939
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "aee64a5a0950c4fe40607d1ffb7373efb12b7fde",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
