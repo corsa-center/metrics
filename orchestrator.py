@@ -1395,8 +1395,9 @@ class MetricsOrchestrator:
             #    Owners assigned, and the documents still being maintained.
             eff = governance.get("effectiveness", {})
             eff_signals = []
-            if eff.get("has_codeowners"):
-                eff_signals.append("CODEOWNERS defined")
+            # Name the missing half too: "docs updated 53 days ago ✗" alone
+            # didn't say why the row failed.
+            eff_signals.append("CODEOWNERS defined" if eff.get("has_codeowners") else "no CODEOWNERS")
             days = eff.get("days_since_governance_update")
             if days is not None:
                 eff_signals.append(f"docs updated {days} days ago")
@@ -1404,7 +1405,7 @@ class MetricsOrchestrator:
             gov_pts += 1 if eff_ok else 0
             gov_lines.append(
                 f'<p><strong>Governance Effectiveness Assessment:</strong> '
-                f'{"; ".join(eff_signals) if eff_signals else "No governance ownership or upkeep found"} '
+                f'{"; ".join(eff_signals)} '
                 f'{"✓" if eff_ok else "✗"}</p>'
             )
 
