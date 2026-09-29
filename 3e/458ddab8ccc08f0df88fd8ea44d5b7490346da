@@ -1,0 +1,32 @@
+config/thresholds.yaml
+  s_72fde105c4df10::t_b11f38345b6abb 76-77
+  s_72fde105c4df10::t_138b61ae02d26f 73-74
+collectors/ecosystem/engagement.py
+  s_72fde105c4df10::t_7d03d2cb3a31e7 24-25,27,106-108,114,123,174-187,189,192-205,210-217,220-222,397,406-407,420-433,435-439,452,454-463,465-469
+  s_72fde105c4df10::t_ea751a83127470 188,190-191,207-209,218-219
+  s_72fde105c4df10::t_cf286de9b86952 434,453,464
+  s_72fde105c4df10::t_cb6d331bbef81b 206
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_138b61ae02d26f 162,324,326-327,343,346,372,393,405-406
+  s_72fde105c4df10::t_a9910e907b5fc4 395
+  s_72fde105c4df10::t_b11f38345b6abb 164
+tests/test_engagement.py
+  s_72fde105c4df10::t_469aa42cd6e05c 119-123,125,127-128,348-349,390-398,400-409,411-435,437-442,444-449
+  s_72fde105c4df10::t_cf286de9b86952 399,410,436,443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3e458ddab8ccc08f0df88fd8ea44d5b7490346da",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
