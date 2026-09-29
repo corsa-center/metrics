@@ -148,3 +148,38 @@ class TestCountCommunityIssuesPaging:
     def test_later_page_failure_keeps_the_lower_bound(self, collector):
         count, _ = self._run(collector, [(200, self._page(2, 98)), (403, [])])
         assert count == 2
+
+
+class TestRelatedRepositories:
+    def test_contributor_who_moved_repos_is_not_departed(self, collector):
+        weeks_old = [{"w": i, "c": 1 if i < 52 else 0} for i in range(104)]
+        weeks_new = [{"w": i, "c": 1 if i >= 52 else 0} for i in range(104)]
+        main = [{"author": {"login": "Alice"}, "weeks": weeks_old}]
+        companion = [{"author": {"login": "alice"}, "weeks": weeks_new}]
+        alone = collector._analyze_abandonment(main)
+        merged = collector._analyze_abandonment(collector._merge_contributor_stats([main, companion]))
+        assert alone["departed"] == 1
+        assert merged["departed"] == 0 and merged["previously_active"] == 1
+
+    def test_related_repositories_are_read_from_package_config(self, collector):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        calls = []
+
+        async def stats(owner, repo):
+            calls.append(f"{owner}/{repo}")
+            return []
+        empty = AsyncMock(return_value={})
+        with patch.object(collector, "_get_contributor_stats", new=stats), \
+             patch.object(collector, "_get_repo_info", new=empty), \
+             patch.object(collector, "_get_commit_activity", new=empty), \
+             patch.object(collector, "_get_releases", new=AsyncMock(return_value=[])), \
+             patch.object(collector, "_get_contributors", new=AsyncMock(return_value=[])), \
+             patch.object(collector, "_get_first_commit_date", new=AsyncMock(return_value=None)), \
+             patch.object(collector, "_get_readme", new=AsyncMock(return_value="")), \
+             patch.object(collector, "_wiki_has_content", new=AsyncMock(return_value=False)), \
+             patch.object(collector, "_count_community_issues", new=AsyncMock(return_value=None)):
+            asyncio.run(collector.collect({
+                "name": "spack", "repo_url": "https://github.com/spack/spack",
+                "package_config": {"related_repositories": ["spack/spack-packages"]}}))
+        assert calls == ["spack/spack", "spack/spack-packages"]

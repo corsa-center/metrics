@@ -1576,6 +1576,9 @@ class MetricsOrchestrator:
                     f'previously active contributors stopped ({rate * 100:.0f}%) '
                     f'{"✓" if ab_ok else "✗"}</p>'
                 )
+                if ab.get("repositories"):
+                    maint_lines.append(
+                        f'<p class="sub-detail">Across {", ".join(ab["repositories"])}</p>')
             else:
                 # Needs a full year of activity before the year being judged;
                 # unmeasurable is excluded, not scored as a failure.

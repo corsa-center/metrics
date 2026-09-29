@@ -581,6 +581,12 @@ Per-package overrides for sub-metrics that are genuinely N/A live in
 `package_config/<owner>_<repo>.yaml`; keys are the exact sub-metric labels from
 this catalog. See [PLACEHOLDER_GUIDE.md](PLACEHOLDER_GUIDE.md).
 
+The same file can list `related_repositories:` (`owner/repo` entries) for a
+project whose work is split across repositories. Contributor Abandonment
+Forecasting then merges contributor activity across all of them, so work moving
+to a companion repository isn't read as contributors leaving (Spack moved its
+package recipes to `spack/spack-packages`).
+
 A project can also narrow its *own* collection by adding `.metrics/metrics.yaml`
 to its own repo -- same `collectors:` / `overrides:` shape, fetched at
 collection time, and unable to re-enable anything the global config or a

@@ -63,6 +63,11 @@ class ActiveMaintenanceCollector:
             return self._empty_result(repo_name)
 
         owner, repo = owner_repo
+        # Companion repositories a project's work also lives in (declared in
+        # its package_config/ file), so moving part of a project to another
+        # repository isn't read as its contributors abandoning it.
+        related = [r for r in (package.get("package_config") or {}).get("related_repositories") or []
+                   if isinstance(r, str) and r.count("/") == 1]
 
         # Collect all data concurrently
         (
@@ -120,7 +125,14 @@ class ActiveMaintenanceCollector:
         commit_analysis = self._analyze_commits(commit_activity)
         release_analysis = self._analyze_releases(releases)
         contributor_analysis = self._analyze_contributors(contributors)
+        if related:
+            extra = await asyncio.gather(
+                *[self._get_contributor_stats(*r.split("/")) for r in related], return_exceptions=True)
+            contributor_stats = self._merge_contributor_stats(
+                [contributor_stats] + [e for e in extra if isinstance(e, list)])
         abandonment = self._analyze_abandonment(contributor_stats)
+        if related:
+            abandonment["repositories"] = [f"{owner}/{repo}"] + related
         channels = self._analyze_channels(repo_info, readme_text, wiki_has_content, community_issues)
 
         # Calculate score
@@ -218,6 +230,26 @@ class ActiveMaintenanceCollector:
         except Exception as e:
             logger.debug(f"Error fetching README: {e}")
             return ""
+
+    @staticmethod
+    def _merge_contributor_stats(stat_lists: List[List[Dict]]) -> List[Dict]:
+        """Combine /stats/contributors results from several repositories into
+        one per-contributor weekly series over the union of their weeks."""
+        weeks: set = set()
+        by_login: Dict[str, Dict[int, int]] = {}
+        for stats in stat_lists:
+            for entry in stats or []:
+                login = ((entry.get("author") or {}).get("login") or "").lower()
+                if not login:
+                    continue
+                series = by_login.setdefault(login, {})
+                for w in entry.get("weeks") or []:
+                    weeks.add(w.get("w"))
+                    series[w.get("w")] = series.get(w.get("w"), 0) + w.get("c", 0)
+        ordered = sorted(w for w in weeks if w is not None)
+        return [{"author": {"login": login},
+                 "weeks": [{"w": w, "c": series.get(w, 0)} for w in ordered]}
+                for login, series in by_login.items()]
 
     def _analyze_abandonment(self, stats: List[Dict]) -> Dict:
         """Contributors who were active last year but have since gone quiet.
