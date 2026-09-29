@@ -1,0 +1,22 @@
+collectors/quality/deployment_environments.py
+  s_72fde105c4df10::t_8de697876d09ea 80-83,86-87,94,98
+  s_72fde105c4df10::t_174671cf8e9c8e 88,93
+tests/test_deployment_environments.py
+  s_72fde105c4df10::t_c8d78c794d915e 100-106,114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "367254cddb4fd55650ec708d1b629b0f2141dba8",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
