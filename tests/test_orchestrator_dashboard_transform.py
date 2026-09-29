@@ -295,3 +295,37 @@ class TestScoreAggregationDoesNotCrashOnNonePercentage:
             {"name": "x", "repo_url": "https://github.com/o/r", "repository": "o/r"}
         )
         assert result["score"] == 0.0
+
+
+class TestUnmeasuredRowsCarryNoMark:
+    def test_environment_spec_counts_for_environment_management(self, orchestrator):
+        metrics = _base_metrics(quality_sub={"reproducibility": {
+            "has_dependency_pinning": False,
+            "categories": {
+                "dependency_pinning": {"found": []},
+                "reproducibility_docs": {"found": ["Environment specification"], "details": {
+                    "Environment specification": {"exists": True, "file": "spack.yaml"}}},
+                "semantic_versioning": {},
+            },
+        }})
+        section = orchestrator._transform_for_dashboard("o/r", metrics)["quality"]["4.3.3"]["data"]
+        assert "<p><strong>Environment Management:</strong> ✓</p>" in section
+        assert "spack.yaml" in section
+
+    def test_short_history_abandonment_is_unmarked(self, orchestrator):
+        metrics = _base_metrics(ecosystem_sub={"maintenance": {
+            "maintenance_indicators": {}, "commit_activity": {}, "release_activity": {},
+            "contributor_activity": {}, "score": {}, "channels": {"found": []},
+            "abandonment": {"measurable": False},
+        }})
+        section = orchestrator._transform_for_dashboard("o/r", metrics)["ecosystem"]["4.2.3"]["data"]
+        row = [l for l in section.split("\n") if "Contributor Abandonment" in l][0]
+        assert "✗" not in row and "needs two years" in row
+
+    def test_unaudited_collaboration_network_is_unmarked(self, orchestrator):
+        from collectors.ecosystem.collaboration import CollaborationCollector
+        score = CollaborationCollector()._calculate_score([])
+        metrics = _base_metrics(ecosystem_sub={"collaboration": {"overall_score": score, "registries": []}})
+        section = orchestrator._transform_for_dashboard("o/r", metrics)["ecosystem"]["4.2.7"]["data"]
+        row = [l for l in section.split("\n") if "Collaboration Network" in l][0]
+        assert "✗" not in row and "not audited" in row

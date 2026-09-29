@@ -1982,6 +1982,8 @@ class MetricsOrchestrator:
             fair4rs_found = cats.get("fair4rs_metadata", {}).get("found", [])
             container_found = cats.get("containers", {}).get("found", [])
             dep_found = cats.get("dependency_pinning", {}).get("found", [])
+            env_detail = cats.get("reproducibility_docs", {}).get("details", {}).get("Environment specification", {})
+            env_spec = env_detail.get("file") if env_detail.get("exists") else None
             semver = cats.get("semantic_versioning", {})
 
             repr_lines = [
@@ -1997,9 +1999,12 @@ class MetricsOrchestrator:
                           reproducibility.get("uses_semantic_versioning"),
                           ", ".join(semver.get("example_tags", [])[:2]) if semver.get("example_tags") else None,
                           bool(semver.get("not_collected"))),
+                # A lockfile, or an environment specification (Spack env,
+                # conda environment, devcontainer): the report's "dependency
+                # management practices, environment specification".
                 _repr_row("Environment Management",
-                          reproducibility.get("has_dependency_pinning"),
-                          ", ".join(dep_found) if dep_found else None,
+                          reproducibility.get("has_dependency_pinning") or env_spec is not None,
+                          ", ".join(dep_found + ([env_spec] if env_spec else [])) or None,
                           bool(cats.get("dependency_pinning", {}).get("not_collected"))),
                 _repr_row("Reproducibility Documentation",
                           reproducibility.get("has_reproducibility_docs"),
