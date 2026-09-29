@@ -1,0 +1,21 @@
+tests/test_prepare_software_list.py
+  s_72fde105c4df10::t_7d737a9ccad5c5 77-85
+orchestrator.py
+  s_72fde105c4df10::t_bf522d95c88bd1 377-379
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a06eae5f1a43974b24ee2092742e6f18ef56798c",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
