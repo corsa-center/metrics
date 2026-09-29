@@ -220,7 +220,7 @@ ADIOS2 53%, zfp 93%.
 | Advanced Dependency Analysis | ✅ | ≥2 distinct package ecosystems carrying the software | |
 | Cross-project Reference Detection | 🔲 | — | the report specifies AI analysis of issues and PRs |
 | Interoperability Assessment | 🔲 | — | needs domain-specific standards knowledge |
-| Collaboration Network Analysis | ✅ | ≥10 dependent packages **or** ≥50 dependent repositories | downstream dependents |
+| Collaboration Network Analysis | ✅ | ≥10 dependent packages **or** ≥50 dependent repositories | registry dependents (ecosyste.ms, Spack, conda-forge), plus source-level dependents from the project's [dependency-audit](https://github.com/corsa-center/dependent-audit) graph in `corsa-center/project-dependent-tracking` (high/medium-confidence `DEPENDS_ON` edges from other organizations; vendored copies and mirrors excluded). The larger repository count stands. Without an audit graph, a registry shortfall is *not collected* — registries can't see code consumed from source — while a registry count that already clears the bar still passes |
 | Standards Compliance Tracking | 🔲 | — | needs domain-specific standards knowledge |
 
 Data comes from the free, unauthenticated **ecosyste.ms** APIs, looked up by
