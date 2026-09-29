@@ -321,7 +321,7 @@ the CI workflow definitions.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers; mypy, Pyright, Bandit for Python) | configs and analysis workflows; style linters (ruff, black, flake8) deliberately not counted |
+| Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers; mypy, Pyright, Bandit for Python; hosted services CodeFactor, Codacy, SonarCloud, DeepSource, Coverity Scan) | configs and analysis workflows, plus a README badge for this repository for hosted services, which leave no config file; style linters (ruff, black, flake8) deliberately not counted |
 | Enhanced Security Analysis | ✅ | CodeQL runs, from a workflow file or GitHub's default setup (enabled in repository settings, no file in the tree) | workflow files; Actions workflows list for default setup |
 | CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references. Not applicable (excluded, not failed) when none are found and the primary language is one CERT has no standard for (Python, R, Julia, JavaScript/TypeScript, MATLAB, notebooks) |
 | Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API. With no Codecov project, "not collected" rather than failed if CI shows coverage being measured (`--coverage`, gcovr/lcov, pytest-cov, Coveralls, a Coverage build) |

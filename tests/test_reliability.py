@@ -472,3 +472,20 @@ class TestRepoDefectLabels:
 
     def test_failed_listing_falls_back_to_the_defaults(self, collector):
         assert self._labels(collector, [COLLECTION_GAP]) == []
+
+
+class TestAnalysisBadges:
+    def _badges(self, collector, readme, owner="o", repo="r"):
+        import base64
+        data = {"content": base64.b64encode(readme.encode()).decode()}
+        with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._analysis_badges(MagicMock(), owner, repo))
+
+    def test_hosted_service_badges_for_this_repo(self, collector):
+        md = ("[![CodeFactor](https://www.codefactor.io/repository/github/o/r/badge)](x)\n"
+              "[![q](https://sonarcloud.io/api/project_badges/measure?project=o_r&metric=x)](y)")
+        assert self._badges(collector, md) == ["CodeFactor", "SonarQube/SonarCloud"]
+
+    def test_badge_for_another_repository_does_not_count(self, collector):
+        md = "[![CodeFactor](https://www.codefactor.io/repository/github/other/project/badge)](x)"
+        assert self._badges(collector, md) == []

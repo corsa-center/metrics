@@ -64,6 +64,18 @@ _ANALYSIS_CONFIGS = {
 # ("LLVM", "HTML", "Gnuplot").
 _CERT_NOT_APPLICABLE = {"python", "jupyter notebook", "r", "julia", "javascript", "typescript", "matlab"}
 
+# Hosted analysis services leave no config file in the tree; a README badge
+# for this repository is the evidence the project is registered with one.
+# {repo} is filled with owner/repo (or its underscore form) where the badge
+# URL names the repository.
+_ANALYSIS_BADGES = {
+    "CodeFactor": r"codefactor\.io/repository/github/{repo}\b",
+    "SonarQube/SonarCloud": r"sonarcloud\.io/(?:api/project_badges|summary|dashboard)\S*?{repo_}\b",
+    "Codacy": r"app\.codacy\.com/(?:gh/{repo}|project/badge/Grade/)",
+    "DeepSource": r"deepsource\.io/gh/{repo}\b",
+    "Coverity": r"scan\.coverity\.com/projects/",
+}
+
 # Tool and sanitizer names to look for inside CI workflow definitions.
 _ANALYSIS_IN_CI = {
     "SonarQube/SonarCloud": re.compile(r"\bsonar(?:cloud|qube|-scanner)?\b", re.I),
@@ -175,6 +187,7 @@ class ReliabilityCollector(GitHubCollectorBase):
                 self._find_analysis_tools(tree, workflows),
                 self._find_hardening(client, owner, repo, tree, workflows),
                 self._defect_trend(client, owner, repo),
+                self._analysis_badges(client, owner, repo),
                 return_exceptions=True,
             )
 
@@ -183,6 +196,8 @@ class ReliabilityCollector(GitHubCollectorBase):
             tools, tools_gap = [], True
         else:
             tools, tools_gap = results[0]
+        if isinstance(results[3], list):
+            tools = sorted(set(tools) | set(results[3]))
 
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=hardening reason=exception:{results[1]!r}")
@@ -213,6 +228,17 @@ class ReliabilityCollector(GitHubCollectorBase):
         }
 
     # ------------------------------------------------------------------ fetch
+
+    async def _analysis_badges(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+        """Hosted analysis services with a README badge for this repository."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
+        if not isinstance(data, dict):
+            return []
+        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+        slug = re.escape(f"{owner}/{repo}")
+        slug_ = re.escape(f"{owner}_{repo}")
+        return [tool for tool, pattern in _ANALYSIS_BADGES.items()
+                if re.search(pattern.format(repo=slug, repo_=slug_), text, re.I)]
 
     async def _find_analysis_tools(self, tree, workflows: List[str]) -> tuple:
         """Defect-finding tools, from config files and analysis-shaped workflows.
