@@ -408,3 +408,28 @@ class TestHardeningMarkerVariants:
 
     def test_plain_prose_is_not_a_sanitizer(self):
         assert not _HARDENING_MARKERS["Sanitizers"].search("we sanitize user input")
+
+
+class TestCertApplicability:
+    def _cert(self, collector, hardening, language):
+        return collector._calculate_score([], hardening, {"measurable": False}, language=language)[
+            "sub_scores"]["cert_compliance"]
+
+    def test_python_project_without_hardening_is_not_applicable(self, collector):
+        row = self._cert(collector, [], "Python")
+        assert row["not_applicable"] is True
+        assert row["not_collected"] is True
+        assert row["value"] == "Not applicable to a Python project"
+
+    def test_cpp_project_without_hardening_still_fails(self, collector):
+        row = self._cert(collector, [], "C++")
+        assert row["passing"] is False
+        assert "not_applicable" not in row
+
+    @pytest.mark.parametrize("language", [None, "LLVM", "HTML", "Shell"])
+    def test_unknown_or_misreported_language_is_still_scored(self, collector, language):
+        # GitHub reports llvm-project as "LLVM" and some C++ repos as "HTML".
+        assert "not_applicable" not in self._cert(collector, [], language)
+
+    def test_hardening_found_in_a_python_project_still_counts(self, collector):
+        assert self._cert(collector, ["-fstack-protector-strong"], "Python")["passing"] is True

@@ -50,6 +50,14 @@ _ANALYSIS_CONFIGS = {
     "Coverity": [".coverity.yml", "cov-int"],
 }
 
+# CERT has no secure-coding standard for these, and compiler hardening flags
+# don't apply to them, so a project written mainly in one is marked not
+# applicable rather than failed when no indicators are found. A list of
+# exclusions rather than of compiled languages, because GitHub's primary
+# language is unreliable for C/C++ repositories ("LLVM" for llvm-project,
+# "HTML" or "Gnuplot" for others).
+_CERT_NOT_APPLICABLE = {"python", "jupyter notebook", "r", "julia", "javascript", "typescript", "matlab"}
+
 # Tool and sanitizer names to look for inside CI workflow definitions.
 _ANALYSIS_IN_CI = {
     "SonarQube/SonarCloud": re.compile(r"\bsonar(?:cloud|qube|-scanner)?\b", re.I),
@@ -182,7 +190,9 @@ class ReliabilityCollector(GitHubCollectorBase):
             "analysis_tools": tools,
             "hardening": hardening,
             "defect_trend": trend,
-            "overall_score": self._calculate_score(tools, hardening, trend, tools_gap, hardening_gap),
+            "overall_score": self._calculate_score(
+                tools, hardening, trend, tools_gap, hardening_gap,
+                language=package.get("primary_language")),
         }
 
     # ------------------------------------------------------------------ fetch
@@ -416,6 +426,7 @@ class ReliabilityCollector(GitHubCollectorBase):
     def _calculate_score(
         self, tools: List[str], hardening: List[str], trend: Dict,
         tools_gap: bool = False, hardening_gap: bool = False,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
 
@@ -442,6 +453,11 @@ class ReliabilityCollector(GitHubCollectorBase):
         }
         if not hardening and hardening_gap:
             cert_entry["not_collected"] = True
+        elif not hardening and language and language.lower() in _CERT_NOT_APPLICABLE:
+            cert_entry.update({
+                "value": f"Not applicable to a {language} project",
+                "detail": None, "not_collected": True, "not_applicable": True,
+            })
         sub["cert_compliance"] = cert_entry
 
         if trend.get("not_collected"):
