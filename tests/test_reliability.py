@@ -262,6 +262,27 @@ class TestFindAnalysisTools:
         assert "Cppcheck" in tools
 
 
+class TestPythonAnalysisTools:
+    @pytest.mark.parametrize("ci_text,tool", [
+        ('pip install pytest "mypy>=0.900" ruff', "mypy"),
+        ("run: npx pyright", "Pyright"),
+        ("run: bandit -r src", "Bandit"),
+    ])
+    def test_python_defect_finders_in_ci(self, collector, ci_text, tool):
+        tools, _ = asyncio.run(collector._find_analysis_tools(COLLECTION_GAP, [ci_text]))
+        assert tool in tools
+
+    def test_mypy_config_file(self, collector):
+        tree = RepoTree("o", "r", ["mypy.ini"], truncated=False)
+        tools, _ = asyncio.run(collector._find_analysis_tools(tree, []))
+        assert tools == ["mypy"]
+
+    def test_style_linters_still_not_counted(self, collector):
+        tools, _ = asyncio.run(collector._find_analysis_tools(
+            COLLECTION_GAP, ["run: ruff check . && black --check . && flake8"]))
+        assert tools == []
+
+
 class TestFindFlagFiles:
     """_find_flag_files now searches the whole tree by filename regex,
     rather than listing four fixed directories -- AMReX's actual flag file

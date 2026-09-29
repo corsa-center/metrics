@@ -39,7 +39,10 @@ logger = logging.getLogger(__name__)
 
 # Configuration files that mean a defect-finding tool is wired in. Style linters
 # are deliberately absent — dev_tooling.py scores those, and formatting is not
-# the same concern as defect detection.
+# the same concern as defect detection. Type checkers (mypy, Pyright) and the
+# Bandit security scanner are included: they find defects in Python code the
+# way clang-tidy and Cppcheck do in C/C++, which the list otherwise covers
+# exclusively.
 _ANALYSIS_CONFIGS = {
     "SonarQube/SonarCloud": ["sonar-project.properties", ".sonarcloud.properties"],
     "clang-tidy": [".clang-tidy"],
@@ -48,6 +51,9 @@ _ANALYSIS_CONFIGS = {
     "DeepSource": [".deepsource.toml"],
     "Codacy": [".codacy.yml", ".codacy.yaml"],
     "Coverity": [".coverity.yml", "cov-int"],
+    "mypy": ["mypy.ini", ".mypy.ini"],
+    "Pyright": ["pyrightconfig.json"],
+    "Bandit": [".bandit"],
 }
 
 # CERT has no secure-coding standard for these, and compiler hardening flags
@@ -68,6 +74,9 @@ _ANALYSIS_IN_CI = {
     "scan-build": re.compile(r"\bscan-build\b", re.I),
     "Flawfinder": re.compile(r"\bflawfinder\b", re.I),
     "Sanitizers": re.compile(r"-fsanitize=|\b(?:asan|ubsan|tsan|msan)\b", re.I),
+    "mypy": re.compile(r"\bmypy\b", re.I),
+    "Pyright": re.compile(r"\bpyright\b", re.I),
+    "Bandit": re.compile(r"\bbandit\b", re.I),
 }
 
 # Workflows whose names suggest analysis are read first; the rest of the
