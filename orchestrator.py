@@ -2052,8 +2052,11 @@ class MetricsOrchestrator:
                         f'<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge {link} ({pct:.0f}%) {mark}</p>'
                     )
                 else:
+                    badge_url = badge_status.get("url")
+                    status = (f'<a href="{badge_url}">registered, not started</a>' if badge_url
+                              else "not registered")
                     section_432_lines.append(
-                        '<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge not registered ✗</p>'
+                        f'<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge {status} ✗</p>'
                     )
                 for cat_label, cat_key in [
                     ("Governance", "governance_criteria"),
