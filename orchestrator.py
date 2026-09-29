@@ -2130,6 +2130,8 @@ class MetricsOrchestrator:
                 return row
 
             build_found = cats.get("build_systems", {}).get("found", [])
+            if accessibility.get("python_package"):
+                build_found = build_found + [f'pip-installable Python package ({accessibility["python_package"]})']
             container_found = cats.get("containers", {}).get("found", [])
 
             # 5. Deployment Environment Testing comes from its own collector, so

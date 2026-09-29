@@ -13,9 +13,11 @@ Checks (per the report):
   - Documentation        : INSTALL, INSTALL.md
 """
 
+import base64
 import httpx
 import logging
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 from collectors.ecosystem.base import (
     COLLECTION_GAP, CONTAINER_FILE_PATTERNS, GitHubCollectorBase, RepoTree, RetryingTransport,
@@ -88,7 +90,38 @@ class AccessibilityCollector(GitHubCollectorBase):
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
-            return self._scan(tree, repo_name, owner, repo)
+            result = self._scan(tree, repo_name, owner, repo)
+            if not result["has_portable_build_system"] and tree is not COLLECTION_GAP:
+                package = await self._python_package(client, owner, repo, result)
+                if package:
+                    result["has_portable_build_system"] = True
+                    result["python_package"] = package
+            return result
+
+    async def _python_package(
+        self, client: httpx.AsyncClient, owner: str, repo: str, result: Dict[str, Any]
+    ) -> Optional[str]:
+        """The file that makes the project pip-installable, or None.
+
+        A pip-installable package is the portable, cross-platform install for
+        a Python project, which otherwise has none of the listed build
+        systems -- Spack, the report's own example of a portable build
+        system, failed this check. A pyproject.toml counts only if it
+        declares a build or project table; many hold nothing but tool
+        settings (ruff, black) for a C++ codebase.
+        """
+        details = result["categories"].get("python_packaging", {}).get("details", {})
+        if details.get("setup.py", {}).get("exists"):
+            return details["setup.py"]["file"]
+        path = details.get("pyproject.toml", {}).get("file")
+        if not path:
+            return None
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
+        if not isinstance(data, dict):
+            return None
+        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+        return path if re.search(r"^\[(?:build-system|project)\]", text, re.M) else None
 
     def _scan(
         self,

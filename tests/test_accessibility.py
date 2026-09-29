@@ -133,3 +133,33 @@ class TestContainersAnywhereInTree:
     def test_vendored_dockerfile_does_not_count(self):
         tree = RepoTree("o", "r", ["extern/tool/Dockerfile", "CMakeLists.txt"], truncated=False)
         assert AccessibilityCollector()._scan(tree, "r", "o", "r")["has_container"] is False
+
+
+class TestPythonPackageAsPortableBuild:
+    def _collect(self, collector, paths, pyproject=None):
+        import asyncio, base64
+        from unittest.mock import AsyncMock, patch
+        tree = RepoTree("o", "r", paths, truncated=False)
+        content = {"content": base64.b64encode(pyproject.encode()).decode()} if pyproject else None
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_github_get", new=AsyncMock(return_value=content)):
+            return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_pyproject_with_project_table_is_portable(self, collector):
+        r = self._collect(collector, ["pyproject.toml", "lib/pkg/x.py"],
+                          '[project]\nname = "spack"\n[build-system]\nrequires = ["hatchling"]\n')
+        assert r["has_portable_build_system"] is True
+        assert r["python_package"] == "pyproject.toml"
+
+    def test_pyproject_with_only_tool_settings_is_not(self, collector):
+        r = self._collect(collector, ["pyproject.toml"], "[tool.ruff]\nline-length = 99\n")
+        assert r["has_portable_build_system"] is False
+
+    def test_setup_py_is_portable_without_a_read(self, collector):
+        r = self._collect(collector, ["setup.py"])
+        assert r["python_package"] == "setup.py"
+
+    def test_cmake_project_is_unchanged(self, collector):
+        r = self._collect(collector, ["CMakeLists.txt", "pyproject.toml"], "[tool.black]\n")
+        assert r["has_portable_build_system"] is True
+        assert "python_package" not in r
