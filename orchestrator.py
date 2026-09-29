@@ -374,8 +374,8 @@ class MetricsOrchestrator:
         url = f"{self.dashboard_base_url}/explore/github-data/intReposInfo.json"
         data = self._fetch_json(url)
         if data is None:
-            # Returning {} here made every scheduled run "succeed" with 0
-            # packages while the catalog URL was down.
+            # Fail loudly: an empty catalog would let the run report success
+            # having collected nothing.
             raise RuntimeError(f"Could not load the software catalog from {url}")
         return data.get("data", {})
 

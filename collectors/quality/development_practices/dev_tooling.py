@@ -165,8 +165,7 @@ class DevToolingCollector(GitHubCollectorBase):
             if dirs:
                 mark("Unit-test framework", min(dirs, key=lambda p: (p.count("/"), p)))
         if "Test suite directory" in missing:
-            # A suite kept beside the package it tests (Spack's 231 test
-            # modules live in lib/spack/spack/test/) rather than at the root.
+            # A suite kept beside the package it tests rather than at the root.
             # Hidden trees (.github/, .agents/) hold tooling, not the suite.
             hits = [p for p in tree.find(_NESTED_TEST_DIR)
                     if not _VENDORED_DIR.search(p) and not re.search(r"(?:^|/)\.", p)]

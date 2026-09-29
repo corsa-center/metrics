@@ -201,14 +201,14 @@ class TestReadmeLinkSections:
             return asyncio.run(collector._analyze_readme(None, "o", "r"))["sections"]
 
     def test_topics_covered_by_links_count(self, collector):
-        # Trilinos: everything is a linked bullet under one heading.
-        md = ("# Trilinos\n[Contact Us](https://x/support)\n### Documentation\n"
-              "- [Getting Started with Trilinos](https://x/getting_started)\n")
+        # Every topic a linked bullet under one heading.
+        md = ("# Pkg\n[Contact Us](https://x/support)\n### Documentation\n"
+              "- [Getting Started with Pkg](https://x/getting_started)\n")
         assert set(self._sections(collector, md)) == {"Installation", "Support"}
 
     def test_link_must_start_with_the_topic(self, collector):
         # An install guide whose title merely contains "using" isn't Usage.
-        assert "Usage" not in self._sections(collector, "[Building Albany using Spack](x)")
+        assert "Usage" not in self._sections(collector, "[Building Pkg using Spack](x)")
 
     def test_badges_do_not_count(self, collector):
         md = "[![Build and install status](https://x/badge.svg)](https://x/actions)"

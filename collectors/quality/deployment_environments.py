@@ -77,10 +77,10 @@ _ARCH_PATTERNS = {
 # variants, CMake options, GPU arch targets, vendor images) -- a bare "cuda"
 # also appears in comments, job names and environment variables.
 _ACCELERATOR_PATTERNS = {
-    # GPU model names in runner labels (gpu:A100) and Kokkos architecture
-    # names (Ampere80, Kokkos_ARCH_VOLTA70) are also build-configuration
-    # evidence: Trilinos' PR testing runs CUDA builds on self-hosted A100
-    # runners configured that way, with none of the flag spellings above.
+    # GPU model names in self-hosted runner labels (gpu:A100) and Kokkos
+    # architecture names (Ampere80, Kokkos_ARCH_VOLTA70) are build
+    # configuration too, for CI that targets a GPU without any of the flag
+    # spellings above.
     "NVIDIA GPU (CUDA)": re.compile(
         r"\+cuda\b|\bcuda_arch=|CMAKE_CUDA_ARCHITECTURES\b|-D\w*_CUDA=ON\b"
         r"|GPU_BACKEND=CUDA\b|\bnvidia/cuda:"

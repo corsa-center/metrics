@@ -97,7 +97,7 @@ class TestAcceleratorDetection:
         ("-DENABLE_HIP=ON", "AMD GPU (ROCm/HIP)"),
         ("-DAMReX_GPU_BACKEND=HIP", "AMD GPU (ROCm/HIP)"),
         ("-DENABLE_SYCL=ON", "Intel GPU (SYCL)"),
-        # Trilinos AT2: self-hosted GPU runner labels and genconfig names.
+        # Self-hosted GPU runner labels and Kokkos architecture names.
         ("target-runner-labels: \"['self-hosted', 'gpu:A100']\"", "NVIDIA GPU (CUDA)"),
         ("genconfig-string: rhel_cuda-12-gcc_release_Ampere80_no-asan", "NVIDIA GPU (CUDA)"),
         ("-DKokkos_ARCH_VOLTA70=ON", "NVIDIA GPU (CUDA)"),

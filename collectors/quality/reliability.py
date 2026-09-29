@@ -60,8 +60,8 @@ _ANALYSIS_CONFIGS = {
 # don't apply to them, so a project written mainly in one is marked not
 # applicable rather than failed when no indicators are found. A list of
 # exclusions rather than of compiled languages, because GitHub's primary
-# language is unreliable for C/C++ repositories ("LLVM" for llvm-project,
-# "HTML" or "Gnuplot" for others).
+# language often misreports C/C++ repositories whose bulk is IR, docs or data
+# ("LLVM", "HTML", "Gnuplot").
 _CERT_NOT_APPLICABLE = {"python", "jupyter notebook", "r", "julia", "javascript", "typescript", "matlab"}
 
 # Tool and sanitizer names to look for inside CI workflow definitions.

@@ -44,8 +44,7 @@ _DOC_EXTENSIONS = {".md", ".rst", ".adoc", ".tex", ".dox"}
 # or under an explicit doc directory.
 _CONTEXTUAL_DOC_EXTENSIONS = {".txt"}
 
-# unit_test/ and *_UnitTests.cpp are the Kokkos/Trilinos conventions; missing
-# them put Kokkos at 0.008 tests per source file.
+# Includes the unit_test/ and *_UnitTests.cpp conventions common in C++ HPC code.
 _TEST_PATH = re.compile(r"(^|/)(tests?|testing|unit_?tests?)(/|$)", re.IGNORECASE)
 _TEST_FILE = re.compile(
     r"(^|/)(test_[^/]+|[^/]+_(?:unit)?tests?|[^/]*UnitTests?[^/]*)\.[a-z0-9]+$", re.IGNORECASE)

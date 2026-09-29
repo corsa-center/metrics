@@ -105,10 +105,9 @@ class AccessibilityCollector(GitHubCollectorBase):
 
         A pip-installable package is the portable, cross-platform install for
         a Python project, which otherwise has none of the listed build
-        systems -- Spack, the report's own example of a portable build
-        system, failed this check. A pyproject.toml counts only if it
-        declares a build or project table; many hold nothing but tool
-        settings (ruff, black) for a C++ codebase.
+        systems. A pyproject.toml counts only if it declares a build or
+        project table; many hold nothing but tool settings (ruff, black)
+        for a C++ codebase.
         """
         details = result["categories"].get("python_packaging", {}).get("details", {})
         if details.get("setup.py", {}).get("exists"):

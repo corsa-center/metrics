@@ -449,7 +449,7 @@ class TestCertApplicability:
 
     @pytest.mark.parametrize("language", [None, "LLVM", "HTML", "Shell"])
     def test_unknown_or_misreported_language_is_still_scored(self, collector, language):
-        # GitHub reports llvm-project as "LLVM" and some C++ repos as "HTML".
+        # GitHub misreports some C/C++ repositories as "LLVM" or "HTML".
         assert "not_applicable" not in self._cert(collector, [], language)
 
     def test_hardening_found_in_a_python_project_still_counts(self, collector):
