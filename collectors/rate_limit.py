@@ -34,10 +34,18 @@ _SEARCH_PER_MINUTE = 25
 
 
 class _MinuteLimiter:
-    """Allows at most `limit` acquisitions in any rolling 60-second window."""
+    """Allows at most `limit` acquisitions in any rolling 60-second window,
+    spaced at least 60/limit seconds apart.
+
+    The spacing matters as much as the count: a full minute's allowance
+    released at once trips GitHub's secondary rate limit (403) even though
+    the per-minute total is within bounds, and after search_get's retries
+    that becomes a silently missing result.
+    """
 
     def __init__(self, limit: int):
         self._limit = limit
+        self._interval = 60 / limit
         self._times: list = []
         self._lock = asyncio.Lock()
 
@@ -46,6 +54,9 @@ class _MinuteLimiter:
             while True:
                 now = time.monotonic()
                 self._times = [t for t in self._times if now - t < 60]
+                if self._times and now - self._times[-1] < self._interval:
+                    await asyncio.sleep(self._interval - (now - self._times[-1]))
+                    continue
                 if len(self._times) < self._limit:
                     self._times.append(now)
                     return
