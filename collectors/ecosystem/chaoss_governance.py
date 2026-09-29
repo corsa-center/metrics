@@ -267,9 +267,12 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         """CHAOSS: Time to Close and Issue Age."""
         closed_issues = await self._get_closed_issues(client, owner, repo, limit=30)
         open_issues = await self._get_open_issues(client, owner, repo, limit=50)
+        issue_age = self._calculate_issue_age(open_issues)
+        if not open_issues and not closed_issues and open_issues is not COLLECTION_GAP:
+            issue_age = {"count": 0, "not_collected": True, "reason": "no issues"}
         return {
             "time_to_close": self._calculate_time_to_close(closed_issues),
-            "issue_age": self._calculate_issue_age(open_issues),
+            "issue_age": issue_age,
         }
 
     async def _get_change_request_metrics(
@@ -477,7 +480,9 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         if closed_issues is COLLECTION_GAP:
             return {"not_collected": True}
         if not closed_issues:
-            return {"count": 0, "avg_days": 0, "median_days": 0, "min_days": 0, "max_days": 0, "score": 0}
+            # Nothing closed yet: time to close can't be measured, and scoring
+            # it 0 would count it as the slowest possible.
+            return {"count": 0, "not_collected": True, "reason": "no closed issues"}
 
         days_to_close = []
         for issue in closed_issues:
@@ -505,7 +510,9 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         if open_issues is COLLECTION_GAP:
             return {"not_collected": True}
         if not open_issues:
-            return {"count": 0, "avg_days": 0, "median_days": 0, "max_days": 0, "stale_issues": 0, "score": 0}
+            # No open backlog is the best case, not the worst; _get_issue_metrics
+            # drops it instead when the project has no issues at all.
+            return {"count": 0, "avg_days": 0, "median_days": 0, "max_days": 0, "stale_issues": 0, "score": 100}
 
         now = datetime.now(timezone.utc)
         ages = []
