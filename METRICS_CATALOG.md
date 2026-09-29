@@ -390,7 +390,7 @@ ecosyste.ms a second time for the same answer.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found; failing those, a pip-installable Python package (`setup.py`, or `pyproject.toml` with `[project]`/`[build-system]`) | |
+| Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found at the root; failing those, Meson, the Fortran Package Manager, a Spack recipe or environment elsewhere in the tree, a CMake/configure build one directory down (`llvm/`, `src/`), a root install script, or a pip-installable Python package (`setup.py`, or `pyproject.toml` with `[project]`/`[build-system]`) | docs, test, example and template directories are ignored |
 | Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
 | Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build configuration only (Spack variants, CMake options, GPU arch targets, vendor images, GPU model names in runner labels, Kokkos architecture names) |
 | Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | |

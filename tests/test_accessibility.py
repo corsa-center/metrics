@@ -163,3 +163,26 @@ class TestPythonPackageAsPortableBuild:
         r = self._collect(collector, ["CMakeLists.txt", "pyproject.toml"], "[tool.black]\n")
         assert r["has_portable_build_system"] is True
         assert "python_package" not in r
+
+
+class TestOtherBuildPaths:
+    @pytest.mark.parametrize("paths,label", [
+        (["meson.build"], "Meson"),
+        (["fpm.toml", "src/a.f90"], "Fortran Package Manager"),
+        (["spack/packages/py-x/package.py"], "Spack"),
+        (["environments/gnu/spack.yaml"], "Spack"),
+        (["src/CMakeLists.txt", "src/a.c"], "CMake"),
+        (["src/configure"], "Autoconf / configure"),
+        (["configure", "src/a.c"], "Autoconf / configure"),
+        (["install.sh"], "Install script"),
+    ])
+    def test_found(self, collector, paths, label):
+        assert collector._other_build(RepoTree("o", "r", paths, False)).startswith(label)
+
+    @pytest.mark.parametrize("paths", [
+        ["docs/CMakeLists.txt"], ["examples/CMakeLists.txt"], ["lib/pkg/package.py"],
+        ["docs/spack.yaml"], ["var/test_repos/packages/mock/package.py"],
+        ["share/templates/spack.yaml"], ["third_party/zlib/CMakeLists.txt"], ["a/b/CMakeLists.txt"],
+    ])
+    def test_not_a_build(self, collector, paths):
+        assert collector._other_build(RepoTree("o", "r", paths, False)) is None
