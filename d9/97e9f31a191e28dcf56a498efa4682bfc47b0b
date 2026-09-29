@@ -1,0 +1,23 @@
+collectors/quality/usability.py
+  s_72fde105c4df10::t_7c4efed56df285 100-102,108
+  s_72fde105c4df10::t_397038cbe32af7 43-45
+  s_72fde105c4df10::t_2d8cc4ae3ccfbf 46
+tests/test_usability.py
+  s_72fde105c4df10::t_18f73cf7518456 193-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d997e9f31a191e28dcf56a498efa4682bfc47b0b",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
