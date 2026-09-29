@@ -14,11 +14,13 @@ releases API call rather than a simple file-existence check.
 """
 
 import asyncio
+import base64
 import httpx
 import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from collectors.quality.usability import readme_covers
 from collectors.ecosystem.base import (
     COLLECTION_GAP, CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN,
     GitHubCollectorBase, RepoTree, RetryingTransport,
@@ -173,8 +175,16 @@ class ReproducibilityCollector(GitHubCollectorBase):
                 RepoTree.fetch(client, self.github_headers, owner, repo),
                 self._check_semantic_versioning(client, owner, repo),
             )
-
-        categories = {**self._scan_files(tree), "semantic_versioning": semver}
+            categories = {**self._scan_files(tree), "semantic_versioning": semver}
+            docs = categories["reproducibility_docs"]
+            if tree is not COLLECTION_GAP and "Install / build guide" in docs["missing"]:
+                readme = await self._readme_install_section(client, owner, repo)
+                if readme:
+                    docs["missing"].remove("Install / build guide")
+                    docs["found"].append("Install / build guide")
+                    docs["details"]["Install / build guide"] = {"exists": True, **readme}
+                    docs["count_found"] = len(docs["found"])
+                    docs["percentage"] = round(len(docs["found"]) / docs["count_total"] * 100, 1)
         overall = self._compute_overall(categories)
 
         return {
@@ -245,6 +255,20 @@ class ReproducibilityCollector(GitHubCollectorBase):
             }
 
         return results
+
+    async def _readme_install_section(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Optional[Dict[str, str]]:
+        """The README's installation section, if it has one: build
+        instructions often live there rather than in a separate INSTALL file."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
+        if not isinstance(data, dict):
+            return None
+        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+        if readme_covers(text, "Installation"):
+            path = data.get("path", "README.md")
+            return {"file": f"{path} (installation section)", "url": data.get("html_url")}
+        return None
 
     # ------------------------------------------------------------------ #
     # Semantic versioning (GitHub releases API)                           #
