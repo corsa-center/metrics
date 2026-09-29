@@ -77,18 +77,25 @@ _ARCH_PATTERNS = {
 # variants, CMake options, GPU arch targets, vendor images) -- a bare "cuda"
 # also appears in comments, job names and environment variables.
 _ACCELERATOR_PATTERNS = {
+    # GPU model names in runner labels (gpu:A100) and Kokkos architecture
+    # names (Ampere80, Kokkos_ARCH_VOLTA70) are also build-configuration
+    # evidence: Trilinos' PR testing runs CUDA builds on self-hosted A100
+    # runners configured that way, with none of the flag spellings above.
     "NVIDIA GPU (CUDA)": re.compile(
         r"\+cuda\b|\bcuda_arch=|CMAKE_CUDA_ARCHITECTURES\b|-D\w*_CUDA=ON\b"
-        r"|GPU_BACKEND=CUDA\b|\bnvidia/cuda:",
+        r"|GPU_BACKEND=CUDA\b|\bnvidia/cuda:"
+        r"|\b(?:[AHV]100|P100|GH200|H200|B200)\b"
+        r"|(?:\b|_)(?:Kepler|Maxwell|Pascal|Volta|Turing|Ampere|Ada|Hopper|Blackwell)\d{2}(?![a-z0-9])",
         re.I,
     ),
     "AMD GPU (ROCm/HIP)": re.compile(
         r"\+rocm\b|\bamdgpu_target=|CMAKE_HIP_ARCHITECTURES\b|-D\w*_HIP=ON\b"
-        r"|GPU_BACKEND=HIP\b|\bgfx9[0-4][0-9a-f]\b",
+        r"|GPU_BACKEND=HIP\b|(?:\b|_)gfx9[0-4][0-9a-f](?![a-z0-9])"
+        r"|\bMI(?:50|60|100|210|250X?|300[AX]?)\b",
         re.I,
     ),
     "Intel GPU (SYCL)": re.compile(
-        r"\+sycl\b|-D\w*_SYCL=ON\b|GPU_BACKEND=SYCL\b",
+        r"\+sycl\b|-D\w*_SYCL=ON\b|GPU_BACKEND=SYCL\b|(?:\b|_)INTEL_(?:PVC|XEHP|DG[12])\b",
         re.I,
     ),
 }
