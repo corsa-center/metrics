@@ -2358,6 +2358,7 @@ class MetricsOrchestrator:
         dashboard's update workflow into explore/github-data/.
         """
         failed = []
+        written: Dict[str, str] = {}
         for repo_name, metrics in all_metrics.items():
             # One package's rendering error used to abort the loop and drop
             # every later package's output; write the rest, then fail the run.
@@ -2370,6 +2371,14 @@ class MetricsOrchestrator:
 
             # Extract repo part from "Owner/repo" for directory name
             repo_short = repo_name.split("/")[-1]
+            # The dashboard keys files by repository name alone, so two
+            # catalog entries with the same name overwrite each other.
+            if repo_short.lower() in written:
+                logger.error(
+                    f"{repo_name} and {written[repo_short.lower()]} both write "
+                    f"{repo_short}-metrics/metrics.json; the dashboard shows only {repo_name}"
+                )
+            written[repo_short.lower()] = repo_name
             metrics_dir = self.output_path / f"{repo_short}-metrics"
             metrics_dir.mkdir(parents=True, exist_ok=True)
 

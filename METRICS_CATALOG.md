@@ -185,9 +185,9 @@ ADIOS2 53%, zfp 93%.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| New Contributor Tracking | ✅ | >0 new contributors found | contributors whose all-time count is fully inside the last 365 days |
-| Contributor Retention Analysis | ✅ | ≥50% of new contributors made ≥2 commits | share of newcomers with ≥2 commits |
-| Contributor Lifecycle Mapping | ✅ | ≥3 repeat contributors (5+ commits) | one-time (1) / casual (2–4) / repeat (5+) buckets from `/contributors` |
+| New Contributor Tracking | ✅ | >0 new contributors found | contributors whose all-time count is fully inside the last 365 days; not measurable (no mark) when many recent authors are missing from GitHub's contributor list, which links only the first 500 author emails, or when 1000 commits don't reach back a year |
+| Contributor Retention Analysis | ✅ | ≥50% of new contributors made ≥2 commits | share of newcomers with ≥2 commits; no mark with fewer than 3 newcomers, or when newcomers aren't measurable |
+| Contributor Lifecycle Mapping | ✅ | ≥3 repeat contributors (5+ commits) | one-time (1) / casual (2–4) / repeat (5+) buckets from `/contributors`; not measurable when that list is cut off |
 | Contribution Type Diversity | 🔲 | — | non-code contributions aren't recorded in the repo |
 | Good First Issue Effectiveness | ✅ | ≥1 **open** issue labelled `good first issue`, `help wanted`, or `newcomer` | search API counts |
 | External Event Participation | 🔲 | — | needs conference programmes |

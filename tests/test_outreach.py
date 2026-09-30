@@ -70,18 +70,48 @@ class TestScoring:
         )
 
     def test_three_submetrics_stay_uncollected(self, collector):
-        sub = self._score(collector)["sub_scores"]
+        growth = {"new_contributors": 5, "retention_rate": 40.0}
+        sub = self._score(collector, growth)["sub_scores"]
         uncollected = [k for k, v in sub.items() if v.get("not_collected")]
         assert len(uncollected) == 3
         # The 3 permanently-uncollected submetrics must not inflate the
         # denominator -- only the 5 actually-measured ones are scorable.
-        assert self._score(collector)["max_score"] == 5
+        assert self._score(collector, growth)["max_score"] == 5
 
     def test_retention_threshold(self, collector):
-        assert self._score(collector, {"retention_rate": 50})["sub_scores"][
+        assert self._score(collector, {"retention_rate": 50, "new_contributors": 4})["sub_scores"][
             "contributor_retention"]["passing"]
-        assert not self._score(collector, {"retention_rate": 49})["sub_scores"][
+        assert not self._score(collector, {"retention_rate": 49, "new_contributors": 4})["sub_scores"][
             "contributor_retention"]["passing"]
+
+    def test_retention_of_too_few_newcomers_is_unmarked(self, collector):
+        for growth in ({"new_contributors": 0, "retention_rate": None},
+                       {"new_contributors": 2, "retention_rate": 0.0}):
+            s = self._score(collector, growth)
+            assert s["sub_scores"]["contributor_retention"]["insufficient_sample"]
+            assert s["max_score"] == 4
+
+    def test_truncated_contributor_list_is_not_measurable(self, collector):
+        contributors = [{"login": f"core{i}", "contributions": 500} for i in range(20)]
+        recent = {**{f"core{i}": 50 for i in range(20)}, **{f"new{i}": 1 for i in range(30)}}
+        growth = collector._analyze_contributor_growth(contributors, recent)
+        assert growth["contributor_list_truncated"]
+        sub = self._score(collector, growth)["sub_scores"]
+        for key in ("new_contributor_tracking", "contributor_retention", "contributor_lifecycle"):
+            assert sub[key].get("unmeasured"), key
+            assert "Not measurable" in sub[key]["value"]
+
+    def test_one_or_two_unlisted_authors_is_not_truncation(self, collector):
+        # The contributor list lags new commits slightly; that isn't truncation.
+        contributors = [{"login": f"c{i}", "contributions": 5} for i in range(10)]
+        recent = {**{f"c{i}": 5 for i in range(10)}, "brand_new": 1}
+        assert not collector._analyze_contributor_growth(contributors, recent)["contributor_list_truncated"]
+
+    def test_capped_commit_window_leaves_new_contributors_unmeasured(self, collector):
+        growth = {"new_contributors": 0, "retention_rate": None, "commit_window_truncated": True}
+        sub = self._score(collector, growth)["sub_scores"]
+        assert sub["new_contributor_tracking"].get("unmeasured")
+        assert not sub["contributor_lifecycle"].get("unmeasured")
 
     def test_good_first_issue_needs_open_ones(self, collector):
         # Closed-only history doesn't help a newcomer arriving today.
@@ -267,6 +297,25 @@ class TestGetContributorsGapHandling:
         assert saw_gap is False
 
 
+class TestRecentCommitWindow:
+    def _walk(self, collector, next_url):
+        commit = {"author": {"login": "a"}}
+
+        async def go():
+            with patch.object(collector, "_get_page",
+                              new=AsyncMock(return_value=([commit] * 100, next_url))):
+                return await collector._get_recent_commit_authors(None, "o", "r")
+        return asyncio.run(go())
+
+    def test_hitting_the_page_cap_is_truncation(self, collector):
+        counts, gap, truncated = self._walk(collector, "http://next")
+        assert truncated and not gap
+
+    def test_reaching_the_end_is_not_truncation(self, collector):
+        _, _, truncated = self._walk(collector, None)
+        assert not truncated
+
+
 class TestGetNewcomerIssuesGapHandling:
     def test_open_search_failure_with_zero_is_not_collected(self, collector):
         async def fake_search_get(client, url, headers):
@@ -369,7 +418,7 @@ class TestReadmeOnboarding:
                                    ".github/PULL_REQUEST_TEMPLATE.md", "docs/quickstart.md"],
                         truncated=False)
         with patch.object(collector, "_get_contributors", new=AsyncMock(return_value=([], False))), \
-             patch.object(collector, "_get_recent_commit_authors", new=AsyncMock(return_value=({}, False))), \
+             patch.object(collector, "_get_recent_commit_authors", new=AsyncMock(return_value=({}, False, False))), \
              patch.object(collector, "_get_newcomer_issues", new=AsyncMock(return_value={"open": 0, "closed": 0, "total": 0})), \
              patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
              patch.object(collector, "_get_readme_text", new=AsyncMock(return_value="")) as readme:

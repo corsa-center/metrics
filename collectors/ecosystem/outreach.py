@@ -101,9 +101,9 @@ class OutreachCollector(GitHubCollectorBase):
 
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=recent_commits reason=exception:{results[1]!r}")
-            recent_commits, commits_gap = {}, True
+            recent_commits, commits_gap, commits_truncated = {}, True, False
         else:
-            recent_commits, commits_gap = results[1]
+            recent_commits, commits_gap, commits_truncated = results[1]
 
         if isinstance(results[2], Exception):
             logger.warning(f"COLLECTION-GAP category=newcomer_issues reason=exception:{results[2]!r}")
@@ -122,7 +122,7 @@ class OutreachCollector(GitHubCollectorBase):
             if readme:
                 self._credit_readme(onboarding, readme)
 
-        growth = self._analyze_contributor_growth(contributors, recent_commits)
+        growth = self._analyze_contributor_growth(contributors, recent_commits, commits_truncated)
 
         return {
             "package_name": repo_name,
@@ -192,14 +192,15 @@ class OutreachCollector(GitHubCollectorBase):
     ) -> tuple:
         """Commit counts per author over the recent window.
 
-        Returns (counts, saw_gap).
+        Returns (counts, saw_gap, truncated); truncated means the page cap
+        ended the walk before the window did.
         """
         since = (datetime.now(timezone.utc) - timedelta(days=_RECENT_DAYS)).isoformat()
         url = f"https://api.github.com/repos/{owner}/{repo}/commits"
         params: Optional[dict] = {"since": since, "per_page": 100}
         counts: Dict[str, int] = {}
-        saw_gap = False
-        for _ in range(_MAX_COMMIT_PAGES):
+        saw_gap = truncated = False
+        for page_no in range(_MAX_COMMIT_PAGES):
             page, next_url = await self._get_page(client, url, params)
             if page is COLLECTION_GAP:
                 saw_gap = True
@@ -212,8 +213,10 @@ class OutreachCollector(GitHubCollectorBase):
                     counts[login] = counts.get(login, 0) + 1
             if not next_url:
                 break
+            if page_no == _MAX_COMMIT_PAGES - 1:
+                truncated = True
             url, params = next_url, None
-        return counts, saw_gap
+        return counts, saw_gap, truncated
 
     async def _get_newcomer_issues(
         self, client: httpx.AsyncClient, owner: str, repo: str
@@ -323,7 +326,8 @@ class OutreachCollector(GitHubCollectorBase):
     # ---------------------------------------------------------------- analyze
 
     def _analyze_contributor_growth(
-        self, contributors: List[Dict], recent_counts: Dict[str, int]
+        self, contributors: List[Dict], recent_counts: Dict[str, int],
+        window_truncated: bool = False,
     ) -> Dict[str, Any]:
         """Derive newcomer, retention and lifecycle figures.
 
@@ -332,6 +336,13 @@ class OutreachCollector(GitHubCollectorBase):
         have no history before it. This avoids a second pass over the whole
         commit log to find each author's first commit, at the cost of missing
         anyone whose recent commits exceed the pagination cap.
+
+        That only works when both lists are whole. GitHub's contributor list
+        links just the first 500 author emails to accounts, so in a large
+        project the newest contributors are simply absent from it; and a
+        recent-commit walk cut off by the page cap covers only part of the
+        year. Either way the figures would read as "no newcomers", so they
+        are flagged as not measurable instead.
         """
         if not contributors:
             return {
@@ -340,6 +351,9 @@ class OutreachCollector(GitHubCollectorBase):
                 "retained_new_contributors": 0,
                 "retention_rate": None,
                 "lifecycle": {"one_time": 0, "casual": 0, "repeat": 0},
+                "contributor_list_truncated": False,
+                "unlisted_recent_authors": 0,
+                "commit_window_truncated": window_truncated,
             }
 
         totals = {
@@ -347,6 +361,9 @@ class OutreachCollector(GitHubCollectorBase):
             for c in contributors
             if c.get("login")
         }
+
+        unlisted = [login for login in recent_counts if login not in totals]
+        list_truncated = len(unlisted) > max(2, len(recent_counts) // 10)
 
         new_contributors = [
             login
@@ -380,6 +397,9 @@ class OutreachCollector(GitHubCollectorBase):
             "retained_new_contributors": len(retained),
             "retention_rate": retention_rate,
             "lifecycle": lifecycle,
+            "contributor_list_truncated": list_truncated,
+            "unlisted_recent_authors": len(unlisted),
+            "commit_window_truncated": window_truncated,
         }
 
     def _calculate_score(
@@ -397,8 +417,18 @@ class OutreachCollector(GitHubCollectorBase):
                      + ("s" if _RECENT_DAYS // 365 != 1 else ""),
             "passing": new_passing,
         }
+        list_truncated = growth.get("contributor_list_truncated", False)
+        incomplete = list_truncated or growth.get("commit_window_truncated", False)
+        if list_truncated:
+            why = (f"not measurable: {growth.get('unlisted_recent_authors', 0)} recent authors "
+                   "are beyond GitHub's contributor list")
+        else:
+            why = (f"not measurable: the last {_MAX_COMMIT_PAGES * 100} commits "
+                   f"don't reach back {_RECENT_DAYS} days")
         if not new_passing and (contributors_gap or commits_gap):
             new_entry["not_collected"] = True
+        elif not new_passing and incomplete:
+            new_entry.update(value=why[0].upper() + why[1:], unmeasured=True)
         sub["new_contributor_tracking"] = new_entry
 
         rate = growth.get("retention_rate")
@@ -409,8 +439,17 @@ class OutreachCollector(GitHubCollectorBase):
                      else "No new contributors to measure",
             "passing": retention_passing,
         }
+        min_new = get_threshold("4.2.5", "Contributor Retention Analysis", "min_new_contributors")
         if not retention_passing and (contributors_gap or commits_gap):
             retention_entry["not_collected"] = True
+        elif incomplete:
+            retention_entry.update(value=why[0].upper() + why[1:], unmeasured=True, passing=False)
+        elif new_count < min_new:
+            # Retention of one or two newcomers says nothing either way.
+            retention_entry.update(
+                value=f"{new_count} new contributor(s) in the last year; too few to judge retention"
+                      if new_count else "No new contributors to measure",
+                insufficient_sample=True, passing=False)
         sub["contributor_retention"] = retention_entry
 
         lifecycle = growth.get("lifecycle", {})
@@ -424,6 +463,13 @@ class OutreachCollector(GitHubCollectorBase):
         }
         if not lifecycle_passing and contributors_gap:
             lifecycle_entry["not_collected"] = True
+        elif list_truncated:
+            # The missing tail of the list is exactly the one-time and casual
+            # contributors, so the split can't be read from what's there.
+            lifecycle_entry.update(
+                value=f"Not measurable: {growth.get('unlisted_recent_authors', 0)} recent authors "
+                      "are beyond GitHub's contributor list",
+                unmeasured=True, passing=False)
         sub["contributor_lifecycle"] = lifecycle_entry
 
         gfi_total = newcomer_issues.get("total", 0)
@@ -458,7 +504,8 @@ class OutreachCollector(GitHubCollectorBase):
         ]:
             sub[key] = {"label": label, "value": None, "passing": False, "not_collected": True}
 
-        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        scorable = {k: v for k, v in sub.items()
+                    if not (v.get("not_collected") or v.get("unmeasured") or v.get("insufficient_sample"))}
         score = sum(1 for s in scorable.values() if s.get("passing"))
         max_score = len(scorable)
         if not max_score:
