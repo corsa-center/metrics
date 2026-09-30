@@ -64,6 +64,8 @@ python scripts/generate_corsa_citations.py \
 |------|-------------|
 | `output/ecosystemMetrics.json` | Dashboard-ready metrics JSON |
 | `output/orchestrator_summary.json` | Run summary (scores, counts, top packages) |
+| `output/{repo}-metrics/metrics.json` | Per-package dashboard data (CASS sections) |
+| `output/{repo}-metrics/report.html` | Per-package report: each row's evidence, its threshold, and how the scores were computed |
 | `orchestrator.log` | Detailed collection log |
 
 ---

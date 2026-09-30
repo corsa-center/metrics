@@ -585,12 +585,34 @@ class ThresholdRegistry:
         return default_value
 
 
+    def section(self, section: str) -> Dict[str, Any]:
+        """Every threshold configured for one section, overrides applied.
+
+        Used by the per-project report to state which values a run was
+        actually judged against; {} for a section with nothing configurable.
+        """
+        resolved: Dict[str, Any] = {}
+        for label, default_value in self._defaults.get(section, {}).items():
+            if isinstance(default_value, dict):
+                resolved[label] = {
+                    param: self.get(section, label, param) for param in default_value
+                }
+            else:
+                resolved[label] = self.get(section, label)
+        return resolved
+
+
 _REGISTRY = ThresholdRegistry(_THRESHOLDS_PATH)
 
 
 def get_threshold(section: str, label: str, param: Optional[str] = None) -> _ThresholdValue:
     """Module-level convenience wrapper around the shared registry instance."""
     return _REGISTRY.get(section, label, param)
+
+
+def get_section_thresholds(section: str) -> Dict[str, Any]:
+    """Module-level convenience wrapper around ThresholdRegistry.section."""
+    return _REGISTRY.section(section)
 
 
 def configure_threshold_overrides(overrides: Optional[Dict[str, Dict[str, Any]]]) -> None:
