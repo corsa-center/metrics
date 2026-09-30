@@ -405,6 +405,34 @@ class TestFetchGapHandling:
         assert saw_gap is True
 
 
+class TestReleasesFromTags:
+    def _run(self, collector, releases, tags):
+        async def get(client, url, params=None):
+            return releases if url.endswith("/releases") else tags
+        collector._github_get = get
+        return asyncio.run(collector._has_releases(None, "o", "r"))
+
+    def test_version_tags_count_without_release_objects(self, collector):
+        assert self._run(collector, [], [{"name": "v9.17.2"}]) == (True, False)
+
+    def test_non_version_tags_do_not(self, collector):
+        assert self._run(collector, [], [{"name": "stable"}, {"name": "paper-submission"}]) == (False, False)
+
+    def test_tags_gap_is_tracked(self, collector):
+        assert self._run(collector, [], COLLECTION_GAP) == (False, True)
+
+
+class TestBareBsd3:
+    def test_open_source_license_bsd_3(self, collector):
+        out = collector._analyze_license_text(
+            {"spdx_id": "NOASSERTION", "text": "Copyright 2020 UT-Battelle\nOPEN SOURCE LICENSE BSD-3\n"})
+        assert out["resolved_from_text"] == "BSD-3-Clause"
+
+    def test_freebsd_is_not_bsd_3(self, collector):
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": "Tested on FreeBSD 3.2"})
+        assert out["resolved_from_text"] is None
+
+
 class TestBibtexCitation:
     PAPER = """
 ```bibtex

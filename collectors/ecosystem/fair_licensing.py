@@ -35,7 +35,7 @@ _UNCLASSIFIED = {None, "", "NOASSERTION", "Other", "unknown"}
 # License families recoverable from prose, ordered most specific first so
 # "3-clause BSD" is not swallowed by a bare "BSD" match.
 _LICENSE_TEXT_PATTERNS = [
-    ("BSD-3-Clause", r"\b(?:3[- ]clause BSD|BSD 3[- ]clause|new BSD|modified BSD)\b"),
+    ("BSD-3-Clause", r"\b(?:3[- ]clause BSD|BSD[- ]3(?:[- ]clause)?|new BSD|modified BSD)\b"),
     ("BSD-2-Clause", r"\b(?:2[- ]clause BSD|BSD 2[- ]clause|simplified BSD)\b"),
     ("Apache-2.0", r"\bApache Licen[sc]e,? Version 2\.0\b"),
     ("MIT", r"\bMIT Licen[sc]e\b"),
@@ -244,14 +244,24 @@ class FairLicensingCollector(GitHubCollectorBase):
     async def _has_releases(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> tuple:
-        """Returns (has_releases, saw_gap)."""
+        """Returns (has_releases, saw_gap). Version tags count too: many
+        projects publish versions as tags without GitHub Release objects."""
         data = await self._github_get(
             client, f"https://api.github.com/repos/{owner}/{repo}/releases",
             params={"per_page": 1},
         )
         if data is COLLECTION_GAP:
             return False, True
-        return bool(data), False
+        if data:
+            return True, False
+        tags = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/tags",
+            params={"per_page": 20},
+        )
+        if tags is COLLECTION_GAP:
+            return False, True
+        return any(re.search(r"\d+\.\d+", t.get("name", "")) for t in tags or []
+                   if isinstance(t, dict)), False
 
     # ---------------------------------------------------------------- analyze
 
