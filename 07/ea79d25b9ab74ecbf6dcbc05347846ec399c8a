@@ -1,0 +1,32 @@
+ORCHESTRATOR_GUIDE.md
+  s_c99a47d6009d92::t_d8c08ed8727a4f 138-148
+QUICK_REFERENCE.md
+  s_c99a47d6009d92::t_d8c08ed8727a4f 67-68
+orchestrator.py
+  s_c99a47d6009d92::t_27bf1942911806 31,1015-1023,1037-1040,2361-2366,2382-2385
+  s_c99a47d6009d92::t_affa06df277f3b 2386
+collectors/ecosystem/base.py
+  s_c99a47d6009d92::t_b56705238837bf 588-604,613-615
+  s_c99a47d6009d92::t_cb1168535c92a9 616-617
+tests/test_project_report.py
+  s_c99a47d6009d92::t_41f93311f2f844 1-110
+project_report.py
+  s_c99a47d6009d92::t_f3d6254dde7337 1-26,31-57,64,66-185
+  s_c99a47d6009d92::t_c991e797462d58 27-30,58-63,65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "07ea79d25b9ab74ecbf6dcbc05347846ec399c8a",
+  "prompts": {},
+  "sessions": {
+    "s_c99a47d6009d92": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d1785ce-a401-438a-b185-f9e647d490e2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
