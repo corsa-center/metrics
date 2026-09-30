@@ -40,20 +40,57 @@ _FUNDING_FILES = [
     ".github/FUNDING.yml", ".github/FUNDING.yaml", "FUNDING.yml", "funding.json",
 ]
 
-# Award-number shapes used by the agencies that fund this portfolio.
-# Deliberately narrow: a looser pattern matches version strings and issue numbers.
+# Award-number shapes, as (pattern, kind). Drawn from how funders' award
+# numbers are actually written in project READMEs (US, EU, UK, Germany,
+# France, Canada, Japan, Australia, China, Switzerland, Wellcome), and kept
+# narrow: a looser pattern matches version strings and issue numbers.
+# Patterns with a capture group take the award from context ("... grant
+# agreement No 101095998"); the value is the group. Specific formats come
+# before the generic contextual one so an award keeps its funder's kind.
+# (?-i:...) marks prefixes that are also ordinary words in lower case.
 _GRANT_PATTERNS = [
     (r"\bDE-[A-Z]{2}\d{2}-?\d{2}[A-Z]{2}\d{5}\b", "DOE contract"),
+    # DE-NA numbers are NNSA's; kept apart so an NNSA acknowledgment beside
+    # one (e.g. a lab's operating-contract statement) isn't a second source.
+    (r"\bDE-NA-?\d{7}\b", "NNSA contract"),
     # Written both as DE-SC0021354 and DE-SC-0021354.
     (r"\bDE-(?:AC|SC|EE|NA)-?\d{2}-?\d*[A-Z]*\d*\b", "DOE award"),
-    (r"\b(?:NSF|OAC|ACI|SI2|CSSI)[- ]\d{6,7}\b", "NSF award"),
-    (r"\b(?:R01|R50|U24|P41)[A-Z]{2}\d{6}\b", "NIH award"),
-    (r"\bgrant (?:no\.?|number)?\s*#?\s*\d{6,}\b", "grant number"),
+    (r"\b(?:NSF|OAC|ACI|SI2|CSSI|CCF|CNS|IIS|DMS|DMR|AST|PHY|CHE|EAR|OCE|AGS|ECCS|CBET"
+     r"|CMMI|DBI|DEB|IOS|MCB|OPP|SES|BCS|DUE|DRL|OIA)[- ]\d{6,7}\b", "NSF award"),
+    # NIH activity code + institute + serial: R01GM123456, U19-AI135995.
+    (r"(?-i:\b[RUPKFTS]\d{2}-?[A-Z]{2}\d{6}\b)", "NIH award"),
+    (r"(?-i:\b(?:FA|HR|N0|W9|W31)\d{3,4}-\d{2}-[A-Z]-\d{4}\b)", "DoD contract"),
+    (r"(?-i:\b(?:EP|ST|NE|MR|BB|ES|AH)/[A-Z]\d{6}/\d\b)", "UKRI award"),
+    (r"\bANR-\d{2}-[A-Z0-9]{2,5}-\d{4}(?:-\d{2})?\b", "ANR award"),
+    (r"(?-i:\b(?:RGPIN|RGPAS|DGECR|ALLRP|CRDPJ|STPGP)-\d{4}-\d{4,5}\b)", "NSERC award"),
+    (r"(?-i:\bJP\d{2}[A-Z]{1,2}\d{4,5}\b)", "JSPS KAKENHI grant"),
+    (r"(?:KAKENHI|JSPS)[^.;\n]{0,60}?\b(\d{2}[A-Z]{1,2}\d{4,5})\b", "JSPS KAKENHI grant"),
+    (r"(?-i:\bJPMJ[A-Z]{2}\d{2}[A-Z0-9]{2}\b)", "JST grant"),
+    (r"(?-i:\b(?:DP|DE|FT|FL|LP|IC|CE|LE|IH|IN)\d{9}\b)", "ARC grant"),
+    (r"(?-i:\b(?:EXC|SFB|TRR|GRK)[- ]?\d{3,4}(?:/\d)?\b)", "DFG grant"),
+    (r"(?:DFG|Deutsche Forschungsgemeinschaft|German Research Foundation)[^.;\n]{0,100}?"
+     r"project[- ]?(?:number|no\.?|id)\s*:?\s*(\d{6,9})\b", "DFG grant"),
+    (r"\b\d{6}/Z/\d{2}/Z\b", "Wellcome grant"),
+    (r"(?:National Natural Science Foundation of China|NSFC)[^.;\n]{0,80}?"
+     r"(?:No\.?|numbers?|grants?)\s*:?\s*(\d{8})\b", "NSFC grant"),
+    (r"(?:Swiss National Science Foundation|SNSF|SNF)[^.;\n]{0,80}?"
+     r"(?:No\.?|numbers?|grants?)\s*:?\s*(\d{6}(?:_\d{6})?)\b", "SNSF grant"),
+    (r"grant agreements?\s*(?:No\.?|n[°o]\.?|nr\.?|number|#)?\s*:?\s*(\d{6,9})\b", "EU grant"),
+    # Any other award given by number in context.
+    (r"\b(?:grant|award|contract|project)\s+(?:agreement\s+)?(?:No\.?|n[°o]\.?|nr\.?|number|#)"
+     r"\s*:?\s*([A-Z0-9][A-Z0-9/_.-]*\d{5,}[A-Z0-9/_.-]*)", "grant number"),
 ]
 
-# Which agency an award-number kind belongs to, so an acknowledgment naming
-# the same agency isn't counted as a second funding source.
-_GRANT_AGENCY = {"DOE contract": "DOE", "DOE award": "DOE", "NSF award": "NSF", "NIH award": "NIH"}
+# Which funder an award-number kind belongs to, so an acknowledgment naming
+# the same funder isn't counted as a second funding source.
+_GRANT_AGENCY = {
+    "DOE contract": "DOE", "DOE award": "DOE", "NNSA contract": "NNSA",
+    "NSF award": "NSF", "NIH award": "NIH",
+    "DoD contract": "DoD", "UKRI award": "UKRI", "ANR award": "ANR", "NSERC award": "NSERC",
+    "JSPS KAKENHI grant": "JSPS", "JST grant": "JST", "ARC grant": "Australian Research Council",
+    "DFG grant": "DFG", "Wellcome grant": "Wellcome", "NSFC grant": "NSFC",
+    "SNSF grant": "SNSF", "EU grant": "European Commission",
+}
 
 # Root files where projects acknowledge funding besides the README. Federal
 # lab codes usually carry it in NOTICE: AMReX's says "developed under funding
@@ -68,13 +105,28 @@ _AGENCIES = [
     ("NASA", r"\bNASA\b|National Aeronautics and Space Administration"),
     ("DoD", r"Department of Defense|\bDoD\b|\bDARPA\b|Office of Naval Research|Army Research|Air Force"),
     ("NNSA", r"National Nuclear Security Administration|\bNNSA\b"),
-    ("European Commission", r"European (?:Commission|Research Council|Union)|Horizon (?:2020|Europe)|\bERC\b"),
+    ("European Commission", r"European (?:Commission|Research Council|Union)|Horizon (?:2020|Europe)|\bERC\b|\bEuroHPC\b"),
+    ("DFG", r"Deutsche Forschungsgemeinschaft|German Research Foundation|\bDFG\b"),
+    ("BMBF", r"\bBMBF\b|Federal Ministry of Education and Research"),
+    ("UKRI", r"\bUKRI\b|UK Research and Innovation|\b(?:EPSRC|BBSRC|STFC|NERC|ESRC|AHRC)\b"
+             r"|Engineering and Physical Sciences Research Council|Innovate UK"),
+    ("ANR", r"Agence Nationale de la Recherche|French National Research Agency|\bANR\b"),
+    ("SNSF", r"Swiss National Science Foundation|\bSNSF\b"),
+    ("NWO", r"\bNWO\b|Dutch Research Council|Netherlands Organisation for Scientific Research"),
+    ("NSERC", r"\bNSERC\b|Natural Sciences and Engineering Research Council"),
+    ("JSPS", r"\bJSPS\b|KAKENHI|Japan Society for the Promotion of Science"),
+    ("JST", r"Japan Science and Technology Agency|\bJST\b"),
+    ("Australian Research Council", r"Australian Research Council"),
+    ("NSFC", r"National Natural Science Foundation of China|\bNSFC\b"),
+    ("Wellcome", r"\bWellcome(?: Trust)?\b"),
 ]
 # An agency counts only inside a funding sentence, not wherever it's named:
 # "deployed on DOE HPC systems" or "supports ECP applications" isn't funding.
 # `supports` is excluded by the word boundary after `support(ed)`.
 _FUNDING_VERB = r"\b(?:fund(?:ed|ing)?|support(?:ed)?|sponsor(?:ed|ship)?|grants?|awards?|financed)\b"
 _SENTENCE_WINDOW = 160
+_FUNDING_HEADING = re.compile(
+    r"^\s{0,3}#{1,6}\s+(?:acknowledge?ments?|funding|financial support|sponsors?)\b.*$", re.I | re.M)
 
 # Contributors sampled for affiliation. The GitHub Users API is one call each,
 # so this is capped; top contributors carry most of the signal anyway.
@@ -232,7 +284,7 @@ class FundingCollector(GitHubCollectorBase):
         for text in texts:
             for pattern, kind in _GRANT_PATTERNS:
                 for match in re.findall(pattern, text, flags=re.IGNORECASE):
-                    value = match.strip()
+                    value = match.strip().rstrip(".,;:)")
                     key = re.sub(r"[-\s]", "", value.lower())
                     if key not in seen:
                         seen.add(key)
@@ -253,12 +305,20 @@ class FundingCollector(GitHubCollectorBase):
 
     @staticmethod
     def _acknowledged_agencies(text: str) -> List[str]:
-        """Agencies named near a funding verb, in first-seen order."""
+        """Agencies named near a funding verb, or anywhere in a section headed
+        Acknowledgments / Funding (often a bare list of funders), in
+        first-seen order."""
+        windows = []
+        for m in _FUNDING_HEADING.finditer(text):
+            rest = text[m.end():]
+            nxt = re.search(r"^\s{0,3}#{1,6}\s", rest, re.M)
+            windows.append(rest[:nxt.start()] if nxt else rest[:2000])
         # "U.S." would otherwise read as sentence ends inside the window.
         flat = re.sub(r"\bU\.\s?S\.", "US", re.sub(r"\s+", " ", text))
-        found: List[str] = []
         for verb in re.finditer(_FUNDING_VERB, flat, re.IGNORECASE):
-            window = flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0]
+            windows.append(flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0])
+        found: List[str] = []
+        for window in windows:
             for agency, pattern in _AGENCIES:
                 if agency not in found and re.search(pattern, window, re.IGNORECASE):
                     found.append(agency)

@@ -185,3 +185,25 @@ class TestCollectWithoutBadgeGapHandling:
             result = collector._collect_without_badge("Pkg", "o", "r", None)
         assert result["overall_score"]["score"] is None
         assert result["overall_score"]["status"] == "not_collected"
+
+
+class TestUnstartedBadge:
+    def _collect(self, collector, badge_data):
+        import asyncio
+        from unittest.mock import AsyncMock
+        tree = RepoTree("o", "r", ["CODE_OF_CONDUCT.md", "SECURITY.md"], truncated=False)
+        with patch.object(collector, "_search_badge", new=AsyncMock(return_value=badge_data)), \
+             patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)):
+            return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_zero_percent_badge_falls_back_to_repository_scan(self, collector):
+        # Registered but nothing answered: its criteria aren't "not met".
+        result = self._collect(collector, {"id": 14262, "badge_percentage_0": 0, "badge_level": "in_progress"})
+        assert result["assessment_method"] == "repository_scan"
+        assert result["governance_criteria"]["count_found"] >= 1
+        assert result["badge_status"]["level"] == "registered, not started"
+        assert result["badge_status"]["url"].endswith("/14262")
+
+    def test_started_badge_still_uses_the_badge(self, collector):
+        result = self._collect(collector, {"id": 7, "badge_percentage_0": 40, "badge_level": "in_progress"})
+        assert result["assessment_method"] == "openssf_badge_api"

@@ -97,6 +97,13 @@ class TestAcceleratorDetection:
         ("-DENABLE_HIP=ON", "AMD GPU (ROCm/HIP)"),
         ("-DAMReX_GPU_BACKEND=HIP", "AMD GPU (ROCm/HIP)"),
         ("-DENABLE_SYCL=ON", "Intel GPU (SYCL)"),
+        # Self-hosted GPU runner labels and Kokkos architecture names.
+        ("target-runner-labels: \"['self-hosted', 'gpu:A100']\"", "NVIDIA GPU (CUDA)"),
+        ("genconfig-string: rhel_cuda-12-gcc_release_Ampere80_no-asan", "NVIDIA GPU (CUDA)"),
+        ("-DKokkos_ARCH_VOLTA70=ON", "NVIDIA GPU (CUDA)"),
+        ("-DKokkos_ARCH_AMD_GFX90A=ON", "AMD GPU (ROCm/HIP)"),
+        ("runs-on: [self-hosted, MI250X]", "AMD GPU (ROCm/HIP)"),
+        ("-DKokkos_ARCH_INTEL_PVC=ON", "Intel GPU (SYCL)"),
     ])
     def test_detects_accelerator(self, text, expected):
         assert self._hits(text) == [expected]
@@ -104,6 +111,7 @@ class TestAcceleratorDetection:
     @pytest.mark.parametrize("text", [
         "export CUDA_LAUNCH_BLOCKING=1", "name: cuda-build", "# TODO: add a ROCm job",
         "-DENABLE_CUDA=OFF", "~cuda", "runs-on: ubuntu-latest",
+        "version: 100", "Adam89", "Volta700", "MI3",
     ])
     def test_no_false_positives(self, text):
         assert self._hits(text) == []

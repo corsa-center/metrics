@@ -105,13 +105,22 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             badge_data = await self._search_badge(client, owner, repo, repo_url)
-            if badge_data:
+            # A registered badge with nothing answered yet (0%) says nothing
+            # about the criteria, so it gets the repository scan like no
+            # badge at all -- otherwise every criterion reads "not met".
+            if badge_data and badge_data.get("badge_percentage_0", 0) > 0:
                 logger.info(f"Badge found — level: {badge_data.get('badge_level')}, progress: {badge_data.get('badge_percentage_0', 0)}%")
                 return self._collect_with_badge(repo_name, owner, repo, badge_data)
-            else:
-                logger.info("No badge found — scanning repository for requirements")
-                tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
-                return self._collect_without_badge(repo_name, owner, repo, tree)
+            logger.info("No started badge — scanning repository for requirements")
+            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
+            result = self._collect_without_badge(repo_name, owner, repo, tree)
+            if badge_data:
+                result["badge_status"].update({
+                    "level": "registered, not started",
+                    "id": badge_data.get("id"),
+                    "url": f"https://www.bestpractices.dev/projects/{badge_data.get('id')}",
+                })
+            return result
 
     # ------------------------------------------------------------------ #
     # Badge vs. scan paths                                                 #

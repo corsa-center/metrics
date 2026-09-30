@@ -116,10 +116,16 @@ class TestComputePrStats:
 
 class TestScore:
     def _score(self, collector, frt=None, mct=None, mrp=None, ratio=None):
+        flow = {}
+        if mct is not None:
+            flow.update(cohort_size=10, cohort_still_open=0, median_close_hours=mct)
+        if ratio is not None:
+            flow.update(opened=round(ratio * 100), closed=100)
         return collector._score(
-            {"median_first_response_hours": frt, "median_close_time_hours": mct},
+            {"median_first_response_hours": frt},
             {"merge_rate_pct": mrp},
-            {"sample_open_to_closed_ratio": ratio},
+            {},
+            flow,
         )
 
     def test_perfect_collected_score(self, collector):
@@ -339,8 +345,8 @@ class TestThinDiscussionSample:
                        "median_comments": 1, "timely_response_share": 0.0,
                        "outside_authors": 0, **issue_overrides}
         pr_stats = {"sample_size": 30, "merge_rate_pct": 90, "outside_authors": 0}
-        backlog = {"open_closed_ratio": 0.5}
-        return collector._score(issue_stats, pr_stats, backlog)
+        flow = {"cohort_size": 10, "median_close_hours": 1, "opened": 5, "closed": 10}
+        return collector._score(issue_stats, pr_stats, {}, flow)
 
     def test_thin_sample_rows_are_reported_but_unscored(self, collector):
         result = self._score(collector, 3)
@@ -381,3 +387,86 @@ class TestFetchIssuesSamplesDiscussion:
         discussable = [i for i in issues if i["author_association"] == "NONE"]
         assert len(discussable) == 30
         assert client.calls == 2
+
+
+class TestIssueFlowScoring:
+    def _sub(self, collector, **flow):
+        return collector._score({}, {}, {}, flow)["sub_scores"]
+
+    def test_cohort_median_under_threshold_passes(self, collector):
+        row = self._sub(collector, cohort_size=100, cohort_still_open=18, median_close_hours=469)["issue_resolution"]
+        assert row["passing"] is True
+        assert row["value"].startswith("469 hours median to close, for 100 issues opened 30-365 days ago")
+
+    def test_more_than_half_still_open_fails(self, collector):
+        row = self._sub(collector, cohort_size=10, cohort_still_open=6,
+                        median_close_hours=float("inf"))["issue_resolution"]
+        assert row["passing"] is False
+        assert "over half still open" in row["value"]
+
+    def test_closing_more_than_opening_passes(self, collector):
+        row = self._sub(collector, opened=162, closed=197)["support_closure"]
+        assert row["passing"] is True
+        assert row["value"] == "162 opened, 197 closed 30-365 days ago (0.82 opened per closed)"
+
+    def test_opening_twice_as_many_as_closing_fails(self, collector):
+        assert self._sub(collector, opened=200, closed=100)["support_closure"]["passing"] is False
+
+    def test_nothing_closed_fails(self, collector):
+        assert self._sub(collector, opened=5, closed=0)["support_closure"]["passing"] is False
+
+    def test_unmeasured_rows_are_excluded_not_failed(self, collector):
+        result = collector._score({}, {}, {}, {})
+        assert result["sub_scores"]["issue_resolution"]["not_collected"] is True
+        assert result["sub_scores"]["support_closure"]["not_collected"] is True
+        assert result["max_score"] == 5
+
+    def test_no_issues_at_all_is_not_measurable(self, collector):
+        assert self._sub(collector, opened=0, closed=0)["support_closure"]["not_collected"] is True
+
+
+class TestIssueFlowQueries:
+    def test_cohort_counts_open_issues_as_unresolved(self, collector):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        items = [{"created_at": "2026-01-01T00:00:00Z", "closed_at": "2026-01-02T00:00:00Z"},
+                 {"created_at": "2026-01-01T00:00:00Z", "closed_at": None},
+                 {"created_at": "2026-01-01T00:00:00Z", "closed_at": "2026-01-01T12:00:00Z"}]
+        def resp(body):
+            r = MagicMock(status_code=200); r.json.return_value = body; return r
+        responses = [resp({"items": items, "total_count": 40}), resp({"total_count": 50})]
+        with patch("collectors.ecosystem.engagement.search_get", new=AsyncMock(side_effect=responses)) as sg:
+            flow = asyncio.run(collector._issue_flow(MagicMock(), "o", "r"))
+        assert flow["cohort_size"] == 3 and flow["cohort_still_open"] == 1
+        assert flow["median_close_hours"] == 24
+        assert (flow["opened"], flow["closed"]) == (40, 50)
+        assert "is%3Aissue" in sg.call_args_list[0].args[1]
+        assert sg.call_count == 2
+
+    def test_search_failure_leaves_rows_unmeasured(self, collector):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        with patch("collectors.ecosystem.engagement.search_get", new=AsyncMock(return_value=None)):
+            flow = asyncio.run(collector._issue_flow(MagicMock(), "o", "r"))
+        assert "cohort_size" not in flow and "opened" not in flow
+
+
+class TestThinWindows:
+    def test_single_issue_window_is_reported_but_unscored(self, collector):
+        result = collector._score({}, {}, {}, {"cohort_size": 1, "cohort_still_open": 1,
+                                               "median_close_hours": float("inf"),
+                                               "opened": 1, "closed": 0})
+        for key in ("issue_resolution", "support_closure"):
+            row = result["sub_scores"][key]
+            assert row["insufficient_sample"] is True
+            assert "too few to judge" in row["value"]
+        assert result["max_score"] == 5
+
+    def test_response_time_with_no_replies_says_so(self, collector):
+        row = collector._score({"median_first_response_hours": None, "sample_size": 30}, {}, {})[
+            "sub_scores"]["response_time_tracking"]
+        assert row["value"] == "no response to any of 30 sampled issue(s)"
+        assert row["passing"] is False
+
+    def test_response_time_on_one_issue_is_unscored(self, collector):
+        row = collector._score({"median_first_response_hours": None, "sample_size": 1}, {}, {})[
+            "sub_scores"]["response_time_tracking"]
+        assert row["insufficient_sample"] is True

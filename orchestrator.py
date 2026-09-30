@@ -374,7 +374,9 @@ class MetricsOrchestrator:
         url = f"{self.dashboard_base_url}/explore/github-data/intReposInfo.json"
         data = self._fetch_json(url)
         if data is None:
-            return {}
+            # Fail loudly: an empty catalog would let the run report success
+            # having collected nothing.
+            raise RuntimeError(f"Could not load the software catalog from {url}")
         return data.get("data", {})
 
     def prepare_software_list(
@@ -1183,6 +1185,9 @@ class MetricsOrchestrator:
             info = sub.get(key, {})
             label = info.get("label", key)
             # A sub-score the collector didn't return isn't a measured fail.
+            if info.get("not_applicable") or info.get("insufficient_sample") or info.get("unmeasured"):
+                # Reported, but neither a pass nor a fail -- no mark.
+                return f'<p><strong>{label}:</strong> {info.get("value", "Not applicable")}</p>'
             if not info or info.get("not_collected"):
                 return f'<p><strong>{label}:</strong> Not yet collected</p>'
             mark = "✓" if info.get("passing") else "✗"
@@ -1393,8 +1398,9 @@ class MetricsOrchestrator:
             #    Owners assigned, and the documents still being maintained.
             eff = governance.get("effectiveness", {})
             eff_signals = []
-            if eff.get("has_codeowners"):
-                eff_signals.append("CODEOWNERS defined")
+            # Name the missing half too: "docs updated 53 days ago ✗" alone
+            # didn't say why the row failed.
+            eff_signals.append("CODEOWNERS defined" if eff.get("has_codeowners") else "no CODEOWNERS")
             days = eff.get("days_since_governance_update")
             if days is not None:
                 eff_signals.append(f"docs updated {days} days ago")
@@ -1402,7 +1408,7 @@ class MetricsOrchestrator:
             gov_pts += 1 if eff_ok else 0
             gov_lines.append(
                 f'<p><strong>Governance Effectiveness Assessment:</strong> '
-                f'{"; ".join(eff_signals) if eff_signals else "No governance ownership or upkeep found"} '
+                f'{"; ".join(eff_signals)} '
                 f'{"✓" if eff_ok else "✗"}</p>'
             )
 
@@ -1570,10 +1576,15 @@ class MetricsOrchestrator:
                     f'previously active contributors stopped ({rate * 100:.0f}%) '
                     f'{"✓" if ab_ok else "✗"}</p>'
                 )
+                if ab.get("repositories"):
+                    maint_lines.append(
+                        f'<p class="sub-detail">Across {", ".join(ab["repositories"])}</p>')
             else:
+                # Needs a full year of activity before the year being judged;
+                # unmeasurable is excluded, not scored as a failure.
                 maint_lines.append(
                     '<p><strong>Contributor Abandonment Forecasting:</strong> '
-                    'Not enough contributor history to assess ✗</p>'
+                    'Not enough contributor history to assess (needs two years)</p>'
                 )
 
             maint_lines.append(f'<p><strong>Score:</strong> {maint_pts}/6</p>')
@@ -1925,6 +1936,13 @@ class MetricsOrchestrator:
                     section_431_lines.append(
                         f'<p class="sub-detail">{test_coverage.get("lines_covered", 0):,}/{lines_total:,} lines covered</p>'
                     )
+            elif test_coverage.get("coverage_in_ci"):
+                # Measured, just not somewhere this can read -- not a fail.
+                section_431_lines.append(
+                    '<p><strong>Test Coverage Excellence:</strong> Not yet collected</p>'
+                    f'<p class="sub-detail">Coverage is measured in CI '
+                    f'({test_coverage["coverage_in_ci"]}) but not published to Codecov</p>'
+                )
             else:
                 section_431_lines.append(
                     '<p><strong>Test Coverage Excellence:</strong> No Codecov data found ✗</p>'
@@ -1967,6 +1985,8 @@ class MetricsOrchestrator:
             fair4rs_found = cats.get("fair4rs_metadata", {}).get("found", [])
             container_found = cats.get("containers", {}).get("found", [])
             dep_found = cats.get("dependency_pinning", {}).get("found", [])
+            env_detail = cats.get("reproducibility_docs", {}).get("details", {}).get("Environment specification", {})
+            env_spec = env_detail.get("file") if env_detail.get("exists") else None
             semver = cats.get("semantic_versioning", {})
 
             repr_lines = [
@@ -1982,9 +2002,12 @@ class MetricsOrchestrator:
                           reproducibility.get("uses_semantic_versioning"),
                           ", ".join(semver.get("example_tags", [])[:2]) if semver.get("example_tags") else None,
                           bool(semver.get("not_collected"))),
+                # A lockfile, or an environment specification (Spack env,
+                # conda environment, devcontainer): the report's "dependency
+                # management practices, environment specification".
                 _repr_row("Environment Management",
-                          reproducibility.get("has_dependency_pinning"),
-                          ", ".join(dep_found) if dep_found else None,
+                          reproducibility.get("has_dependency_pinning") or env_spec is not None,
+                          ", ".join(dep_found + ([env_spec] if env_spec else [])) or None,
                           bool(cats.get("dependency_pinning", {}).get("not_collected"))),
                 _repr_row("Reproducibility Documentation",
                           reproducibility.get("has_reproducibility_docs"),
@@ -2049,8 +2072,11 @@ class MetricsOrchestrator:
                         f'<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge {link} ({pct:.0f}%) {mark}</p>'
                     )
                 else:
+                    badge_url = badge_status.get("url")
+                    status = (f'<a href="{badge_url}">registered, not started</a>' if badge_url
+                              else "not registered")
                     section_432_lines.append(
-                        '<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge not registered ✗</p>'
+                        f'<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge {status} ✗</p>'
                     )
                 for cat_label, cat_key in [
                     ("Governance", "governance_criteria"),
@@ -2122,6 +2148,10 @@ class MetricsOrchestrator:
                 return row
 
             build_found = cats.get("build_systems", {}).get("found", [])
+            if accessibility.get("other_build"):
+                build_found = build_found + [accessibility["other_build"]]
+            if accessibility.get("python_package"):
+                build_found = build_found + [f'pip-installable Python package ({accessibility["python_package"]})']
             container_found = cats.get("containers", {}).get("found", [])
 
             # 5. Deployment Environment Testing comes from its own collector, so

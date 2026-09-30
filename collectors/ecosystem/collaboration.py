@@ -47,6 +47,14 @@ _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
 _ANACONDA_API = "https://api.anaconda.org/package/conda-forge"
 _SPACK_PACKAGES = "https://packages.spack.io/data/packages"
 
+# Source-level dependents found by the dependency-audit tool
+# (corsa-center/dependent-audit), published per project. Registries miss
+# code consumed from source -- a git submodule, a CMake FetchContent, a
+# header include -- which is how most HPC libraries are used.
+_DEPENDENCY_AUDIT = ("https://raw.githubusercontent.com/corsa-center/project-dependent-tracking"
+                     "/main/{name}-dependency-context/dependency_graph.json")
+_AUDIT_CONFIDENCE = {"high", "medium"}
+
 # ecosyste.ms publishes a low per-second rate limit; one retry with a pause
 # covers the throttling seen when several lookups run back to back.
 _RATE_LIMIT_PAUSE_SECONDS = 2
@@ -67,12 +75,16 @@ class CollaborationCollector(GitHubCollectorBase):
         logger.info(f"Collecting collaboration metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            by_repo, spack, conda = await asyncio.gather(
+            by_repo, spack, conda, source = await asyncio.gather(
                 self._lookup_by_repository(client, owner, repo),
                 self._lookup_spack(client, repo),
                 self._lookup_conda_forge(client, owner, repo),
+                self._source_dependents(client, owner, repo),
                 return_exceptions=True,
             )
+        if isinstance(source, Exception):
+            logger.warning(f"Dependency-audit lookup failed: {source}")
+            source = None
 
         if isinstance(by_repo, Exception):
             logger.warning(f"ecosyste.ms repository lookup failed: {by_repo}")
@@ -92,7 +104,8 @@ class CollaborationCollector(GitHubCollectorBase):
             "timestamp": self._get_timestamp(),
             "registries": registries,
             "ecosystems": sorted({r["ecosystem"] for r in registries}),
-            "overall_score": self._calculate_score(registries),
+            "source_dependents": source,
+            "overall_score": self._calculate_score(registries, source),
             # Distribution evidence, not part of the weighted score above —
             # see CASS §4.1.1 Considerations: download counts measure
             # distribution rather than use and are most informative as
@@ -265,10 +278,15 @@ class CollaborationCollector(GitHubCollectorBase):
 
     # ---------------------------------------------------------------- scoring
 
-    def _calculate_score(self, registries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _calculate_score(
+        self, registries: List[Dict[str, Any]], source: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         ecosystems = sorted({r["ecosystem"] for r in registries})
         max_packages = max((r["dependent_packages"] for r in registries), default=0)
-        max_repos = max((r["dependent_repos"] for r in registries), default=0)
+        # Registry and source-level dependents are found different ways and
+        # can overlap, so the larger count stands rather than their sum.
+        source_repos = (source or {}).get("count", 0)
+        max_repos = max(max((r["dependent_repos"] for r in registries), default=0), source_repos)
 
         sub: Dict[str, Dict[str, Any]] = {}
 
@@ -287,9 +305,21 @@ class CollaborationCollector(GitHubCollectorBase):
         sub["collaboration_network"] = {
             "label": "Collaboration Network Analysis",
             "value": f"{max_packages:,} dependent packages, {max_repos:,} dependent repositories"
-                     if registries else "No downstream dependents found",
+                     if registries or source_repos else "No downstream dependents found",
+            "detail": (f"{source_repos:,} source-level dependents found by dependency audit"
+                       + ("" if source.get("complete") else " (partial search)"))
+                      if source_repos else None,
             "passing": reach,
         }
+        # Registries can't see source-level use, so without a dependency-audit
+        # graph a registry-only shortfall isn't a confirmed lack of dependents.
+        # A registry count that already clears the bar still stands.
+        if source is None and not reach:
+            sub["collaboration_network"].update({
+                "value": (sub["collaboration_network"]["value"]
+                          + " in registries; source-level dependents not audited"),
+                "not_collected": True, "unmeasured": True,
+            })
 
         for key, label in [
             ("cross_project_reference", "Cross-project Reference Detection"),
@@ -318,13 +348,47 @@ class CollaborationCollector(GitHubCollectorBase):
             "advanced_dependency_analysis", "cross_project_reference",
             "interoperability", "collaboration_network", "standards_compliance",
         ]
-        score = sum(1 for k in collaboration_keys if sub[k].get("passing"))
+        # Only measured rows count: the three uncollected stubs (and an
+        # unmeasured network row) used to be scored as failures, pulling
+        # every package's Ecosystem score down.
+        scorable = [k for k in collaboration_keys if not sub[k].get("not_collected")]
+        score = sum(1 for k in scorable if sub[k].get("passing"))
         return {
             "score": score,
-            "max_score": len(collaboration_keys),
-            "percentage": round(score / len(collaboration_keys) * 100, 2),
+            "max_score": len(scorable),
+            "percentage": round(score / len(scorable) * 100, 2) if scorable else None,
             "sub_scores": sub,
         }
+
+    async def _source_dependents(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Optional[Dict[str, Any]]:
+        """Direct source-level dependents from the project's dependency-audit
+        graph, or None when there's no graph, it's for a different repository,
+        or it predates confidence scoring (unscored matches include obvious
+        false positives for generic names, so they aren't used).
+
+        Counts DEPENDS_ON edges into the project rated high or medium
+        confidence, from repositories outside its own organization; vendored
+        copies and mirrors are excluded.
+        """
+        graph = await self._get_json(client, _DEPENDENCY_AUDIT.format(name=repo.lower()))
+        if not isinstance(graph, dict):
+            return None
+        root = f"{owner}/{repo}".lower()
+        if str((graph.get("meta") or {}).get("root", "")).lower() != root:
+            return None
+        edges = [e for e in graph.get("edges", []) if str(e.get("target", "")).lower() == root]
+        if not edges or not any("confidence" in e and "relationship" in e for e in edges):
+            return None
+        dependents = {
+            e["source"].lower() for e in edges
+            if e.get("relationship") == "DEPENDS_ON" and e.get("confidence") in _AUDIT_CONFIDENCE
+            and not e["source"].lower().startswith(f"{owner.lower()}/")
+        }
+        complete = bool(((graph.get("meta") or {}).get("completeness") or {}).get("complete"))
+        return {"count": len(dependents), "complete": complete,
+                "url": _DEPENDENCY_AUDIT.format(name=repo.lower())}
 
     @staticmethod
     def _downloads_summary(registries: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -77,7 +77,10 @@ class TestScoring:
         assert "Not packaged" in s["sub_scores"]["advanced_dependency_analysis"]["value"]
 
     def test_three_submetrics_uncollected(self, collector):
+        # Plus the network row, unmeasured without a dependency-audit graph.
         sub = collector._calculate_score([])["sub_scores"]
+        assert sum(1 for v in sub.values() if v.get("not_collected")) == 4
+        sub = collector._calculate_score([], {"count": 0, "complete": True})["sub_scores"]
         assert sum(1 for v in sub.values() if v.get("not_collected")) == 3
 
     def test_max_score_excludes_the_4_3_4_row(self, collector):
@@ -86,7 +89,8 @@ class TestScoring:
             _pkg("conda", "x", deps=99, install="conda install x"),
             _pkg("spack", "x", install="spack install x"),
         ])
-        assert s["max_score"] == 5
+        # Only measured rows count; the three uncollected stubs aren't failures.
+        assert s["max_score"] == 2
         assert s["score"] == 2
         assert s["sub_scores"]["installation_success"]["passing"]
 
@@ -245,3 +249,46 @@ class TestSpackDependents:
                                         "dependent_packages_count": 2},
         })
         assert asyncio.run(collector._lookup_spack(None, "amrex"))["dependent_packages"] == 2
+
+
+class TestSourceLevelDependents:
+    def test_audit_count_can_carry_the_network_row(self, collector):
+        s = collector._calculate_score([_pkg("spack", "amrex", deps=6)], {"count": 64, "complete": True})
+        row = s["sub_scores"]["collaboration_network"]
+        assert row["passing"] is True
+        assert row["value"] == "6 dependent packages, 64 dependent repositories"
+        assert row["detail"] == "64 source-level dependents found by dependency audit"
+
+    def test_without_an_audit_a_registry_shortfall_is_unmeasured(self, collector):
+        row = collector._calculate_score([_pkg("spack", "amrex", deps=6)])["sub_scores"]["collaboration_network"]
+        assert row["not_collected"] is True and row["unmeasured"] is True
+        assert row["value"].endswith("source-level dependents not audited")
+
+    def test_registry_pass_stands_without_an_audit(self, collector):
+        row = collector._calculate_score([_pkg("conda", "hdf5", deps=176)])["sub_scores"]["collaboration_network"]
+        assert row["passing"] is True and "not_collected" not in row
+
+    def _graph(self, collector, graph, owner="AMReX-Codes", repo="amrex"):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_get_json", new=AsyncMock(return_value=graph)):
+            return asyncio.run(collector._source_dependents(None, owner, repo))
+
+    def test_only_confident_external_depends_on_edges_count(self, collector):
+        e = lambda src, conf="high", rel="DEPENDS_ON": {"source": src, "target": "amrex-codes/amrex",
+                                                         "confidence": conf, "relationship": rel}
+        graph = {"meta": {"root": "amrex-codes/amrex", "completeness": {"complete": True}}, "edges": [
+            e("AMReX-Astro/Castro"), e("erf-model/ERF", "medium"), e("x/low", "low"),
+            e("x/vendored", rel="VENDORED"), e("x/mirror", rel="MIRROR"),
+            e("AMReX-Codes/amrex-tutorials")]}
+        assert self._graph(collector, graph)["count"] == 2
+
+    def test_unscored_graph_is_not_used(self, collector):
+        # Older audit output: no confidence, generic-name false positives.
+        graph = {"meta": {"root": "scorec/core"},
+                 "edges": [{"source": "torvalds/linux", "target": "scorec/core"}]}
+        assert self._graph(collector, graph, "SCOREC", "core") is None
+
+    def test_graph_for_another_repository_is_not_used(self, collector):
+        graph = {"meta": {"root": "someone/amrex"}, "edges": [
+            {"source": "a/b", "target": "someone/amrex", "confidence": "high", "relationship": "DEPENDS_ON"}]}
+        assert self._graph(collector, graph) is None

@@ -13,12 +13,14 @@ Checks (per the report):
   - Documentation        : INSTALL, INSTALL.md
 """
 
+import base64
 import httpx
 import logging
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 from collectors.ecosystem.base import (
-    COLLECTION_GAP, CONTAINER_FILE_PATTERNS, GitHubCollectorBase, RepoTree, RetryingTransport,
+    _VENDORED_DIR, COLLECTION_GAP, CONTAINER_FILE_PATTERNS, GitHubCollectorBase, RepoTree, RetryingTransport,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,22 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
 }
 
 
+# Build and install paths beyond the labelled root files, in order of
+# preference: other portable build systems, a Spack recipe or environment
+# kept below the root, a build one directory down (llvm/, src/), and a root
+# installation script -- which the report names alongside build systems.
+_NON_BUILD_DIR = r"(?!(?:tests?|examples?|docs?|data|tutorials?|benchmarks?|demos?|sphinx)/)"
+_NON_BUILD_PATH = re.compile(r"(?:^|/)(?:tests?|examples?|docs?|tutorials?|demos?|templates?)[/_-]", re.I)
+_OTHER_BUILD_PATTERNS = [
+    ("Meson", r"^meson\.build$"),
+    ("Fortran Package Manager", r"^fpm\.toml$"),
+    # A recipe in Spack's repository layout, or a Spack environment.
+    ("Spack", r"(?:^|/)packages/[^/]+/package\.py$|(?:^|/)spack\.yaml$"),
+    ("CMake", rf"^{_NON_BUILD_DIR}[^/.][^/]*/CMakeLists\.txt$"),
+    ("Autoconf / configure", rf"^(?:{_NON_BUILD_DIR}[^/.][^/]*/)?configure(?:\.ac|\.in)?$"),
+    ("Install script", r"^(?:install|build)\.sh$"),
+]
+
 # Labels also searched across the whole tree when no candidate path matches.
 _TREE_PATTERNS = {
     ("containers", label): pattern
@@ -88,7 +106,54 @@ class AccessibilityCollector(GitHubCollectorBase):
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
-            return self._scan(tree, repo_name, owner, repo)
+            result = self._scan(tree, repo_name, owner, repo)
+            if not result["has_portable_build_system"] and tree is not COLLECTION_GAP:
+                other = self._other_build(tree)
+                if other:
+                    result["has_portable_build_system"] = True
+                    result["other_build"] = other
+            if not result["has_portable_build_system"] and tree is not COLLECTION_GAP:
+                package = await self._python_package(client, owner, repo, result)
+                if package:
+                    result["has_portable_build_system"] = True
+                    result["python_package"] = package
+            return result
+
+    @staticmethod
+    def _other_build(tree) -> Optional[str]:
+        """A portable build or install path the root-level labels miss,
+        described with its file, or None. Kept out of the labelled
+        categories so their percentages don't change for every project."""
+        for label, pattern in _OTHER_BUILD_PATTERNS:
+            hits = [p for p in tree.find(pattern)
+                    if not _VENDORED_DIR.search(p) and not _NON_BUILD_PATH.search(p)]
+            if hits:
+                return f"{label} ({min(hits, key=lambda p: (p.count('/'), p))})"
+        return None
+
+    async def _python_package(
+        self, client: httpx.AsyncClient, owner: str, repo: str, result: Dict[str, Any]
+    ) -> Optional[str]:
+        """The file that makes the project pip-installable, or None.
+
+        A pip-installable package is the portable, cross-platform install for
+        a Python project, which otherwise has none of the listed build
+        systems. A pyproject.toml counts only if it declares a build or
+        project table; many hold nothing but tool settings (ruff, black)
+        for a C++ codebase.
+        """
+        details = result["categories"].get("python_packaging", {}).get("details", {})
+        if details.get("setup.py", {}).get("exists"):
+            return details["setup.py"]["file"]
+        path = details.get("pyproject.toml", {}).get("file")
+        if not path:
+            return None
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
+        if not isinstance(data, dict):
+            return None
+        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+        return path if re.search(r"^\[(?:build-system|project)\]", text, re.M) else None
 
     def _scan(
         self,

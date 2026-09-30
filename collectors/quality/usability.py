@@ -40,6 +40,20 @@ _DOC_DIRECTORIES = ["docs", "doc", "documentation"]
 # Markdown ATX headings and Setext underlines both appear in real READMEs.
 _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _SETEXT_HEADING = re.compile(r"^\s{0,3}(\S.*)\n\s{0,3}[=-]{3,}\s*$", re.MULTILINE)
+# Link text counts too: a README can cover a topic with a link instead of a
+# section ("[Getting Started](...)", "[Contact Us](...)"). Image and badge
+# links (![...]) are excluded.
+_LINK_TEXT = re.compile(r"(?<!!)\[(?!!)([^\]\n]{3,80})\]\(")
+
+
+def readme_covers(text: str, label: str) -> bool:
+    """Whether README markdown covers one of _README_SECTIONS, by a heading or
+    by link text starting with the topic. Anchored at the start for links: a
+    link reading "Building X using Spack" is an install guide, not usage."""
+    pattern = _README_SECTIONS[label]
+    headings = _ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)
+    return (any(re.search(pattern, h, re.IGNORECASE) for h in headings)
+            or any(re.match(rf"\W*{pattern}", t, re.IGNORECASE) for t in _LINK_TEXT.findall(text)))
 
 
 class UsabilityCollector(GitHubCollectorBase):
@@ -92,17 +106,11 @@ class UsabilityCollector(GitHubCollectorBase):
             return {"exists": False, "sections": [], "missing": list(_README_SECTIONS)}
 
         text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
-        headings = _ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)
-
-        found = [
-            label
-            for label, pattern in _README_SECTIONS.items()
-            if any(re.search(pattern, h, re.IGNORECASE) for h in headings)
-        ]
+        found = [label for label in _README_SECTIONS if readme_covers(text, label)]
         return {
             "exists": True,
             "length": len(text),
-            "heading_count": len(headings),
+            "heading_count": len(_ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)),
             "sections": found,
             "missing": [s for s in _README_SECTIONS if s not in found],
         }

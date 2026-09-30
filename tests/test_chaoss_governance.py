@@ -102,10 +102,12 @@ class TestAssessReadmeQuality:
 # ------------------------------------------------------------------ #
 
 class TestCalculateTimeToClose:
-    def test_empty_list(self, collector):
+    def test_empty_list_is_unmeasurable_not_the_slowest(self, collector):
+        # Nothing closed yet: scoring it 0 counted it as the slowest possible.
         result = collector._calculate_time_to_close([])
         assert result["count"] == 0
-        assert result["score"] == 0
+        assert result["not_collected"] is True
+        assert "score" not in result
 
     def test_fast_resolution(self, collector):
         issues = [
@@ -254,18 +256,28 @@ class TestGapPropagatesThroughAggregation:
     def test_time_to_close_gap_is_not_collected(self, collector):
         assert collector._calculate_time_to_close(COLLECTION_GAP) == {"not_collected": True}
 
-    def test_time_to_close_genuinely_empty_is_a_real_zero(self, collector):
+    def test_time_to_close_genuinely_empty_is_told_apart_from_a_gap(self, collector):
         result = collector._calculate_time_to_close([])
-        assert result.get("not_collected") is not True
         assert result["count"] == 0
+        assert result["reason"] == "no closed issues"
+        assert collector._calculate_time_to_close(COLLECTION_GAP) == {"not_collected": True}
 
     def test_issue_age_gap_is_not_collected(self, collector):
         assert collector._calculate_issue_age(COLLECTION_GAP) == {"not_collected": True}
 
-    def test_issue_age_genuinely_empty_is_a_real_zero(self, collector):
+    def test_no_open_issues_is_the_best_age_not_the_worst(self, collector):
         result = collector._calculate_issue_age([])
         assert result.get("not_collected") is not True
         assert result["count"] == 0
+        assert result["score"] == 100
+
+    def test_no_issues_at_all_drops_issue_age(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_get_closed_issues", new=AsyncMock(return_value=[])), \
+             patch.object(collector, "_get_open_issues", new=AsyncMock(return_value=[])):
+            m = asyncio.run(collector._get_issue_metrics(None, "o", "r"))
+        assert m["issue_age"]["not_collected"] is True
+        assert m["time_to_close"]["not_collected"] is True
 
 
 # ------------------------------------------------------------------ #

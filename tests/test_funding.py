@@ -364,3 +364,51 @@ class TestAcknowledgmentFiles:
         collector._github_get = fake_get
         _, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o", "r", COLLECTION_GAP))
         assert gap is True
+
+
+class TestInternationalAwards:
+    """Formats taken from real project READMEs (see #76)."""
+
+    def _kinds(self, text):
+        import re
+        from collectors.ecosystem.funding import _GRANT_PATTERNS
+        return [k for p, k in _GRANT_PATTERNS if re.findall(p, text, flags=re.IGNORECASE)]
+
+    @pytest.mark.parametrize("text,kind", [
+        ("under grant agreement No 101095998", "EU grant"),
+        ("Grant Agreement n° 732287", "EU grant"),
+        ("EPSRC grant EP/Y022904/1", "UKRI award"),
+        ("JSPS KAKENHI Grant Number JP18H04091", "JSPS KAKENHI grant"),
+        ("KAKENHI Grant Numbers 16H06302 and 17H04687", "JSPS KAKENHI grant"),
+        ("JST CREST Grant Number JPMJCR18A6", "JST grant"),
+        ("Australian Research Council (DP130100364)", "ARC grant"),
+        ("ANR project ANR-21-CE38-0017", "ANR award"),
+        ("NSERC Discovery Grant RGPIN-2018-06153", "NSERC award"),
+        ("DFG under Germany's Excellence Strategy - EXC 2064/1", "DFG grant"),
+        ("funded by the DFG - project number 390727645", "DFG grant"),
+        ("Wellcome Trust grant 206298/Z/17/Z", "Wellcome grant"),
+        ("National Natural Science Foundation of China (No. 62272231)", "NSFC grant"),
+        ("Swiss National Science Foundation grant 200021_172763", "SNSF grant"),
+        ("NSF grant DMR-1847172", "NSF award"),
+        ("NIH grants R01-HG006139 and U19-AI135995", "NIH award"),
+        ("AFRL contract FA8650-18-C-7809", "DoD contract"),
+        ("contract DE-NA0003525", "NNSA contract"),
+    ])
+    def test_award_formats(self, text, kind):
+        assert kind in self._kinds(text)
+
+    @pytest.mark.parametrize("text", [
+        "Tested for 2020 and 2021 releases", "See issue 12345 and version 1.14.3",
+        "SPP 1234 words", "Contributions are wellcome!", "exc 2064 in lower case",
+    ])
+    def test_non_awards(self, text):
+        assert self._kinds(text) == []
+
+    def test_funders_listed_under_an_acknowledgments_heading(self):
+        from collectors.ecosystem.funding import FundingCollector
+        md = "## Acknowledgements\n- [NSERC](https://nserc.ca)\n- Agence Nationale de la Recherche\n## License\nNSF\n"
+        assert set(FundingCollector._acknowledged_agencies(md)) == {"NSERC", "ANR"}
+
+    def test_funder_name_outside_funding_context_is_not_counted(self):
+        from collectors.ecosystem.funding import FundingCollector
+        assert FundingCollector._acknowledged_agencies("Runs on EuroHPC's LUMI machine.") == []

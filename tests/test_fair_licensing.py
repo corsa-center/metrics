@@ -458,3 +458,24 @@ class TestBibtexCitation:
     def test_booktitle_is_not_title(self, collector):
         text = "@inproceedings{x,\n  booktitle = {Proc. SC}\n}"
         assert collector._analyze_bibtex(text, "o", "r")["present"] == []
+
+
+class TestReadmeBibtex:
+    def _run(self, collector, readme, citation_files=()):
+        import base64
+        from unittest.mock import AsyncMock, patch
+        tree = RepoTree("o", "r", ["README.md", *citation_files], truncated=False)
+        data = {"content": base64.b64encode(readme.encode()).decode(), "path": "README.md"}
+        with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._get_bibtex_citation(None, "o", "r", tree))
+
+    def test_bibtex_under_citation_heading_is_read(self, collector):
+        md = ("# Pkg\n## Citation\nPlease cite:\n```bibtex\n@software{pkg2026,\n"
+              "  title={Pkg}, author={A and B}, year={2026}\n}\n```\n## Authors\n- A\n")
+        result = self._run(collector, md)
+        assert result["path"] == "README.md citation section"
+        assert result["present"] == ["title", "authors"]
+
+    def test_bibtex_elsewhere_in_readme_is_not(self, collector):
+        md = "# Pkg\n## Related work\n@article{x,\n  title={Other}\n}\n"
+        assert self._run(collector, md) is None

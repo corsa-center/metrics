@@ -86,3 +86,39 @@ class TestFetchCoverage:
         )
         assert result["coverage_exists"] is False
         assert result["repository"] == "unknown"
+
+
+class TestCoverageInCi:
+    @pytest.mark.parametrize("text", [
+        'genconfig-string: "rhel8_gcc-openmpi_debug-coverage_shared"',
+        "-DCMAKE_BUILD_TYPE=Coverage",
+        "coverage_test_linux_GCC:",
+        "run: coverage run -m pytest tests/",
+        "CXXFLAGS: --coverage -O0",
+        "uses: coverallsapp/github-action@v2",
+        "cmake -DENABLE_COVERAGE=ON ..",
+    ])
+    def test_coverage_measurement_is_recognized(self, text):
+        from collectors.quality.test_coverage import _COVERAGE_IN_CI
+        assert _COVERAGE_IN_CI.search(text)
+
+    @pytest.mark.parametrize("text", [
+        "name: coverage", "# improve test coverage later", "runs-on: ubuntu-latest",
+    ])
+    def test_prose_is_not(self, text):
+        from collectors.quality.test_coverage import _COVERAGE_IN_CI
+        assert not _COVERAGE_IN_CI.search(text)
+
+    def test_first_ci_file_measuring_coverage_is_reported(self, collector):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from collectors.ecosystem.base import RepoTree
+        tree = RepoTree("o", "r", [".github/workflows/ci.yml", ".github/workflows/nightly.yml"], False)
+        texts = {"ci.yml": "run: make", "nightly.yml": "run: gcovr -r ."}
+
+        async def get(url):
+            return MagicMock(status_code=200, text=texts[url.rsplit("/", 1)[-1]])
+        client = MagicMock(get=get)
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)):
+            found = asyncio.run(collector._coverage_in_ci(client, "o", "r"))
+        assert found == ".github/workflows/nightly.yml"

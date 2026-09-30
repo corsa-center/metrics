@@ -391,3 +391,27 @@ class TestScanFilesAnywhereInTree:
     def test_docs_build_environment_is_not_the_software_environment(self, collector):
         out = self._scan(collector, ["docs/environment.yml", "doc/source/environment.yaml"])
         assert "Environment specification" not in out["reproducibility_docs"]["found"]
+
+
+class TestReadmeInstallSection:
+    def _docs(self, collector, readme):
+        import base64
+        from unittest.mock import AsyncMock, patch
+        tree = RepoTree("o", "r", ["README.md", "src/a.py"], truncated=False)
+        data = ({"content": base64.b64encode(readme.encode()).decode(), "path": "README.md",
+                 "html_url": "https://github.com/o/r#readme"} if readme else None)
+        semver = {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)), \
+             patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+            r = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        return r
+
+    def test_readme_installation_section_counts_as_install_guide(self, collector):
+        r = self._docs(collector, "# Pkg\n## Installation\nuv sync\n")
+        assert r["has_reproducibility_docs"] is True
+        assert r["categories"]["reproducibility_docs"]["details"]["Install / build guide"]["file"] \
+            == "README.md (installation section)"
+
+    def test_readme_without_one_does_not(self, collector):
+        assert self._docs(collector, "# Pkg\nSome prose about install.\n")["has_reproducibility_docs"] is False

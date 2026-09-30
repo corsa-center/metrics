@@ -159,9 +159,9 @@ for every other project with a modified licence.)
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | Response Time Tracking | ✅ | median time to first response < 168 hours (1 week) | `/issues`, time to first response |
-| Issue Resolution Analysis | ✅ | median time to close < 720 hours (30 days) | `/issues`, close rate |
+| Issue Resolution Analysis | ✅ | median time to close < 720 hours (30 days), over up to 100 of the newest issues opened between a year ago and 30 days ago; still-open issues count as unresolved | search API, fixed cohort — not the recently-updated sample, which only sees recent closures of any age |
 | Pull Request Flow Assessment | ✅ | merge rate > 50% | `/pulls`, median cycle time |
-| Support Request Closure Analysis | ✅ | open/closed issue ratio < 2.0 | `/issues` |
+| Support Request Closure Analysis | ✅ | issues opened per issue closed between a year ago and 30 days ago < 2.0 | search API totals for that window (the report's "closed versus opened ... over time") |
 | Engagement Quality Metrics | ✅ | median comments per issue ≥2 | |
 | Communication Pattern Analysis | ✅ | ≥70% of issues answered within a week | |
 | Community Participation Assessment | ✅ | ≥15% of issues and PRs opened by non-maintainers (`author_association`) | |
@@ -220,7 +220,7 @@ ADIOS2 53%, zfp 93%.
 | Advanced Dependency Analysis | ✅ | ≥2 distinct package ecosystems carrying the software | |
 | Cross-project Reference Detection | 🔲 | — | the report specifies AI analysis of issues and PRs |
 | Interoperability Assessment | 🔲 | — | needs domain-specific standards knowledge |
-| Collaboration Network Analysis | ✅ | ≥10 dependent packages **or** ≥50 dependent repositories | downstream dependents |
+| Collaboration Network Analysis | ✅ | ≥10 dependent packages **or** ≥50 dependent repositories | registry dependents (ecosyste.ms, Spack, conda-forge), plus source-level dependents from the project's [dependency-audit](https://github.com/corsa-center/dependent-audit) graph in `corsa-center/project-dependent-tracking` (high/medium-confidence `DEPENDS_ON` edges from other organizations; vendored copies and mirrors excluded). The larger repository count stands. Without an audit graph, a registry shortfall is *not collected* — registries can't see code consumed from source — while a registry count that already clears the bar still passes |
 | Standards Compliance Tracking | 🔲 | — | needs domain-specific standards knowledge |
 
 Data comes from the free, unauthenticated **ecosyste.ms** APIs, looked up by
@@ -246,11 +246,11 @@ only 9 packages); both are real evidence of ecosystem integration.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Enhanced Funding Documentation Analysis | ✅ | a funding file exists, **or** ≥1 award reference found in the README | FUNDING.yml / funding.json, plus DOE/NSF/NIH award numbers in the README |
+| Enhanced Funding Documentation Analysis | ✅ | a funding file exists, **or** ≥1 award reference or funder acknowledgment found | FUNDING.yml / funding.json; award numbers in the README and root NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT files, in formats used by US (DOE, NNSA, NSF, NIH, DoD), EU/ERC, UKRI, DFG, ANR, NSERC, JSPS/JST, ARC, NSFC, SNSF and Wellcome awards, or given in context ("grant agreement No …", "project number …"); funders named in a funding sentence or under an Acknowledgments/Funding heading |
 | Institutional Affiliation Tracking | ✅ | ≥3 distinct organizations found | `company` field of the top 25 contributors |
 | NIH R50 Award Tracking | 🔲 | — | NIH RePORTER API is public and unauthenticated — a Tier 2 win, not yet wired |
 | Corporate Sponsorship Detection | ✅ | ≥1 declared funding platform, **or** the repository is organization-owned | |
-| Funding Portfolio Analysis | ✅ | ≥2 distinct sources (funding platforms + award references, combined) | |
+| Funding Portfolio Analysis | ✅ | ≥2 distinct sources (funding platforms, award references, and acknowledged funders not already represented by an award) | |
 
 > Contributor affiliations are folded onto a canonical key, so "The HDF Group",
 > "HDFGroup" and "The HDFgroup" count as one organization. Without that the
@@ -321,10 +321,10 @@ the CI workflow definitions.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers) | configs and analysis workflows |
+| Advanced Static Analysis | ✅ | ≥1 defect-finding tool found (Sonar, Coverity, cppcheck, Semgrep, clang-tidy, sanitizers; mypy, Pyright, Bandit for Python; hosted services CodeFactor, Codacy, SonarCloud, DeepSource, Coverity Scan) | configs and analysis workflows, plus a README badge for this repository for hosted services, which leave no config file; style linters (ruff, black, flake8) deliberately not counted |
 | Enhanced Security Analysis | ✅ | CodeQL runs, from a workflow file or GitHub's default setup (enabled in repository settings, no file in the tree) | workflow files; Actions workflows list for default setup |
-| CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references — **practice indicators, not audited conformance** |
-| Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API |
+| CERT Guidelines Compliance | ✅ | ≥1 hardening indicator found (warnings-as-errors, fortify source, stack protector, sanitizers, explicit CERT/MISRA reference) | hardening flags, sanitizers and explicit CERT/MISRA references. Not applicable (excluded, not failed) when none are found and the primary language is one CERT has no standard for (Python, R, Julia, JavaScript/TypeScript, MATLAB, notebooks) |
+| Test Coverage Excellence | ✅ | ≥80% line coverage | Codecov v2 public API. With no Codecov project, "not collected" rather than failed if CI shows coverage being measured (`--coverage`, gcovr/lcov, pytest-cov, Coveralls, a Coverage build) |
 | Reliability Trend Analysis | ✅ | defect volume over the last 52 weeks is not significantly higher than the prior 52 weeks: over 1.25× **and** a one-sided binomial p < 0.05 counts as increasing; a rise within normal variation counts as stable. Unmeasurable below 5 total defects across both windows | defect reports over two 52-week windows, by issue type first then label. Only GitHub-filed reports are visible; defects reported by email or mailing list aren't |
 
 Codecov's `api.codecov.io/api/v2/github/{owner}/repos/{repo}/` is public and
@@ -340,10 +340,10 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | CI/CD Effectiveness Assessment | ✅ | ≥1 of 6 internal checks met (workflow present, a recent successful run, deploy/release cadence at or above 1/year, elite-tier <24h cycle time, etc.) | `.github/workflows/` parsing + run status |
-| Testing Framework Excellence | ✅ | ≥2 of 4: test directory, CTest/CMake config, pytest config, vendored test framework | |
+| Testing Framework Excellence | ✅ | ≥2 of 4: test directory (at the root, or the shallowest `test/`/`tests/`/`testing/`/`unit_test(s)/` outside vendored and hidden trees), CTest/CMake config, pytest config, vendored test framework | |
 | Code Review Quality Analysis | ✅ | ≥70% of the last 50 merged PRs had ≥1 review | |
 | Development Tool Integration | ✅ | ≥2 of 4: pre-commit hooks, formatter config, linter config, Dependabot/Renovate config | |
-| Community Contribution Facilitation | ✅ | OpenSSF Best Practices badge progress = 100% (the *passing* level) | proxy — the report's own metric needs data this framework doesn't have another source for |
+| Community Contribution Facilitation | ✅ | OpenSSF Best Practices badge progress = 100% (the *passing* level) | proxy — the report's own metric needs data this framework doesn't have another source for. A badge registered at 0% gets the repository scan for its criteria, like no badge |
 
 ### 4.3.3 Reproducibility
 **Collector:** [`reproducibility.py`](collectors/quality/reproducibility.py)
@@ -353,7 +353,7 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | FAIR4RS Compliance Assessment | ✅ | any of CITATION.cff, codemeta.json, `.zenodo.json` found | |
 | Containerization Excellence | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
 | Version Control Best Practices | ✅ | ≥1 of the last 5 releases (or tags, if no releases exist) follows semantic versioning | `/releases`, falling back to `/tags` |
-| Environment Management | ✅ | any dependency-pinning file found (`requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, etc.) | |
+| Environment Management | ✅ | any dependency-pinning file found (`requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, etc.), **or** an environment specification (Spack `spack.yaml`/`spack.lock`, conda `environment*.yml`, `.devcontainer`, uberenv config) | the report's "dependency management practices, environment specification completeness" |
 | Reproducibility Documentation | ✅ | any of an install/build guide, release notes, or environment spec (`environment.yml`, `spack.yaml`, devcontainer) found | |
 
 Each of the 5 rows is itself a weighted blend (containers 20%, dependency
@@ -369,7 +369,7 @@ both the score and its weight, not counted as 0.
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | User Experience Assessment | 🔲 | — | the report specifies the UEQ instrument, which needs a survey |
-| Documentation Completeness Analysis | ✅ | README covers ≥3 of 4 core sections (installation / usage / examples / support); or, with ≥1 section, a `docs/` tree **and** a published site | README headings, `docs/` tree, published documentation site |
+| Documentation Completeness Analysis | ✅ | README covers ≥3 of 4 core sections (installation / usage / examples / support); or, with ≥1 section, a `docs/` tree **and** a published site | README headings, and link text that starts with a section keyword ("Getting Started…", "Contact Us"); `docs/` tree, published site |
 | Accessibility Feature Detection | 🔲 | — | — |
 | Installation Success Tracking | ✅ | ≥1 package manager with a documented install command | from 4.2.7's registry data |
 | Usage Analytics Integration | 🔲 | — | — |
@@ -390,9 +390,9 @@ ecosyste.ms a second time for the same answer.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found | |
+| Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found at the root; failing those, Meson, the Fortran Package Manager, a Spack recipe or environment elsewhere in the tree, a CMake/configure build one directory down (`llvm/`, `src/`), a root install script, or a pip-installable Python package (`setup.py`, or `pyproject.toml` with `[project]`/`[build-system]`) | docs, test, example and template directories are ignored |
 | Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
-| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build options only (Spack variants, CMake options, GPU arch targets, vendor images) |
+| Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build configuration only (Spack variants, CMake options, GPU arch targets, vendor images, GPU model names in runner labels, Kokkos architecture names) |
 | Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | |
 | Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels | [`deployment_environments.py`](collectors/quality/deployment_environments.py) |
 
@@ -402,8 +402,8 @@ plus the bus factor reused from `active_maintenance.py`.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Advanced Complexity Analysis | ✅ | <5% of source files over 100 KB, **and** directory tree depth ≤10 | source-file size distribution and tree depth |
-| Code Quality Assessment | ✅ | test-file-to-source-file ratio ≥0.20 | |
+| Advanced Complexity Analysis | ✅ | <5% of source files over 100 KB, **and** directory depth ≤10 | source-file size distribution; depth over non-test source files, so test-data fixtures don't set it |
+| Code Quality Assessment | ✅ | test-file-to-source-file ratio ≥0.20 | tests by directory (`test(s)/`, `testing/`, `unit_test(s)/`) or name (`test_*`, `*_test(s)`, `*UnitTest(s)*`) |
 | Documentation Quality Evaluation | ✅ | a doc generator (Doxygen / Sphinx / MkDocs) is configured, **or** doc-file-to-source-file ratio ≥5% | |
 | Knowledge Distribution Analysis | ✅ | bus factor ≥3 (same threshold as 4.2.3 and 4.2.10) | top-contributor share shown as context, not scored separately |
 | Refactoring and Evolution Tracking | ✅ | ≥2% of a 300-commit sample are refactor-intent commits | |
@@ -580,6 +580,12 @@ derived from it.
 Per-package overrides for sub-metrics that are genuinely N/A live in
 `package_config/<owner>_<repo>.yaml`; keys are the exact sub-metric labels from
 this catalog. See [PLACEHOLDER_GUIDE.md](PLACEHOLDER_GUIDE.md).
+
+The same file can list `related_repositories:` (`owner/repo` entries) for a
+project whose work is split across repositories. Contributor Abandonment
+Forecasting then merges contributor activity across all of them, so work moving
+to a companion repository isn't read as contributors leaving (Spack moved its
+package recipes to `spack/spack-packages`).
 
 A project can also narrow its *own* collection by adding `.metrics/metrics.yaml`
 to its own repo -- same `collectors:` / `overrides:` shape, fetched at

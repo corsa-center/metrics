@@ -39,7 +39,10 @@ logger = logging.getLogger(__name__)
 
 # Configuration files that mean a defect-finding tool is wired in. Style linters
 # are deliberately absent — dev_tooling.py scores those, and formatting is not
-# the same concern as defect detection.
+# the same concern as defect detection. Type checkers (mypy, Pyright) and the
+# Bandit security scanner are included: they find defects in Python code the
+# way clang-tidy and Cppcheck do in C/C++, which the list otherwise covers
+# exclusively.
 _ANALYSIS_CONFIGS = {
     "SonarQube/SonarCloud": ["sonar-project.properties", ".sonarcloud.properties"],
     "clang-tidy": [".clang-tidy"],
@@ -48,6 +51,29 @@ _ANALYSIS_CONFIGS = {
     "DeepSource": [".deepsource.toml"],
     "Codacy": [".codacy.yml", ".codacy.yaml"],
     "Coverity": [".coverity.yml", "cov-int"],
+    "mypy": ["mypy.ini", ".mypy.ini"],
+    "Pyright": ["pyrightconfig.json"],
+    "Bandit": [".bandit"],
+}
+
+# CERT has no secure-coding standard for these, and compiler hardening flags
+# don't apply to them, so a project written mainly in one is marked not
+# applicable rather than failed when no indicators are found. A list of
+# exclusions rather than of compiled languages, because GitHub's primary
+# language often misreports C/C++ repositories whose bulk is IR, docs or data
+# ("LLVM", "HTML", "Gnuplot").
+_CERT_NOT_APPLICABLE = {"python", "jupyter notebook", "r", "julia", "javascript", "typescript", "matlab"}
+
+# Hosted analysis services leave no config file in the tree; a README badge
+# for this repository is the evidence the project is registered with one.
+# {repo} is filled with owner/repo (or its underscore form) where the badge
+# URL names the repository.
+_ANALYSIS_BADGES = {
+    "CodeFactor": r"codefactor\.io/repository/github/{repo}\b",
+    "SonarQube/SonarCloud": r"sonarcloud\.io/(?:api/project_badges|summary|dashboard)\S*?{repo_}\b",
+    "Codacy": r"app\.codacy\.com/(?:gh/{repo}|project/badge/Grade/)",
+    "DeepSource": r"deepsource\.io/gh/{repo}\b",
+    "Coverity": r"scan\.coverity\.com/projects/",
 }
 
 # Tool and sanitizer names to look for inside CI workflow definitions.
@@ -60,6 +86,9 @@ _ANALYSIS_IN_CI = {
     "scan-build": re.compile(r"\bscan-build\b", re.I),
     "Flawfinder": re.compile(r"\bflawfinder\b", re.I),
     "Sanitizers": re.compile(r"-fsanitize=|\b(?:asan|ubsan|tsan|msan)\b", re.I),
+    "mypy": re.compile(r"\bmypy\b", re.I),
+    "Pyright": re.compile(r"\bpyright\b", re.I),
+    "Bandit": re.compile(r"\bbandit\b", re.I),
 }
 
 # Workflows whose names suggest analysis are read first; the rest of the
@@ -119,6 +148,14 @@ _DEFECT_LABELS = ["bug", "defect", "crash", "regression", "type: bug", "kind/bug
 # has 479 Bug-typed issues, so a label-only query reported it as unmeasurable.
 _DEFECT_ISSUE_TYPES = ["Bug", "Defect"]
 
+# A repository's own labels are matched by shape rather than exact spelling:
+# projects write "type-bug", "is:bug", "kind/bug", "Bug". Negations
+# ("not-a-bug", "no bug") are excluded; "bugfix" and "debugger" don't match.
+_BUG_LABEL = re.compile(
+    r"(?:^|[\s:/_.-])(?:bugs?|defects?|regressions?|crash(?:es)?)(?:[\s_-]*reports?)?$", re.I)
+_NEGATED_LABEL = re.compile(r"(?:^|[\s:/_-])(?:not|no|non)(?:[\s_-]|$)", re.I)
+_MAX_LABEL_PAGES = 3
+
 _TREND_WINDOW_DAYS = 365
 
 
@@ -150,6 +187,7 @@ class ReliabilityCollector(GitHubCollectorBase):
                 self._find_analysis_tools(tree, workflows),
                 self._find_hardening(client, owner, repo, tree, workflows),
                 self._defect_trend(client, owner, repo),
+                self._analysis_badges(client, owner, repo),
                 return_exceptions=True,
             )
 
@@ -158,6 +196,8 @@ class ReliabilityCollector(GitHubCollectorBase):
             tools, tools_gap = [], True
         else:
             tools, tools_gap = results[0]
+        if isinstance(results[3], list):
+            tools = sorted(set(tools) | set(results[3]))
 
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=hardening reason=exception:{results[1]!r}")
@@ -182,10 +222,23 @@ class ReliabilityCollector(GitHubCollectorBase):
             "analysis_tools": tools,
             "hardening": hardening,
             "defect_trend": trend,
-            "overall_score": self._calculate_score(tools, hardening, trend, tools_gap, hardening_gap),
+            "overall_score": self._calculate_score(
+                tools, hardening, trend, tools_gap, hardening_gap,
+                language=package.get("primary_language")),
         }
 
     # ------------------------------------------------------------------ fetch
+
+    async def _analysis_badges(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+        """Hosted analysis services with a README badge for this repository."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
+        if not isinstance(data, dict):
+            return []
+        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+        slug = re.escape(f"{owner}/{repo}")
+        slug_ = re.escape(f"{owner}_{repo}")
+        return [tool for tool, pattern in _ANALYSIS_BADGES.items()
+                if re.search(pattern.format(repo=slug, repo_=slug_), text, re.I)]
 
     async def _find_analysis_tools(self, tree, workflows: List[str]) -> tuple:
         """Defect-finding tools, from config files and analysis-shaped workflows.
@@ -315,6 +368,27 @@ class ReliabilityCollector(GitHubCollectorBase):
         compiler.sort(key=lambda p: (p.count("/"), p))
         return (strong + compiler)[:_MAX_FLAG_FILES], False
 
+    async def _repo_defect_labels(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> List[str]:
+        """The repository's own labels that mark a defect, or [] if none (or
+        the listing failed), in which case the conventional list is used."""
+        found: List[str] = []
+        for page in range(1, _MAX_LABEL_PAGES + 1):
+            data = await self._github_get(
+                client, f"https://api.github.com/repos/{owner}/{repo}/labels",
+                params={"per_page": 100, "page": page},
+            )
+            if not isinstance(data, list):
+                break
+            found += [l["name"] for l in data if isinstance(l, dict)
+                      and _BUG_LABEL.search(l.get("name", ""))
+                      and not _NEGATED_LABEL.search(l.get("name", ""))]
+            if len(data) < 100:
+                break
+        # Search queries are limited to 256 characters.
+        return found[:8]
+
     async def _defect_trend(
         self, client: httpx.AsyncClient, owner: str, repo: str
     ) -> Dict[str, Any]:
@@ -332,7 +406,8 @@ class ReliabilityCollector(GitHubCollectorBase):
         # parser splits it and silently drops the rest of the label list —
         # which returned 0 for every project until it was caught.
         labels = ",".join(
-            f'"{l}"' if (" " in l or ":" in l) else l for l in _DEFECT_LABELS
+            f'"{l}"' if (" " in l or ":" in l) else l
+            for l in (await self._repo_defect_labels(client, owner, repo) or _DEFECT_LABELS)
         )
 
         async def count(qualifier: str, date_range: str) -> tuple:
@@ -416,6 +491,7 @@ class ReliabilityCollector(GitHubCollectorBase):
     def _calculate_score(
         self, tools: List[str], hardening: List[str], trend: Dict,
         tools_gap: bool = False, hardening_gap: bool = False,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
 
@@ -442,13 +518,22 @@ class ReliabilityCollector(GitHubCollectorBase):
         }
         if not hardening and hardening_gap:
             cert_entry["not_collected"] = True
+        elif not hardening and language and language.lower() in _CERT_NOT_APPLICABLE:
+            cert_entry.update({
+                "value": f"Not applicable to a {language} project",
+                "detail": None, "not_collected": True, "not_applicable": True,
+            })
         sub["cert_compliance"] = cert_entry
 
         if trend.get("not_collected"):
             value = "Defect trend could not be measured (search rate limited)"
             passing = False
         elif not trend.get("measurable"):
-            value = "Project does not record defect reports by type or label"
+            # Too few typed or labelled defect reports to compare two years.
+            # Unmeasurable, not a failure: excluded from the score below.
+            n = trend.get("recent", 0) + trend.get("previous", 0)
+            value = (f"{n} defect report(s) found by issue type or label over two years, "
+                     f"too few to judge a trend")
             passing = False
         else:
             direction = trend["direction"]
@@ -465,6 +550,8 @@ class ReliabilityCollector(GitHubCollectorBase):
         }
         if trend.get("not_collected"):
             trend_entry["not_collected"] = True
+        elif not trend.get("measurable"):
+            trend_entry.update({"not_collected": True, "insufficient_sample": True})
         sub["reliability_trend"] = trend_entry
 
         scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}

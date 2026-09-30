@@ -110,6 +110,8 @@ _CITATION_FIELDS = ["title", "authors", "version", "license", "repository-code",
 # (CITATION.bib, CITATIONS.md with ```bibtex blocks, a bare CITATION file).
 _BIBTEX_CITATION_FILE = r"^(?:citations?|citing|cite)(?:\.(?:bib|md|txt|rst))?$"
 _BIBTEX_ENTRY = re.compile(r"@\w+\s*\{")
+_README_CITATION_HEADING = re.compile(
+    r"^\s{0,3}#{1,6}\s+(?:how to cite|citing|cite|citation|citations)\b.*$", re.I | re.M)
 _BIBTEX_FIELD = re.compile(r"(?i)(?<![\w-])(title|author|version|license|doi|url|repository)\s*=\s*[{\"]?([^,}\"\n]*)")
 _BIBTEX_TO_CITATION_FIELD = {
     "title": "title", "author": "authors", "version": "version",
@@ -351,7 +353,26 @@ class FairLicensingCollector(GitHubCollectorBase):
             if not _BIBTEX_ENTRY.search(text):
                 continue
             return {"path": path, **self._analyze_bibtex(text, owner, repo)}
-        return None
+        return await self._readme_bibtex(client, owner, repo)
+
+    async def _readme_bibtex(self, client: httpx.AsyncClient, owner: str, repo: str) -> Dict[str, Any]:
+        """BibTeX under the README's own citation heading ("Citation", "How to
+        cite", "Citing"), or None. Only that section is read: BibTeX elsewhere
+        in a README is usually related work, not how to cite this project."""
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
+        if not isinstance(data, dict):
+            return None
+        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+        m = _README_CITATION_HEADING.search(text)
+        if not m:
+            return None
+        section = text[m.end():]
+        nxt = re.search(r"^\s{0,3}#{1,6}\s", section, re.M)
+        section = section[:nxt.start()] if nxt else section
+        if not _BIBTEX_ENTRY.search(section):
+            return None
+        return {"path": f"{data.get('path', 'README.md')} citation section",
+                **self._analyze_bibtex(section, owner, repo)}
 
     @staticmethod
     def _analyze_bibtex(text: str, owner: str, repo: str) -> Dict[str, Any]:

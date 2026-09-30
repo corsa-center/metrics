@@ -21,7 +21,10 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from urllib.parse import quote
+
 from collectors.ecosystem.base import GitHubCollectorBase, RetryingTransport, get_threshold
+from collectors.rate_limit import search_get
 
 logger = logging.getLogger(__name__)
 
@@ -100,14 +103,15 @@ class EngagementCollector(GitHubCollectorBase):
             )
 
             # Fetch first comments for each issue concurrently (bot-filtered).
-            first_responses = await asyncio.gather(
-                *[self._first_response_hours(client, base, i) for i in issues_raw]
+            first_responses, flow = await asyncio.gather(
+                asyncio.gather(*[self._first_response_hours(client, base, i) for i in issues_raw]),
+                self._issue_flow(client, owner, repo),
             )
 
         issue_stats = self._compute_issue_stats(issues_raw, list(first_responses))
         pr_stats = self._compute_pr_stats(prs_raw)
         backlog = self._compute_backlog(repo_info, issues_raw)
-        score = self._score(issue_stats, pr_stats, backlog)
+        score = self._score(issue_stats, pr_stats, backlog, flow)
 
         return {
             "package_name": repo_name,
@@ -116,6 +120,7 @@ class EngagementCollector(GitHubCollectorBase):
             "issue_stats": issue_stats,
             "pr_stats": pr_stats,
             "backlog": backlog,
+            "issue_flow": flow,
             "overall_score": score,
         }
 
@@ -165,6 +170,55 @@ class EngagementCollector(GitHubCollectorBase):
         except Exception as e:
             logger.warning(f"Issues fetch failed: {e}")
             return []
+
+    async def _issue_flow(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Dict[str, Any]:
+        """Issue resolution and closure over fixed time windows.
+
+        The recently-updated issue sample suits the discussion metrics, but
+        as a basis for close time it only sees issues closed in the last few
+        days, whatever their age -- clearing an old backlog made a project
+        look slower -- and its open/closed split over-weights open issues,
+        which get commented on more. Instead:
+
+          - resolution: up to 100 of the newest issues opened between a year
+            ago and one resolution-threshold ago (so each has had the full
+            window to close), still-open ones counted as unresolved;
+          - closure: issues opened vs. closed over that same window, the
+            report's "closed versus opened ... over time".
+
+        Two searches, issued one after the other rather than together.
+        """
+        now = datetime.now(timezone.utc)
+        threshold_h = get_threshold("4.2.4", "Issue Resolution Analysis")
+        year_ago = (now - timedelta(days=365)).strftime("%Y-%m-%d")
+        youngest = (now - timedelta(hours=threshold_h)).strftime("%Y-%m-%d")
+        repo_q = f"repo:{owner}/{repo} is:issue"
+
+        async def search(q: str, per_page: int) -> Optional[Dict[str, Any]]:
+            url = (f"https://api.github.com/search/issues?q={quote(q)}"
+                   f"&sort=created&order=desc&per_page={per_page}")
+            resp = await search_get(client, url, self.github_headers)
+            if resp is None or resp.status_code != 200:
+                return None
+            return resp.json()
+
+        cohort = await search(f"{repo_q} created:{year_ago}..{youngest}", 100)
+        closed = await search(f"{repo_q} closed:{year_ago}..{youngest}", 1)
+        flow: Dict[str, Any] = {"window": f"{year_ago}..{youngest}"}
+        if cohort is not None:
+            hours = []
+            for item in cohort.get("items", []):
+                h = _hours(_parse_dt(item.get("created_at")), _parse_dt(item.get("closed_at")))
+                hours.append(h if h is not None else float("inf"))
+            flow["cohort_size"] = len(hours)
+            flow["cohort_still_open"] = sum(1 for h in hours if h == float("inf"))
+            flow["median_close_hours"] = statistics.median(hours) if hours else None
+        if cohort is not None and closed is not None:
+            flow["opened"] = cohort.get("total_count", 0)
+            flow["closed"] = closed.get("total_count", 0)
+        return flow
 
     async def _fetch_prs(
         self, client: httpx.AsyncClient, base: str
@@ -340,6 +394,7 @@ class EngagementCollector(GitHubCollectorBase):
         issue_stats: Dict[str, Any],
         pr_stats: Dict[str, Any],
         backlog: Dict[str, Any],
+        flow: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Score each of the 7 measurement methods defined in CASS Report §4.2.4.
@@ -348,28 +403,48 @@ class EngagementCollector(GitHubCollectorBase):
         """
         sub = {}
         pts = 0
+        unscored = 0
+        flow = flow or {}
 
         # 1. Response Time Tracking — passing if median first response is under the cap
         frt = issue_stats.get("median_first_response_hours")
+        sampled = issue_stats.get("sample_size", 0)
         passing = frt is not None and frt < get_threshold("4.2.4", "Response Time Tracking")
         sub["response_time_tracking"] = {
             "label": "Response Time Tracking",
-            "value": f"{frt:.0f} hours" if frt is not None else None,
+            "value": (f"{frt:.0f} hours" if frt is not None
+                      else f"no response to any of {sampled} sampled issue(s)" if sampled else None),
             "passing": passing,
             "pts": 1 if passing else 0,
         }
+        if 0 < sampled < _MIN_DISCUSSION_SAMPLE:
+            self._mark_thin_sample(sub["response_time_tracking"], sampled, "issue(s) sampled")
+            unscored += 1
         pts += sub["response_time_tracking"]["pts"]
 
-        # 2. Issue Resolution Analysis — passing if median close time is under the cap
-        mct = issue_stats.get("median_close_time_hours")
-        passing = mct is not None and mct < get_threshold("4.2.4", "Issue Resolution Analysis")
-        sub["issue_resolution"] = {
-            "label": "Issue Resolution Analysis",
-            "value": f"{mct:.0f} hours" if mct is not None else None,
-            "passing": passing,
-            "pts": 1 if passing else 0,
-        }
-        pts += sub["issue_resolution"]["pts"]
+        # 2. Issue Resolution Analysis — median time to close, over a cohort of
+        #    issues opened in a fixed window (see _issue_flow)
+        n = flow.get("cohort_size")
+        mct = flow.get("median_close_hours")
+        if not n:
+            sub["issue_resolution"] = {"label": "Issue Resolution Analysis", "value": None,
+                                       "passing": False, "pts": 0, "not_collected": True}
+            unscored += 1
+        else:
+            passing = mct < get_threshold("4.2.4", "Issue Resolution Analysis")
+            value = (f"{mct:.0f} hours median to close" if mct != float("inf")
+                     else "over half still open")
+            sub["issue_resolution"] = {
+                "label": "Issue Resolution Analysis",
+                "value": f"{value}, for {n} issues opened 30-365 days ago "
+                         f"({flow.get('cohort_still_open', 0)} still open)",
+                "passing": passing,
+                "pts": 1 if passing else 0,
+            }
+            if n < _MIN_DISCUSSION_SAMPLE:
+                self._mark_thin_sample(sub["issue_resolution"], n, "issue(s) in the window")
+                unscored += 1
+            pts += sub["issue_resolution"]["pts"]
 
         # 3. Pull Request Flow Assessment — passing if merge rate is above the floor
         mrp = pr_stats.get("merge_rate_pct")
@@ -382,20 +457,30 @@ class EngagementCollector(GitHubCollectorBase):
         }
         pts += sub["pr_flow"]["pts"]
 
-        # 4. Support Request Closure Analysis — passing if open/closed ratio is under the cap
-        ratio = backlog.get("sample_open_to_closed_ratio")
-        passing = ratio is not None and ratio < get_threshold("4.2.4", "Support Request Closure Analysis")
-        sub["support_closure"] = {
-            "label": "Support Request Closure Analysis",
-            "value": f"{ratio:.2f}" if ratio is not None else None,
-            "passing": passing,
-            "pts": 1 if passing else 0,
-        }
-        pts += sub["support_closure"]["pts"]
+        # 4. Support Request Closure Analysis — issues opened per issue closed
+        #    over the same window as Issue Resolution; passing while under the cap
+        opened, closed = flow.get("opened"), flow.get("closed")
+        if opened is None or closed is None or (opened == 0 and closed == 0):
+            sub["support_closure"] = {"label": "Support Request Closure Analysis", "value": None,
+                                      "passing": False, "pts": 0, "not_collected": True}
+            unscored += 1
+        else:
+            ratio = opened / closed if closed else float("inf")
+            passing = ratio < get_threshold("4.2.4", "Support Request Closure Analysis")
+            sub["support_closure"] = {
+                "label": "Support Request Closure Analysis",
+                "value": f"{opened} opened, {closed} closed 30-365 days ago"
+                         + (f" ({ratio:.2f} opened per closed)" if closed else ""),
+                "passing": passing,
+                "pts": 1 if passing else 0,
+            }
+            if opened + closed < _MIN_DISCUSSION_SAMPLE:
+                self._mark_thin_sample(sub["support_closure"], opened + closed, "issue(s) in the window")
+                unscored += 1
+            pts += sub["support_closure"]["pts"]
 
         discussion_n = issue_stats.get("discussion_sample_size", 0)
         thin_sample = 0 < discussion_n < _MIN_DISCUSSION_SAMPLE
-        unscored = 0
 
         # 5. Engagement Quality Metrics — depth of discussion per issue
         mc = issue_stats.get("median_comments")
@@ -456,10 +541,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
 
     @staticmethod
-    def _mark_thin_sample(entry: Dict[str, Any], n: int) -> None:
+    def _mark_thin_sample(entry: Dict[str, Any], n: int, noun: str = "community issue(s) sampled") -> None:
         """Keep the measured value visible but take the row out of the score."""
-        entry["value"] = (f"{entry['value']} -- only {n} community issue(s) sampled, "
-                          f"too few to judge")
+        entry["value"] = f"{entry['value']} -- only {n} {noun}, too few to judge"
         entry["insufficient_sample"] = True
         entry["passing"] = False
         entry["pts"] = 0

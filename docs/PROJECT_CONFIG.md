@@ -44,7 +44,8 @@ re-enable a collector a higher layer turned off:
 
 1. **Global** `config/orchestrator.yaml` -- applies to every package.
 2. **Maintainer-authored** `package_config/<owner>_<repo>.yaml` (this repo).
-   Same `collectors:` / `overrides:` shape as above.
+   Same `collectors:` / `overrides:` shape as above, plus an optional
+   `related_repositories:` list (see METRICS_CATALOG.md).
 3. **Project-authored** `.metrics/metrics.yaml`, fetched from the project's own
    repo at collection time.
 

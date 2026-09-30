@@ -133,3 +133,56 @@ class TestContainersAnywhereInTree:
     def test_vendored_dockerfile_does_not_count(self):
         tree = RepoTree("o", "r", ["extern/tool/Dockerfile", "CMakeLists.txt"], truncated=False)
         assert AccessibilityCollector()._scan(tree, "r", "o", "r")["has_container"] is False
+
+
+class TestPythonPackageAsPortableBuild:
+    def _collect(self, collector, paths, pyproject=None):
+        import asyncio, base64
+        from unittest.mock import AsyncMock, patch
+        tree = RepoTree("o", "r", paths, truncated=False)
+        content = {"content": base64.b64encode(pyproject.encode()).decode()} if pyproject else None
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_github_get", new=AsyncMock(return_value=content)):
+            return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_pyproject_with_project_table_is_portable(self, collector):
+        r = self._collect(collector, ["pyproject.toml", "lib/pkg/x.py"],
+                          '[project]\nname = "spack"\n[build-system]\nrequires = ["hatchling"]\n')
+        assert r["has_portable_build_system"] is True
+        assert r["python_package"] == "pyproject.toml"
+
+    def test_pyproject_with_only_tool_settings_is_not(self, collector):
+        r = self._collect(collector, ["pyproject.toml"], "[tool.ruff]\nline-length = 99\n")
+        assert r["has_portable_build_system"] is False
+
+    def test_setup_py_is_portable_without_a_read(self, collector):
+        r = self._collect(collector, ["setup.py"])
+        assert r["python_package"] == "setup.py"
+
+    def test_cmake_project_is_unchanged(self, collector):
+        r = self._collect(collector, ["CMakeLists.txt", "pyproject.toml"], "[tool.black]\n")
+        assert r["has_portable_build_system"] is True
+        assert "python_package" not in r
+
+
+class TestOtherBuildPaths:
+    @pytest.mark.parametrize("paths,label", [
+        (["meson.build"], "Meson"),
+        (["fpm.toml", "src/a.f90"], "Fortran Package Manager"),
+        (["spack/packages/py-x/package.py"], "Spack"),
+        (["environments/gnu/spack.yaml"], "Spack"),
+        (["src/CMakeLists.txt", "src/a.c"], "CMake"),
+        (["src/configure"], "Autoconf / configure"),
+        (["configure", "src/a.c"], "Autoconf / configure"),
+        (["install.sh"], "Install script"),
+    ])
+    def test_found(self, collector, paths, label):
+        assert collector._other_build(RepoTree("o", "r", paths, False)).startswith(label)
+
+    @pytest.mark.parametrize("paths", [
+        ["docs/CMakeLists.txt"], ["examples/CMakeLists.txt"], ["lib/pkg/package.py"],
+        ["docs/spack.yaml"], ["var/test_repos/packages/mock/package.py"],
+        ["share/templates/spack.yaml"], ["third_party/zlib/CMakeLists.txt"], ["a/b/CMakeLists.txt"],
+    ])
+    def test_not_a_build(self, collector, paths):
+        assert collector._other_build(RepoTree("o", "r", paths, False)) is None
