@@ -293,6 +293,9 @@ ENVIRONMENT_SPEC_PATTERN = (
     r"|(?:^|/)spack\.(?:yaml|lock)$"
     r"|(?:^|/)\.devcontainer(?:/|\.json$)"
     r"|(?:^|/)\.uberenv_config\.json$"
+    r"|(?:^|/)(?:shell|flake)\.nix$|(?:^|/)pixi\.toml$"
+    # A Spack package recipe kept in the project's own repository.
+    r"|(?:^|/)spack/(?:[^/]+/)*packages/[^/]+/package\.py$"
 )
 
 

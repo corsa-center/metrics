@@ -353,7 +353,7 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | FAIR4RS Compliance Assessment | ✅ | any of CITATION.cff, codemeta.json, `.zenodo.json` found | |
 | Containerization Excellence | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
 | Version Control Best Practices | ✅ | ≥1 of the last 5 releases (or tags, if no releases exist) follows semantic versioning | `/releases`, falling back to `/tags` |
-| Environment Management | ✅ | any dependency-pinning file found (`requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, etc.), **or** an environment specification (Spack `spack.yaml`/`spack.lock`, conda `environment*.yml`, `.devcontainer`, uberenv config) | the report's "dependency management practices, environment specification completeness" |
+| Environment Management | ✅ | any dependency-pinning file found (`requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, Julia `Manifest.toml`, `renv.lock`, `pixi.lock`, etc.), a root manifest that constrains dependency versions (`pyproject.toml` dependencies, `fpm.toml` tag/rev, Julia `[compat]`), Dependabot configured for the software's own packages (not only CI actions), **or** an environment specification (Spack `spack.yaml`/`spack.lock` or an in-repo Spack recipe, conda `environment*.yml`, Nix, pixi, `.devcontainer`, uberenv config) | the report's "dependency management practices, environment specification completeness" |
 | Reproducibility Documentation | ✅ | any of an install/build guide, release notes, or environment spec (`environment.yml`, `spack.yaml`, devcontainer) found | |
 
 Each of the 5 rows is itself a weighted blend (containers 20%, dependency

@@ -415,3 +415,58 @@ class TestReadmeInstallSection:
 
     def test_readme_without_one_does_not(self, collector):
         assert self._docs(collector, "# Pkg\nSome prose about install.\n")["has_reproducibility_docs"] is False
+
+
+class TestManagedDependencies:
+    def _collect(self, collector, files):
+        import base64
+        from unittest.mock import patch
+        tree = RepoTree("o", "r", list(files), truncated=False)
+        semver = {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
+
+        async def get(client, url, params=None):
+            path = url.split("/contents/", 1)[-1]
+            text = files.get(path)
+            return {"content": base64.b64encode(text.encode()).decode()} if text else None
+
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)), \
+             patch.object(collector, "_github_get", side_effect=get):
+            return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_fpm_dependency_pinned_to_a_tag(self, collector):
+        r = self._collect(collector, {"fpm.toml": '[dependencies]\nlib = {git = "https://x", tag = "3.6.1"}\n'})
+        assert r["has_dependency_pinning"]
+        assert "Versioned dependency manifest" in r["categories"]["dependency_pinning"]["found"]
+
+    def test_pyproject_with_only_python_and_build_bounds_does_not_count(self, collector):
+        r = self._collect(collector, {"pyproject.toml": (
+            '[project]\nname = "x"\nversion = "1.0"\nrequires-python = ">=3.9"\n'
+            'dependencies = ["numpy"]\n[build-system]\nrequires = ["setuptools>=61"]\n')})
+        assert not r["has_dependency_pinning"]
+
+    def test_pyproject_with_versioned_dependencies_counts(self, collector):
+        r = self._collect(collector, {"pyproject.toml": '[project]\ndependencies = ["numpy>=1.26", "click"]\n'})
+        assert r["has_dependency_pinning"]
+
+    def test_dependabot_for_ci_actions_only_does_not_count(self, collector):
+        yml = 'version: 2\nupdates:\n  - package-ecosystem: "github-actions"\n    directory: "/"\n'
+        assert not self._collect(collector, {".github/dependabot.yml": yml})["has_dependency_pinning"]
+
+    def test_dependabot_for_the_softwares_packages_counts(self, collector):
+        yml = 'version: 2\nupdates:\n  - package-ecosystem: "github-actions"\n  - package-ecosystem: "pip"\n'
+        r = self._collect(collector, {".github/dependabot.yml": yml})
+        assert "Dependabot dependency updates" in r["categories"]["dependency_pinning"]["found"]
+
+    @pytest.mark.parametrize("path", ["shell.nix", "flake.nix", "pixi.toml",
+                                      "spack/packages/py-mypkg/package.py"])
+    def test_other_environment_specs(self, collector, path):
+        from collectors.quality.reproducibility import _TREE_PATTERNS
+        import re
+        assert re.search(_TREE_PATTERNS[("reproducibility_docs", "Environment specification")], path)
+
+    def test_spack_internals_are_not_a_recipe(self, collector):
+        from collectors.quality.reproducibility import _TREE_PATTERNS
+        import re
+        assert not re.search(_TREE_PATTERNS[("reproducibility_docs", "Environment specification")],
+                             "lib/spack/spack/package.py")
