@@ -27,6 +27,8 @@ import httpx
 
 from collectors.rate_limit import search_get
 from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.community_health import _DEEP_DOC_PATTERNS, readme_contributing_section
+from collectors.quality.usability import readme_mentions
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,10 @@ _PR_TEMPLATE_PATHS = [
 # rather than at a handful of exact paths.
 _GETTING_STARTED_PATTERN = (
     r"(^|/)(docs?|documentation)/.*(getting[-_]?started|quick[-_ ]?start|tutorial)"
+    r"|^(getting[-_]?started|quick[-_]?start|tutorials?)(/|\.|$)"
 )
+# README sections that stand in for a separate getting-started document.
+_README_GETTING_STARTED = r"(?:getting started|quick ?start|tutorial)"
 
 # Window for "new" contributors and recent commit activity.
 _RECENT_DAYS = 365
@@ -111,6 +116,11 @@ class OutreachCollector(GitHubCollectorBase):
         if isinstance(results[3], Exception):
             logger.warning(f"COLLECTION-GAP category=onboarding reason=exception:{results[3]!r}")
         onboarding = self._check_onboarding(tree)
+        if onboarding["missing"]:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                readme = await self._get_readme_text(client, owner, repo)
+            if readme:
+                self._credit_readme(onboarding, readme)
 
         growth = self._analyze_contributor_growth(contributors, recent_commits)
 
@@ -260,8 +270,10 @@ class OutreachCollector(GitHubCollectorBase):
         if not issue_templates_url and tree.has_dir(_ISSUE_TEMPLATE_DIR):
             issue_templates_url = f"https://github.com/{tree.owner}/{tree.repo}/tree/HEAD/{_ISSUE_TEMPLATE_DIR}"
 
+        deep_contributing = tree.find_owned(_DEEP_DOC_PATTERNS["contributing_guidelines"])
         urls = {
-            "Contributing guide": tree.match_url(_CONTRIBUTING_PATHS),
+            "Contributing guide": tree.match_url(_CONTRIBUTING_PATHS) or (
+                tree.url_for(deep_contributing) if deep_contributing else None),
             "Issue templates": issue_templates_url,
             "Pull request template": tree.match_url(_PR_TEMPLATE_PATHS),
             "Getting-started guide": tree.find_url(_GETTING_STARTED_PATTERN),
@@ -273,6 +285,29 @@ class OutreachCollector(GitHubCollectorBase):
             for label in _ONBOARDING_LABELS
         }
         return {"found": found, "missing": missing, "not_collected": [], "details": details}
+
+    @staticmethod
+    def _credit_readme(onboarding: Dict[str, Any], text: str) -> None:
+        """Count README sections that do the job of a missing contributing
+        or getting-started document."""
+        covered = {
+            "Contributing guide": readme_contributing_section(text) is not None,
+            "Getting-started guide": readme_mentions(text, _README_GETTING_STARTED),
+        }
+        for label, ok in covered.items():
+            if ok and label in onboarding["missing"]:
+                onboarding["details"][label] = {"exists": True, "source": "README section"}
+        onboarding["found"] = [l for l in _ONBOARDING_LABELS if onboarding["details"][l].get("exists")]
+        onboarding["missing"] = [l for l in _ONBOARDING_LABELS
+                                 if l not in onboarding["found"] and l not in onboarding["not_collected"]]
+
+    async def _get_readme_text(self, client: httpx.AsyncClient, owner: str, repo: str) -> str:
+        try:
+            resp = await client.get(f"https://api.github.com/repos/{owner}/{repo}/readme",
+                                    headers={**self.github_headers, "Accept": "application/vnd.github.raw"})
+        except httpx.HTTPError:
+            return ""
+        return resp.text if resp.status_code == 200 else ""
 
     @staticmethod
     def _next_link(link_header: Optional[str]) -> Optional[str]:

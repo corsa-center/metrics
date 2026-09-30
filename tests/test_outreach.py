@@ -333,3 +333,46 @@ class TestCheckOnboarding:
         assert result["found"] == []
         assert set(result["missing"]) == set(_ONBOARDING_LABELS)
         assert result["not_collected"] == []
+
+    def test_contributing_guide_in_nested_docs_tree(self, collector):
+        tree = RepoTree("o", "r", ["src/docs/sphinx/developer/contributing.rst"], truncated=False)
+        assert "Contributing guide" in collector._check_onboarding(tree)["found"]
+
+    def test_bundled_subproject_contributing_guide_not_counted(self, collector):
+        tree = RepoTree("o", "r", ["packages/lib/docs/CONTRIBUTING.md"], truncated=False)
+        assert "Contributing guide" in collector._check_onboarding(tree)["missing"]
+
+    def test_top_level_tutorial_directory_counts(self, collector):
+        tree = RepoTree("o", "r", ["tutorial/00_hello/main.cc"], truncated=False)
+        assert "Getting-started guide" in collector._check_onboarding(tree)["found"]
+
+
+class TestReadmeOnboarding:
+    def _missing_all(self, collector):
+        return collector._check_onboarding(RepoTree("o", "r", ["README.md"], truncated=False))
+
+    def test_readme_getting_started_section_counts(self, collector):
+        onboarding = self._missing_all(collector)
+        collector._credit_readme(onboarding, "# Proj\n\n## Installing / Getting started\n\nmake\n")
+        assert onboarding["found"] == ["Getting-started guide"]
+        assert "Getting-started guide" not in onboarding["missing"]
+
+    def test_readme_contributing_section_needs_a_process(self, collector):
+        onboarding = self._missing_all(collector)
+        collector._credit_readme(onboarding, "## Contributing\n\nWe welcome contributions!\n")
+        assert "Contributing guide" in onboarding["missing"]
+        collector._credit_readme(onboarding, "## Contributing\n\nFork the repo and open a pull request.\n")
+        assert "Contributing guide" in onboarding["found"]
+
+    def test_readme_is_fetched_only_when_something_is_missing(self, collector):
+        tree = RepoTree("o", "r", ["CONTRIBUTING.md", ".github/ISSUE_TEMPLATE.md",
+                                   ".github/PULL_REQUEST_TEMPLATE.md", "docs/quickstart.md"],
+                        truncated=False)
+        with patch.object(collector, "_get_contributors", new=AsyncMock(return_value=([], False))), \
+             patch.object(collector, "_get_recent_commit_authors", new=AsyncMock(return_value=({}, False))), \
+             patch.object(collector, "_get_newcomer_issues", new=AsyncMock(return_value={"open": 0, "closed": 0, "total": 0})), \
+             patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_get_readme_text", new=AsyncMock(return_value="")) as readme:
+            result = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        readme.assert_not_called()
+        assert len(result["onboarding"]["found"]) == 4

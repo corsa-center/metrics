@@ -192,7 +192,7 @@ ADIOS2 53%, zfp 93%.
 | Good First Issue Effectiveness | ✅ | ≥1 **open** issue labelled `good first issue`, `help wanted`, or `newcomer` | search API counts |
 | External Event Participation | 🔲 | — | needs conference programmes |
 | Training Material Integration | 🔲 | — | needs course syllabi |
-| Onboarding Infrastructure Assessment | ✅ | ≥3 of 4: Contributing guide, issue template, PR template, getting-started guide | |
+| Onboarding Infrastructure Assessment | ✅ | ≥3 of 4: Contributing guide, issue template, PR template, getting-started guide | Contributing guide and getting-started guide also found in the project's own docs tree, a top-level tutorial directory, or a README section (a Contributing section must describe a process) |
 
 > "New" is inferred by comparing each author's all-time contribution count
 > against their commits in the window, rather than walking the whole log to find

@@ -50,7 +50,12 @@ def readme_covers(text: str, label: str) -> bool:
     """Whether README markdown covers one of _README_SECTIONS, by a heading or
     by link text starting with the topic. Anchored at the start for links: a
     link reading "Building X using Spack" is an install guide, not usage."""
-    pattern = _README_SECTIONS[label]
+    return readme_mentions(text, _README_SECTIONS[label])
+
+
+def readme_mentions(text: str, pattern: str) -> bool:
+    """Whether a README heading, or link text starting with the topic,
+    matches pattern."""
     headings = _ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)
     return (any(re.search(pattern, h, re.IGNORECASE) for h in headings)
             or any(re.match(rf"\W*{pattern}", t, re.IGNORECASE) for t in _LINK_TEXT.findall(text)))

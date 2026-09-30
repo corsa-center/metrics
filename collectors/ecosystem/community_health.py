@@ -33,6 +33,19 @@ _README_CONTRIB_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*contribut\w*.*$", re.I |
 _CONTRIB_PROCESS = re.compile(
     r"\b(?:fork|pull request|PRs?|branch|issue|style|tests?|ctest|commit|review|sign[- ]?off|DCO|CLA)\b", re.I)
 
+
+
+def readme_contributing_section(text: str) -> Optional[str]:
+    """The README's Contributing section, if it describes a process."""
+    m = _README_CONTRIB_HEADING.search(text)
+    if not m:
+        return None
+    rest = text[m.end():]
+    nxt = re.search(r"^\s{0,3}#{1,6}\s", rest, re.M)
+    section = rest[:nxt.start()] if nxt else rest[:3000]
+    return section if _CONTRIB_PROCESS.search(section) else None
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -222,18 +235,14 @@ class CommunityHealthCollector:
             if isinstance(readme, dict):
                 import base64
                 text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")
-                m = _README_CONTRIB_HEADING.search(text)
-                if m:
-                    rest = text[m.end():]
-                    nxt = re.search(r"^\s{0,3}#{1,6}\s", rest, re.M)
-                    section = rest[:nxt.start()] if nxt else rest[:3000]
-                    if _CONTRIB_PROCESS.search(section):
-                        results[2] = {
-                            "exists": True, "file_path": readme.get("path", "README.md"),
-                            "url": (readme.get("html_url") or "") + "#contributing", "size": 0,
-                            "content_preview": "", "repository": f"{owner}/{repo}",
-                            "section_text": section, "source": "README section",
-                        }
+                section = readme_contributing_section(text)
+                if section:
+                    results[2] = {
+                        "exists": True, "file_path": readme.get("path", "README.md"),
+                        "url": (readme.get("html_url") or "") + "#contributing", "size": 0,
+                        "content_preview": "", "repository": f"{owner}/{repo}",
+                        "section_text": section, "source": "README section",
+                    }
         return tuple(results)
 
     async def _analyze_governance_keywords(
