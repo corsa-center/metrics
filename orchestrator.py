@@ -372,7 +372,7 @@ class MetricsOrchestrator:
         Returns:
             Dictionary of software packages with metadata
         """
-        url = f"{self.dashboard_base_url}/explore/github-data/intReposInfo.json"
+        url = f"https://raw.githubusercontent.com/corsa-center/dashboard/refs/heads/main/explore/github-data/intReposInfo.json"
         data = self._fetch_json(url)
         if data is None:
             # Fail loudly: an empty catalog would let the run report success
