@@ -125,8 +125,8 @@ _INSTALL_DOC = (
 )
 _MAX_INSTALL_DOCS = 2
 # Getting-started and platform-requirements pages, which is where many
-# projects list what they run on (LLVM's GettingStarted pages, not its
-# INSTALL files, name Linux and macOS). requirements.txt is a pip file.
+# projects list what they run on when their INSTALL files don't.
+# requirements.txt is a pip file.
 _PLATFORM_GUIDE = (
     r"(?:^|/)(?:getting[-_]?started|quick[-_]?start|system[-_]requirements"
     r"|supported[-_]platforms|platforms)\.(?:md|rst|txt)$"

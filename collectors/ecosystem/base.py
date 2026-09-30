@@ -602,11 +602,11 @@ def configure_threshold_overrides(overrides: Optional[Dict[str, Dict[str, Any]]]
     _REGISTRY.set_overrides(overrides)
 
 
-# A tag naming a version (v5.0.11, papi-7-2-0-t, checkpoint.1.14.0), and the
+# A tag naming a version (v5.0.11, name-7-2-0, checkpoint.1.14.0), and the
 # pre-release suffixes that shouldn't count as a release on their own.
 _VERSION_TAG = re.compile(r"\d+[._-]\d+")
 # "<consumer>-YYYY-MM-DD" marks a snapshot known to work with another project
-# (Albany's compass-2026-03-21, "compatible with E3SM"), not a release.
+# (e.g. "downstream-2026-03-21"), not a release.
 _SNAPSHOT_TAG = re.compile(r"^(?!release)[a-z][\w.]*[-_]\d{4}-\d{2}-\d{2}$", re.I)
 _PRE_RELEASE_TAG = re.compile(
     r"(?<![a-z])(?:rc|alpha|beta|pre|dev)(?:[._-]?\d+)?(?![a-z])|\d(?:a|b)\d+", re.I)

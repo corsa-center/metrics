@@ -48,8 +48,8 @@ _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
 _ANACONDA_API = "https://api.anaconda.org/package/conda-forge"
 _SPACK_PACKAGES = "https://packages.spack.io/data/packages"
 # Every Spack recipe with its homepages and download URLs, for finding the
-# recipe that builds a repository when it goes by another name (SCOREC/core
-# is Spack's pumi, UO-OACISS/tau2 is tau). Fetched once per run.
+# recipe that builds a repository when it goes by another name than the
+# repository. Fetched once per run.
 _SPACK_INDEX = "https://packages.spack.io/data/repology.json"
 _GITHUB_REPO_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?=[/#?]|$)", re.I)
 _spack_by_repo: Optional[Dict[str, List[str]]] = None
@@ -200,8 +200,8 @@ class CollaborationCollector(GitHubCollectorBase):
         return sorted(_spack_by_repo.get(f"{owner}/{repo}".lower(), []))
 
     async def _main_spack_recipe(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
-        """Of the recipes built from this repository (llvm-project gives
-        llvm, llvm-openmp and aotriton-llvm), the one most packages depend on."""
+        """Of the recipes built from this repository (a monorepo can feed
+        several), the one most packages depend on."""
         names = (await self._spack_names_for(client, owner, repo))[:5]
         if len(names) < 2:
             return names

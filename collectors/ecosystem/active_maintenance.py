@@ -358,7 +358,7 @@ class ActiveMaintenanceCollector:
     async def _get_releases(self, owner: str, repo: str) -> List[Dict]:
         """Recent releases, newest first: GitHub Releases plus version tags
         that have no Release object. Many projects publish versions only as
-        tags (Open MPI's v5.0.x), which the Releases API doesn't list."""
+        tags, which the Releases API doesn't list."""
         url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20"
         releases: List[Dict] = []
         try:
