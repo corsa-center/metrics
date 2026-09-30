@@ -20,20 +20,12 @@ from typing import Dict, Any, Optional, List
 from urllib.parse import urlencode
 
 from collectors.ecosystem.base import (
-    PUBLIC_CHANNEL_PATTERNS, RetryingTransport, get_threshold, wiki_has_content,
+    PUBLIC_CHANNEL_PATTERNS, RetryingTransport, fetch_version_tags, get_threshold, wiki_has_content,
 )
 from collectors.rate_limit import search_get
 
 logger = logging.getLogger(__name__)
 
-# A tag naming a version (v5.0.11, papi-7-2-0-t, checkpoint.1.14.0), and the
-# pre-release suffixes that shouldn't count as a release on their own.
-_VERSION_TAG = re.compile(r"\d+[._-]\d+")
-# "<consumer>-YYYY-MM-DD" marks a snapshot known to work with another project
-# (Albany's compass-2026-03-21, "compatible with E3SM"), not a release.
-_SNAPSHOT_TAG = re.compile(r"^(?!release)[a-z][\w.]*[-_]\d{4}-\d{2}-\d{2}$", re.I)
-_PRE_RELEASE_TAG = re.compile(
-    r"(?<![a-z])(?:rc|alpha|beta|pre|dev)(?:[._-]?\d+)?(?![a-z])|\d(?:a|b)\d+", re.I)
 
 # Community channels a project might link from its README, beyond the tracker.
 _CHANNEL_PATTERNS = PUBLIC_CHANNEL_PATTERNS
@@ -383,32 +375,7 @@ class ActiveMaintenanceCollector:
                       reverse=True)
 
     async def _get_version_tags(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[Dict]:
-        """The 50 most recent version tags (not release candidates), dated by
-        the annotated tag or else its commit, as release-shaped dicts. One
-        GraphQL query; needs a token, so returns [] without one."""
-        if "Authorization" not in self.headers:
-            return []
-        query = """query($o:String!,$n:String!){repository(owner:$o,name:$n){
-          refs(refPrefix:"refs/tags/",first:50,orderBy:{field:TAG_COMMIT_DATE,direction:DESC}){
-            nodes{name target{__typename ... on Commit{committedDate}
-              ... on Tag{tagger{date} target{... on Commit{committedDate}}}}}}}}"""
-        resp = await client.post("https://api.github.com/graphql", headers=self.headers,
-                                 json={"query": query, "variables": {"o": owner, "n": repo}})
-        if resp.status_code != 200:
-            return []
-        repo_data = (resp.json().get("data") or {}).get("repository") or {}
-        tags = []
-        for node in (repo_data.get("refs") or {}).get("nodes") or []:
-            name, target = node.get("name", ""), node.get("target") or {}
-            if (not _VERSION_TAG.search(name) or _PRE_RELEASE_TAG.search(name)
-                    or _SNAPSHOT_TAG.search(name)):
-                continue
-            date = ((target.get("tagger") or {}).get("date")
-                    or target.get("committedDate")
-                    or (target.get("target") or {}).get("committedDate"))
-            if date:
-                tags.append({"tag_name": name, "published_at": date, "from_tag": True})
-        return tags
+        return await fetch_version_tags(client, self.headers, owner, repo)
 
     async def _get_contributors(self, owner: str, repo: str) -> List[Dict]:
         """Get contributors, paginated.
