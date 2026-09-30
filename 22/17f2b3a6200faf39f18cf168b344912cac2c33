@@ -1,0 +1,23 @@
+tests/test_fair_licensing.py
+  s_72fde105c4df10::t_60e96bbc45fa8b 408-435
+collectors/ecosystem/fair_licensing.py
+  s_72fde105c4df10::t_6fb9a7fe542d53 38,247-248,255-264
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_7032f9174973fb 131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2217f2b3a6200faf39f18cf168b344912cac2c33",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
