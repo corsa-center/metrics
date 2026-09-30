@@ -66,9 +66,9 @@ class TestScoring:
         assert s["percentage"] == 100.0
 
     def test_found_items_appear_as_detail(self, collector):
-        s = self._score(collector, testing=["Test suite directory", "CTest / CMake testing"])
+        s = self._score(collector, testing=["Test suite directory", "Build-system test target"])
         assert s["sub_scores"]["testing_framework"]["detail"] == (
-            "Test suite directory, CTest / CMake testing"
+            "Test suite directory, Build-system test target"
         )
 
 
@@ -138,7 +138,7 @@ class TestScan:
     def test_found_group_survives_confirmed_misses_on_other_groups(self, collector):
         tree = RepoTree("o", "r", ["pytest.ini"], truncated=False)
         result = collector._scan(tree, _TESTING_PATHS)
-        assert "pytest configuration" in result["found"]
+        assert "pytest" in result["found"]
         assert result["not_collected"] == []
 
     def test_capitalized_tests_directory_is_found(self, collector):
@@ -244,31 +244,31 @@ class TestRefineTesting:
         )
         assert set(out["found"]) == set(_TESTING_PATHS)
         assert out["details"]["Unit-test framework"]["file"] == "test/unit_tests/arkode/gtest"
-        assert out["details"]["CTest / CMake testing"]["file"] == "cmake/SundialsSetupTesting.cmake"
+        assert out["details"]["Build-system test target"]["file"] == "cmake/SundialsSetupTesting.cmake"
 
     def test_enable_testing_in_root_cmakelists(self, collector):
         out = self._run(collector, ["CMakeLists.txt"], {"CMakeLists.txt": "enable_testing()\n"})
-        assert "CTest / CMake testing" in out["found"]
+        assert "Build-system test target" in out["found"]
 
     def test_find_package_gtest_and_conftest(self, collector):
         out = self._run(collector, ["CMakeLists.txt", "python/tests/conftest.py"],
                         {"CMakeLists.txt": "find_package(GTest REQUIRED)\n"})
         assert "Unit-test framework" in out["found"]
-        assert "pytest configuration" in out["found"]
+        assert "pytest" in out["found"]
 
     def test_mentions_in_comments_do_not_count(self, collector):
         out = self._run(collector, ["CMakeLists.txt"],
                         {"CMakeLists.txt": "# we might enable_testing() later\nproject(x)\n"})
-        assert "CTest / CMake testing" in out["missing"]
+        assert "Build-system test target" in out["missing"]
 
     def test_vendored_conftest_does_not_count(self, collector):
         out = self._run(collector, ["external/lib/conftest.py"], {})
-        assert "pytest configuration" in out["missing"]
+        assert "pytest" in out["missing"]
 
     def test_gapped_read_leaves_labels_not_collected(self, collector):
         out = self._run(collector, ["CMakeLists.txt"], {"CMakeLists.txt": COLLECTION_GAP})
-        assert "CTest / CMake testing" in out["not_collected"]
-        assert "CTest / CMake testing" not in out["missing"]
+        assert "Build-system test target" in out["not_collected"]
+        assert "Build-system test target" not in out["missing"]
 
 
 class TestNestedTestSuite:
@@ -327,3 +327,45 @@ class TestToolingBeyondRoot:
 
     def test_setuptools_sections_are_not_tools(self, collector):
         assert self._refine(collector, [], {"pyproject.toml": "[tool.setuptools]\npackages=['x']\n"}) == []
+
+
+class TestTestRunnersBeyondConfig:
+    def _refine(self, collector, paths, files):
+        import base64
+        from collectors.ecosystem.base import RepoTree
+        from collectors.quality.development_practices.dev_tooling import _TESTING_PATHS
+        tree = RepoTree("o", "r", list(paths) + list(files), truncated=False)
+
+        async def get(client, url, params=None):
+            text = files.get(url.split("/contents/", 1)[-1])
+            return {"content": base64.b64encode(text.encode()).decode()} if text else None
+        collector._github_get = get
+        testing = collector._scan(tree, _TESTING_PATHS)
+        return asyncio.run(collector._refine_testing(None, "o", "r", tree, testing))["found"]
+
+    def test_ctest_run_in_ci(self, collector):
+        found = self._refine(collector, ["src/a.cc"], {".github/workflows/cmake.yml": "run: ctest --output-on-failure"})
+        assert "Build-system test target" in found
+
+    def test_automake_check_target(self, collector):
+        found = self._refine(collector, ["src/a.c"], {"Makefile.am": "SUBDIRS = src\nTESTS = t1 t2\n"})
+        assert "Build-system test target" in found
+
+    def test_fpm_project_with_tests(self, collector):
+        assert "Build-system test target" in self._refine(collector, ["fpm.toml", "test/main.f90"], {})
+
+    def test_make_then_cd_test_is_not_a_test_target(self, collector):
+        found = self._refine(collector, ["src/a.c"], {".github/workflows/b.yml": "run: make -j4 && cd test && ls"})
+        assert "Build-system test target" not in found
+
+    def test_pytest_run_in_ci(self, collector):
+        found = self._refine(collector, ["pkg/a.py"], {".github/workflows/ci.yml": "run: python -m pytest tests"})
+        assert "pytest" in found
+
+    def test_python_test_extras_are_not_automake(self, collector):
+        found = self._refine(collector, ["pkg/a.py"], {"pyproject.toml": '[project.optional-dependencies]\ntests = ["pytest"]\n'})
+        assert "Build-system test target" not in found
+
+    def test_commented_out_runner_does_not_count(self, collector):
+        found = self._refine(collector, ["src/a.c"], {".github/workflows/b.yml": "# TODO: run make check\nrun: make\n"})
+        assert "Build-system test target" not in found

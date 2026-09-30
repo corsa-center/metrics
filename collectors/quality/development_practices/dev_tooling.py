@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 # enumerated here (METRIC_BLIND_SPOTS.md class F1).
 _TESTING_PATHS = {
     "Test suite directory": ["test", "tests", "testing", "src/test"],
-    "CTest / CMake testing": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
-    "pytest configuration": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
+    "Build-system test target": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
+    "pytest": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
     "Unit-test framework": [
         "test/googletest", "extern/googletest", "third_party/googletest",
         "test/catch2", "extern/Catch2",
@@ -50,8 +50,10 @@ _FRAMEWORK_DIR = r"(?:^|/)(?:googletest|gtest|catch2?|doctest|cmocka|pfunit)(?:/
 _CONFTEST = r"(?:^|/)conftest\.py$"
 _NESTED_TEST_DIR = r"(?:^|/)(?:tests?|testing|unit_?tests?)/"
 _CONTENT_MARKERS = {
-    "CTest / CMake testing": re.compile(r"^\s*(?:enable_testing\s*\(|include\s*\(\s*CTest\b)", re.M | re.I),
-    "pytest configuration": re.compile(r"^\[tool(?:\.|:)pytest", re.M),
+    # CTest, or an automake check target.
+    "Build-system test target": re.compile(
+        r"^\s*(?:enable_testing\s*\(|include\s*\(\s*CTest\b|(?-i:TESTS)\s*\+?=|check-local\s*:)", re.M | re.I),
+    "pytest": re.compile(r"^\[tool(?:\.|:)pytest", re.M),
     "Unit-test framework": re.compile(
         r"FetchContent_Declare\s*\(\s*(?:googletest|catch2|doctest)\b"
         r"|find_package\s*\(\s*(?:GTest|Catch2|doctest)\b",
@@ -61,7 +63,16 @@ _CONTENT_MARKERS = {
 # CMake modules whose name mentions testing, read after the root CMakeLists.
 _TEST_CMAKE_FILE = r"(?:^|/)[^/]*test[^/]*\.cmake$"
 _MAX_TEST_CMAKE_FILES = 3
-_CONFIG_FILES = ["CMakeLists.txt", "pyproject.toml", "setup.cfg"]
+_CONFIG_FILES = ["CMakeLists.txt", "pyproject.toml", "setup.cfg", "Makefile.am"]
+# Test runners a project's CI invokes: evidence of the framework in use even
+# where no config file declares it (a CMake helper module calling
+# enable_testing, pytest run with defaults).
+_CI_FILES = r"^(?:\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml)$"
+_MAX_CI_FILES = 10
+_CI_TEST_RUNNERS = {
+    "Build-system test target": re.compile(r"\bctest\b|\bmake\s+(?:-\S+\s+)*(?:check|test)\b|\bfpm\s+test\b", re.I),
+    "pytest": re.compile(r"\bpytest\b(?![-_.])", re.I),
+}
 
 # Tooling that enforces consistency without a human in the loop.
 _TOOLING_PATHS = {
@@ -196,12 +207,19 @@ class DevToolingCollector(GitHubCollectorBase):
                 path = min(hits, key=lambda p: (p.count("/"), p))
                 m = re.search(_NESTED_TEST_DIR, path, re.I)
                 mark("Test suite directory", path[:m.end()].rstrip("/"))
-        if "pytest configuration" in missing:
+        if "pytest" in missing:
             path = tree.find_owned(_CONFTEST)
             if path:
-                mark("pytest configuration", path)
+                mark("pytest", path)
+        if "Build-system test target" in missing:
+            # fpm builds and runs everything under test/ with `fpm test`.
+            fpm = tree.match(["fpm.toml"])
+            if fpm and tree.has_dir("test"):
+                mark("Build-system test target", fpm)
 
-        wanted = [label for label in _CONTENT_MARKERS if label in missing]
+        wanted = [label for label in list(_CONTENT_MARKERS) + list(_CI_TEST_RUNNERS)
+                  if label in missing]
+        wanted = list(dict.fromkeys(wanted))
         if not wanted:
             return {**testing, "found": found, "missing": missing, "details": details}
 
@@ -210,6 +228,7 @@ class DevToolingCollector(GitHubCollectorBase):
             key=lambda p: (p.count("/"), p),
         )[:_MAX_TEST_CMAKE_FILES]
         paths = [p for p in (tree.match([c]) for c in _CONFIG_FILES) if p] + cmake_modules
+        ci_paths = tree.find(_CI_FILES)[:_MAX_CI_FILES]
 
         async def read(path: str):
             data = await self._github_get(
@@ -219,10 +238,13 @@ class DevToolingCollector(GitHubCollectorBase):
                 return data if data is COLLECTION_GAP else ""
             return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
-        texts = await asyncio.gather(*[read(p) for p in paths])
+        texts = await asyncio.gather(*[read(p) for p in paths + ci_paths])
         for label in wanted:
-            for path, text in zip(paths, texts):
-                if text and text is not COLLECTION_GAP and _CONTENT_MARKERS[label].search(text):
+            for i, (path, text) in enumerate(zip(paths + ci_paths, texts)):
+                marker = _CONTENT_MARKERS.get(label) if i < len(paths) else _CI_TEST_RUNNERS.get(label)
+                if i >= len(paths) and text and text is not COLLECTION_GAP:
+                    text = re.sub(r"(?m)^\s*#.*$", "", text)  # a comment isn't a step
+                if text and text is not COLLECTION_GAP and marker and marker.search(text):
                     mark(label, path)
                     break
         if any(t is COLLECTION_GAP for t in texts):
