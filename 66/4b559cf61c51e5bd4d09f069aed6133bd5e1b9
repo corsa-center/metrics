@@ -1,0 +1,27 @@
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_63f72bae8b0ec0 398
+collectors/quality/accessibility.py
+  s_72fde105c4df10::t_1cd50f796d7690 16,29-37,125-129,137-158
+orchestrator.py
+  s_72fde105c4df10::t_b0b6762b6644e9 2160-2161
+tests/conftest.py
+  s_72fde105c4df10::t_7f040c0885f676 13-23
+tests/test_accessibility.py
+  s_72fde105c4df10::t_58f6f267e2d022 189-204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "664b559cf61c51e5bd4d09f069aed6133bd5e1b9",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
