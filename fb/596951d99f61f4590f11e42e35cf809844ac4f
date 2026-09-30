@@ -1,0 +1,23 @@
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_d3aada172ba39b 347
+collectors/quality/development_practices/dev_tooling.py
+  s_72fde105c4df10::t_4e8956e2a1ba82 35-36,53-56,66-75,210,213-222,231,241,243-247
+tests/test_dev_tooling.py
+  s_72fde105c4df10::t_339da9df0306f9 69,71,141,247,251,257,262,266,270-271,330-371
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fb596951d99f61f4590f11e42e35cf809844ac4f",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
