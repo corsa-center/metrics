@@ -28,6 +28,7 @@ import re
 import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
+from project_report import render_project_report
 
 # Setup logging
 logging.basicConfig(
@@ -1011,6 +1012,15 @@ class MetricsOrchestrator:
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
+    def _metric_weights(self) -> Dict[str, float]:
+        """Dimension weights for the overall score, from config or defaults."""
+        weights = self.config.get("metric_weights", {})
+        return {
+            "impact": weights.get("impact", 0.33),
+            "ecosystem": weights.get("ecosystem", 0.34),
+            "quality": weights.get("quality", 0.33),
+        }
+
     def _calculate_overall_score(
         self,
         impact: Dict,
@@ -1024,11 +1034,10 @@ class MetricsOrchestrator:
         - Ecosystem: 34%
         - Quality: 33%
         """
-        # Get weights from config or use defaults
-        weights = self.config.get("metric_weights", {})
-        impact_weight = weights.get("impact", 0.33)
-        ecosystem_weight = weights.get("ecosystem", 0.34)
-        quality_weight = weights.get("quality", 0.33)
+        weights = self._metric_weights()
+        impact_weight = weights["impact"]
+        ecosystem_weight = weights["ecosystem"]
+        quality_weight = weights["quality"]
 
         # Extract scores from dimension results
         impact_score = impact.get("score", 0)
@@ -2349,9 +2358,12 @@ class MetricsOrchestrator:
     def _write_dashboard_output(self, all_metrics: Dict):
         """Write per-package metrics.json files for the dashboard.
 
-        Creates: output/{repo-name}-metrics/metrics.json for each package.
-        These are uploaded as workflow artifacts and downloaded by the
-        dashboard's update workflow into explore/github-data/.
+        Creates: output/{repo-name}-metrics/metrics.json for each package,
+        and beside it report.md -- the same results as one readable page
+        with the thresholds each row was judged against (see
+        project_report.py). These are uploaded as workflow artifacts and
+        downloaded by the dashboard's update workflow into
+        explore/github-data/.
         """
         for repo_name, metrics in all_metrics.items():
             dashboard_data = self._transform_for_dashboard(repo_name, metrics)
@@ -2366,6 +2378,11 @@ class MetricsOrchestrator:
                 json.dump(dashboard_data, f, indent=2)
 
             logger.info(f"Dashboard metrics written to {output_file}")
+
+            report_file = metrics_dir / "report.md"
+            report_file.write_text(
+                render_project_report(dashboard_data, metrics, self._metric_weights())
+            )
 
 
 async def main():

@@ -135,6 +135,17 @@ Contains:
 
 Detailed logs of the collection process
 
+### 4. Per-Project Report
+**Location:** `./output/{repo}-metrics/report.md` (beside that package's `metrics.json`)
+
+A readable account of how one package's results were reached: every
+dashboard row with its value, pass/fail mark and supporting evidence (file
+links, counts, Scorecard checks), the thresholds from `config/thresholds.yaml`
+each section was judged against (with any `thresholds:` overrides applied),
+and any collectors the project's own config turned off. It is rendered from
+the same per-section data as `metrics.json`, so it always matches the
+dashboard. See `project_report.py`.
+
 ## Automation via GitHub Actions
 
 The workflow `.github/workflows/collect-and-sync.yml` automates the orchestrator:
