@@ -1,0 +1,29 @@
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_f245a912da28cd 188-190
+collectors/ecosystem/outreach.py
+  s_72fde105c4df10::t_d0ef4a29f12072 104,106,125,195-196,202-203,216-217,219,329-330,339-345,354-356,365-367,400-402,420-427,430-431,442,445-452,466-472,507-508
+config/thresholds.yaml
+  s_72fde105c4df10::t_cab44c2df17d49 88
+orchestrator.py
+  s_72fde105c4df10::t_5d450f3598be03 2361,2374-2381
+tests/test_orchestrator_dashboard_transform.py
+  s_72fde105c4df10::t_08cd4dc5693a8f 355-359
+tests/test_outreach.py
+  s_72fde105c4df10::t_ed98e47e9d2ca1 73-74,79,82,84,87-115,300-318,421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "102f89d7c845646293779f2e7d7c97edb819e26c",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
