@@ -2157,6 +2157,8 @@ class MetricsOrchestrator:
             if accessibility.get("python_package"):
                 build_found = build_found + [f'pip-installable Python package ({accessibility["python_package"]})']
             container_found = cats.get("containers", {}).get("found", [])
+            if accessibility.get("container_image"):
+                container_found = container_found + [accessibility["container_image"]]
 
             # 5. Deployment Environment Testing comes from its own collector, so
             #    it is rendered with _sub_row and scored alongside the _acc_row

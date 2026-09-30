@@ -13,6 +13,7 @@ Checks (per the report):
   - Documentation        : INSTALL, INSTALL.md
 """
 
+import asyncio
 import base64
 import httpx
 import logging
@@ -24,6 +25,15 @@ from collectors.ecosystem.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+# E4S builds its Docker / Singularity images (ecpe4s/e4s-cpu and the GPU
+# variants) from these Spack environments, so a package listed here is
+# available as a container even without a recipe in its own repository.
+_E4S_ENVIRONMENT = ("https://raw.githubusercontent.com/E4S-Project/e4s/HEAD/"
+                    "environments/x86_64/gnu/cpu/spack.yaml")
+_E4S_SPEC = re.compile(r"^\s*-\s*([a-z0-9][\w-]*)", re.M)
+_e4s_specs: Optional[set] = None
+_e4s_lock = asyncio.Lock()
 
 # Each category maps a human-readable label to candidate file paths, matched
 # case-insensitively against a RepoTree (see base.py).
@@ -112,12 +122,39 @@ class AccessibilityCollector(GitHubCollectorBase):
                 if other:
                     result["has_portable_build_system"] = True
                     result["other_build"] = other
+            if not result["has_container"] and tree is not COLLECTION_GAP:
+                image = await self._e4s_image(client, owner, repo)
+                if image:
+                    result["has_container"] = True
+                    result["container_image"] = image
             if not result["has_portable_build_system"] and tree is not COLLECTION_GAP:
                 package = await self._python_package(client, owner, repo, result)
                 if package:
                     result["has_portable_build_system"] = True
                     result["python_package"] = package
             return result
+
+    async def _e4s_image(self, client: httpx.AsyncClient, owner: str, repo: str) -> Optional[str]:
+        """"E4S container image (Spack package <name>)" when the project's
+        Spack recipe is in the E4S image environment, else None."""
+        global _e4s_specs
+        async with _e4s_lock:
+            if _e4s_specs is None:
+                try:
+                    resp = await client.get(_E4S_ENVIRONMENT)
+                except httpx.HTTPError:
+                    return None
+                if resp.status_code != 200:
+                    return None
+                _e4s_specs = set(_E4S_SPEC.findall(resp.text.split("specs:", 1)[-1]))
+        # The same recipe lookup the collaboration collector uses: the repo's
+        # own name, then recipes whose URLs are this repository.
+        from collectors.ecosystem.collaboration import CollaborationCollector
+        names = [repo.lower()] + await CollaborationCollector()._main_spack_recipe(client, owner, repo)
+        for name in names:
+            if name in _e4s_specs:
+                return f"E4S container image (Spack package {name})"
+        return None
 
     @staticmethod
     def _other_build(tree) -> Optional[str]:
