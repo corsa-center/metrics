@@ -354,6 +354,33 @@ class TestAcknowledgmentFiles:
         assert grants == [{"value": "DOE", "kind": "acknowledgment"}]
         assert gap is False
 
+    def test_docs_landing_and_acknowledgment_pages_are_read(self, collector):
+        import base64
+        from unittest.mock import MagicMock
+        from collectors.ecosystem.base import RepoTree
+
+        def enc(t):
+            return {"content": base64.b64encode(t.encode()).decode()}
+
+        read = []
+
+        async def fake_get(client, url, params=None):
+            read.append(url.rsplit("/contents/", 1)[-1])
+            if url.endswith("docs/source/index.rst"):
+                return enc("Funded by the Exascale Computing Project, U.S. Department of Energy")
+            if url.endswith("docs/acknowledgements.rst"):
+                return enc("Acknowledgements\n================\n\nNational Science Foundation\n")
+            return None
+
+        collector._github_get = fake_get
+        tree = RepoTree("o", "r", [
+            "docs/source/index.rst", "docs/acknowledgements.rst",
+            "docs/_build/html/_sources/index.rst", "third_party/lib/docs/index.rst",
+        ], truncated=False)
+        grants, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o", "r", tree))
+        assert {g["value"] for g in grants} == {"DOE", "NSF"}
+        assert not any("_build" in p or "third_party" in p for p in read)
+
     def test_gapped_tree_is_a_gap(self, collector):
         from unittest.mock import MagicMock
         from collectors.ecosystem.base import COLLECTION_GAP
@@ -412,3 +439,7 @@ class TestInternationalAwards:
     def test_funder_name_outside_funding_context_is_not_counted(self):
         from collectors.ecosystem.funding import FundingCollector
         assert FundingCollector._acknowledged_agencies("Runs on EuroHPC's LUMI machine.") == []
+
+    def test_underlined_acknowledgments_heading_is_a_section(self):
+        rst = "Acknowledgments\n---------------\n\n* Department of Defense\n* NASA\n\nLicense\n-------\n\nNSF\n"
+        assert set(FundingCollector._acknowledged_agencies(rst)) == {"NASA", "DoD"}
