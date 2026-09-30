@@ -169,9 +169,7 @@ class MetricsOrchestrator:
         # thresholds.yaml raises here, at startup, instead of being
         # silently ignored.
         configure_threshold_overrides(self.config.get("thresholds"))
-        self.dashboard_base_url = self.config.get(
-            "dashboard_base_url", "https://corsa.center/dashboard"
-        ).rstrip("/")
+        self.catalog_url = self.config.get("catalog_url", "")
         self.output_path = Path(self.config.get("output_path", "./output"))
         self.collectors_enabled = self.config.get("collectors", {})
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
@@ -372,12 +370,14 @@ class MetricsOrchestrator:
         Returns:
             Dictionary of software packages with metadata
         """
-        url = f"https://raw.githubusercontent.com/corsa-center/dashboard/refs/heads/main/explore/github-data/intReposInfo.json"
-        data = self._fetch_json(url)
+        if not self.catalog_url:
+            raise RuntimeError(f"No catalog URL specified")
+
+        data = self._fetch_json(self.catalog_url)
         if data is None:
             # Fail loudly: an empty catalog would let the run report success
             # having collected nothing.
-            raise RuntimeError(f"Could not load the software catalog from {url}")
+            raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
         return data.get("data", {})
 
     def prepare_software_list(
