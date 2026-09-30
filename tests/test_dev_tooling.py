@@ -369,3 +369,9 @@ class TestTestRunnersBeyondConfig:
     def test_commented_out_runner_does_not_count(self, collector):
         found = self._refine(collector, ["src/a.c"], {".github/workflows/b.yml": "# TODO: run make check\nrun: make\n"})
         assert "Build-system test target" not in found
+
+
+class TestMoreToolConfigs(TestToolingBeyondRoot):
+    def test_astyle_config_and_committed_git_hook(self, collector):
+        found = self._refine(collector, ["config/mfem.astylerc", "config/githooks/pre-commit"])
+        assert {"Code formatter config", "Pre-commit hooks"} <= set(found)

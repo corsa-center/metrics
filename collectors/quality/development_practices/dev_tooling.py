@@ -91,9 +91,13 @@ _TOOLING_PATHS = {
 # component's src/.clang-format, a subproject's .clang-tidy), in more tools
 # than the root list names.
 _TOOLING_TREE = {
+    # A git hook committed to the repository (installed with core.hooksPath
+    # or a setup script), or husky's.
+    "Pre-commit hooks": r"(?:^|/)(?:\.?githooks|\.husky|hooks)/pre-commit$",
     "Code formatter config": (
         r"(?:^|/)(?:[._]clang-format|\.cmake-format(?:\.ya?ml|\.json|\.py)?|\.gersemirc"
-        r"|\.fprettify\.rc|\.style\.yapf|\.prettierrc[\w.]*|\.?rustfmt\.toml|\.JuliaFormatter\.toml)$"
+        r"|\.fprettify\.rc|\.style\.yapf|\.prettierrc[\w.]*|\.?rustfmt\.toml|\.JuliaFormatter\.toml"
+        r"|[\w.-]*\.?astylerc|uncrustify[\w.-]*\.cfg)$"
     ),
     "Linter config": (
         r"(?:^|/)(?:\.clang-tidy|\.flake8|\.?pylintrc|\.?ruff\.toml|\.?mypy\.ini"
