@@ -1,0 +1,25 @@
+collectors/ecosystem/engagement.py
+  s_72fde105c4df10::t_9e4b9290b2574f 423-425,500-502,519-521,560-564
+collectors/quality/development_practices/dev_tooling.py
+  s_72fde105c4df10::t_96ba165fbe8f3d 283-286,301
+tests/test_dev_tooling.py
+  s_72fde105c4df10::t_dd08e5b532ca23 49,52-53,56-57
+tests/test_engagement.py
+  s_72fde105c4df10::t_d15a161c38f28b 117-120,129,423,458,477-485
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d0aa4b7b10283173c6596924123843b98db5808a",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
