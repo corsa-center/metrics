@@ -1368,12 +1368,16 @@ class MetricsOrchestrator:
                 chaoss_score = chaoss.get("overall_score", {})
                 score_val = chaoss_score.get("score", 0)
                 status = chaoss_score.get("status", "unknown")
-                chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
-                gov_pts += 1 if chaoss_ok else 0
-                gov_lines.append(
-                    f'<p><strong>CHAOSS Governance Metrics:</strong> '
-                    f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
-                )
+                if score_val is None:
+                    # Every category unmeasured or gapped: no score to judge.
+                    gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+                else:
+                    chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
+                    gov_pts += 1 if chaoss_ok else 0
+                    gov_lines.append(
+                        f'<p><strong>CHAOSS Governance Metrics:</strong> '
+                        f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
+                    )
                 # Per-category breakdown, weakest first, so the failing areas
                 # are what a maintainer sees rather than just the headline score.
                 # A category can be {"not_collected": True} instead of a
@@ -2353,8 +2357,16 @@ class MetricsOrchestrator:
         These are uploaded as workflow artifacts and downloaded by the
         dashboard's update workflow into explore/github-data/.
         """
+        failed = []
         for repo_name, metrics in all_metrics.items():
-            dashboard_data = self._transform_for_dashboard(repo_name, metrics)
+            # One package's rendering error used to abort the loop and drop
+            # every later package's output; write the rest, then fail the run.
+            try:
+                dashboard_data = self._transform_for_dashboard(repo_name, metrics)
+            except Exception as e:
+                logger.error(f"Could not render dashboard output for {repo_name}: {e!r}", exc_info=True)
+                failed.append(repo_name)
+                continue
 
             # Extract repo part from "Owner/repo" for directory name
             repo_short = repo_name.split("/")[-1]
@@ -2366,6 +2378,9 @@ class MetricsOrchestrator:
                 json.dump(dashboard_data, f, indent=2)
 
             logger.info(f"Dashboard metrics written to {output_file}")
+
+        if failed:
+            raise RuntimeError(f"Dashboard output failed for: {', '.join(failed)}")
 
 
 async def main():

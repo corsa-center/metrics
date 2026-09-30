@@ -329,3 +329,26 @@ class TestUnmeasuredRowsCarryNoMark:
         section = orchestrator._transform_for_dashboard("o/r", metrics)["ecosystem"]["4.2.7"]["data"]
         row = [l for l in section.split("\n") if "Collaboration Network" in l][0]
         assert "✗" not in row and "not audited" in row
+
+
+class TestChaossScoreNone:
+    def test_all_categories_unmeasured_renders_not_collected(self, orchestrator):
+        metrics = _base_metrics(ecosystem_sub={
+            "governance": {"effectiveness": {}},
+            "chaoss_activity": {"overall_score": {
+                "score": None, "max_score": 100, "status": "not_collected", "category_scores": {}}}})
+        section = orchestrator._transform_for_dashboard("o/r", metrics)["ecosystem"]["4.2.1"]["data"]
+        assert "<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>" in section
+
+    def test_one_failing_package_does_not_drop_the_others(self, orchestrator, tmp_path, monkeypatch):
+        orchestrator.output_path = tmp_path
+        real = orchestrator._transform_for_dashboard
+
+        def transform(name, metrics):
+            if name == "bad/pkg":
+                raise TypeError("boom")
+            return real(name, metrics)
+        monkeypatch.setattr(orchestrator, "_transform_for_dashboard", transform)
+        with pytest.raises(RuntimeError, match="bad/pkg"):
+            orchestrator._write_dashboard_output({"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
+        assert (tmp_path / "pkg-metrics" / "metrics.json").exists()
