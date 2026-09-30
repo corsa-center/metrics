@@ -129,18 +129,28 @@ class TestScoring:
 
 class TestNewcomerLabelQuery:
     def test_all_labels_go_in_one_query(self):
-        # Eight searches (four labels x two states) became two. Comma-separated
-        # values in a label: qualifier are ORed, and the OR form deduplicates
-        # issues carrying more than one of the labels.
-        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
-        labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
-        assert labels == '"good first issue","help wanted",good-first-issue,newcomer'
+        # Comma-separated values in a label: qualifier are ORed, so all
+        # labels take one search per state.
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS, _label_query
+        assert _label_query(_NEWCOMER_LABELS) == '"good first issue","help wanted",good-first-issue,newcomer'
 
-    def test_spaced_labels_are_quoted(self):
+    def test_spaced_and_namespaced_labels_are_quoted(self):
+        from collectors.ecosystem.outreach import _label_query
+        assert _label_query(["is:good-first-issue", "good-first-issue"]) == '"is:good-first-issue",good-first-issue'
+
+    def test_repository_labels_in_their_own_naming_are_used(self, collector):
+        labels = [{"name": n} for n in ["bug", "is:good-first-issue", "is:help-wanted",
+                                          "difficulty: easy", "easy-to-review-ish", "reg:helper-scripts"]]
+        with patch.object(collector, "_get_page", new=AsyncMock(return_value=(labels, None))):
+            got = asyncio.run(collector._newcomer_labels(None, "o", "r"))
+        assert got == ["is:good-first-issue", "is:help-wanted", "difficulty: easy"]
+
+    def test_no_matching_labels_falls_back_to_common_names(self, collector):
         from collectors.ecosystem.outreach import _NEWCOMER_LABELS
-        labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
-        assert '"good first issue"' in labels
-        assert "good-first-issue" in labels and '"good-first-issue"' not in labels
+        with patch.object(collector, "_get_page", new=AsyncMock(return_value=([{"name": "bug"}], None))):
+            assert asyncio.run(collector._newcomer_labels(None, "o", "r")) == _NEWCOMER_LABELS
+        with patch.object(collector, "_get_page", new=AsyncMock(return_value=(COLLECTION_GAP, None))):
+            assert asyncio.run(collector._newcomer_labels(None, "o", "r")) == _NEWCOMER_LABELS
 
 
 class TestPagination:

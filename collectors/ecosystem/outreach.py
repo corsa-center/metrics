@@ -34,6 +34,16 @@ logger = logging.getLogger(__name__)
 
 # Labels projects conventionally use to flag newcomer-friendly work.
 _NEWCOMER_LABELS = ["good first issue", "help wanted", "good-first-issue", "newcomer"]
+# Projects name these labels their own way ("is:good-first-issue",
+# "difficulty: easy", "beginner-friendly"), so the repository's labels are
+# read and every one matching this is queried.
+_NEWCOMER_LABEL_PATTERN = re.compile(
+    r"good[\s:_-]*first|help[\s:_-]*wanted|newcomer|beginner|first[\s_-]*timer"
+    r"|starter|up[\s_-]*for[\s_-]*grabs"
+    r"|^(?:[\w ]+[:/]\s*)?easy(?:[\s_-]*(?:fix|pick|issue|task))?$",
+    re.I,
+)
+_MAX_LABEL_PAGES = 3
 
 # Onboarding resources matched against a RepoTree (case-insensitive, whole
 # tree) rather than probed one literal path at a time.
@@ -69,6 +79,13 @@ _RECENT_DAYS = 365
 # Pagination caps, mirroring active_maintenance.py's bounded approach.
 _MAX_CONTRIBUTOR_PAGES = 5
 _MAX_COMMIT_PAGES = 10
+
+
+def _label_query(labels: List[str]) -> str:
+    """Labels for one label: qualifier. Comma-separated values are ORed, so
+    all labels take one search per state; a label with a space or colon must
+    be quoted or the parser splits it."""
+    return ",".join(f'"{l}"' if re.search(r"[\s:]", l) else l for l in labels)
 
 
 class OutreachCollector(GitHubCollectorBase):
@@ -226,13 +243,8 @@ class OutreachCollector(GitHubCollectorBase):
         Uses the search API rather than paginating /issues, so each label costs
         two requests and returns an exact total instead of a page count.
         """
-        # All labels in one query per state. Comma-separated values in a
-        # label: qualifier are ORed, so this is two searches rather than one
-        # per label per state — eight became two. Labels containing a space
-        # must be quoted or the parser splits them and drops the remainder.
-        labels = ",".join(
-            f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS
-        )
+        queried = await self._newcomer_labels(client, owner, repo)
+        labels = _label_query(queried)
 
         async def count(state: str) -> tuple:
             q = f'repo:{owner}/{repo} is:issue state:{state} label:{labels}'
@@ -246,7 +258,7 @@ class OutreachCollector(GitHubCollectorBase):
             count("open"), count("closed"),
         )
         result = {
-            "labels_queried": _NEWCOMER_LABELS,
+            "labels_queried": queried,
             "open": open_count,
             "closed": closed_count,
             "total": open_count + closed_count,
@@ -257,6 +269,23 @@ class OutreachCollector(GitHubCollectorBase):
         if open_gap and open_count == 0:
             result["not_collected"] = True
         return result
+
+    async def _newcomer_labels(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+        """The repository's own newcomer-style labels, or the common names
+        when its labels can't be read."""
+        url = f"https://api.github.com/repos/{owner}/{repo}/labels"
+        params: Optional[dict] = {"per_page": 100}
+        names: List[str] = []
+        for _ in range(_MAX_LABEL_PAGES):
+            page, next_url = await self._get_page(client, url, params)
+            if page is COLLECTION_GAP:
+                return list(_NEWCOMER_LABELS)
+            names += [l.get("name", "") for l in page or []]
+            if not next_url:
+                break
+            url, params = next_url, None
+        own = [n for n in names if _NEWCOMER_LABEL_PATTERN.search(n) and "," not in n]
+        return own or list(_NEWCOMER_LABELS)
 
     def _check_onboarding(self, tree) -> Dict[str, Any]:
         """Which onboarding resources the repository provides, resolved

@@ -189,7 +189,7 @@ ADIOS2 53%, zfp 93%.
 | Contributor Retention Analysis | ✅ | ≥50% of new contributors made ≥2 commits | share of newcomers with ≥2 commits; no mark with fewer than 3 newcomers, or when newcomers aren't measurable |
 | Contributor Lifecycle Mapping | ✅ | ≥3 repeat contributors (5+ commits) | one-time (1) / casual (2–4) / repeat (5+) buckets from `/contributors`; not measurable when that list is cut off |
 | Contribution Type Diversity | 🔲 | — | non-code contributions aren't recorded in the repo |
-| Good First Issue Effectiveness | ✅ | ≥1 **open** issue labelled `good first issue`, `help wanted`, or `newcomer` | search API counts |
+| Good First Issue Effectiveness | ✅ | ≥1 **open** issue with a newcomer label | the repository's own labels matching good-first / help-wanted / newcomer / beginner / first-timer / starter / up-for-grabs / easy (e.g. `is:good-first-issue`, `difficulty: easy`); the common names if none match; search API counts |
 | External Event Participation | 🔲 | — | needs conference programmes |
 | Training Material Integration | 🔲 | — | needs course syllabi |
 | Onboarding Infrastructure Assessment | ✅ | ≥3 of 4: Contributing guide, issue template, PR template, getting-started guide | Contributing guide and getting-started guide also found in the project's own docs tree, a top-level tutorial directory, or a README section (a Contributing section must describe a process) |
