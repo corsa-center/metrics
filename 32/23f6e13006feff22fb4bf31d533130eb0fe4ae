@@ -1,0 +1,23 @@
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_1d349f022e99bb 249
+collectors/ecosystem/funding.py
+  s_72fde105c4df10::t_759fda25c7eccd 35-37,101-108,138-139,141-143,271-273,289-293,332-333
+tests/test_funding.py
+  s_72fde105c4df10::t_588ec5c3063df8 357-383,442-445
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3223f6e13006feff22fb4bf31d533130eb0fe4ae",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
