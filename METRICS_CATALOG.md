@@ -231,7 +231,11 @@ Spack is additionally looked up by name, because Spack recipes usually record
 the project's own homepage as their repository URL rather than the GitHub repo.
 HDF5's Spack entry points at `support.hdfgroup.org`, so the repository-URL
 lookup alone misses the single most relevant package manager for this portfolio
-— and with it HDF5's 161 Spack dependents.
+— and with it HDF5's 161 Spack dependents. When the recipe goes by another
+name, it is found through Spack's own index as the recipe whose homepage or
+download URLs are this repository (SCOREC/core is `pumi`, UO-OACISS/tau2 is
+`tau`); of several such recipes, the one most packages depend on. A fork is
+not credited with its upstream's recipe.
 
 Duplicate entries for one package are collapsed keeping the highest count:
 conda-forge and anaconda.org both index `hdf5`, and summing would double-count.

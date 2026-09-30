@@ -292,3 +292,37 @@ class TestSourceLevelDependents:
         graph = {"meta": {"root": "someone/amrex"}, "edges": [
             {"source": "a/b", "target": "someone/amrex", "confidence": "high", "relationship": "DEPENDS_ON"}]}
         assert self._graph(collector, graph) is None
+
+
+class TestSpackByRepository:
+    def test_recipe_found_under_another_name(self, collector, monkeypatch):
+        import collectors.ecosystem.collaboration as collab
+        monkeypatch.setattr(collab, "_spack_by_repo", None)
+        collector._get_json = _FakeJson({
+            "repology.json": {"packages": {
+                "pumi": {"homepages": ["https://www.scorec.rpi.edu/pumi"],
+                         "version": [{"downloads": [["https://github.com/SCOREC/core.git"]]}]},
+                "omega-h": {"homepages": ["https://github.com/sandialabs/omega_h"]},
+            }},
+            "spack.io/packages/pumi": {"name": "pumi", "ecosystem": "spack", "dependent_packages_count": 3},
+        })
+        rec = asyncio.run(collector._lookup_spack(None, "core", "SCOREC"))
+        assert rec["name"] == "pumi"
+
+    def test_a_fork_is_not_credited_with_upstreams_recipe(self, collector, monkeypatch):
+        import collectors.ecosystem.collaboration as collab
+        monkeypatch.setattr(collab, "_spack_by_repo", None)
+        collector._get_json = _FakeJson({
+            "repology.json": {"packages": {"omega-h": {"homepages": ["https://github.com/sandialabs/omega_h"]}}},
+        })
+        assert asyncio.run(collector._lookup_spack(None, "omega_h", "SCOREC")) is None
+
+    def test_most_depended_on_recipe_wins(self, collector, monkeypatch):
+        import collectors.ecosystem.collaboration as collab
+        monkeypatch.setattr(collab, "_spack_by_repo", {"llvm/llvm-project": ["aotriton-llvm", "llvm"]})
+        collector._get_json = _FakeJson({
+            "data/packages/aotriton-llvm.json": {"dependent_to": [{"name": "aotriton"}]},
+            "data/packages/llvm.json": {"dependent_to": [{"name": n} for n in "abcdef"]},
+            "spack.io/packages/llvm": {"name": "llvm", "ecosystem": "spack", "dependent_packages_count": 6},
+        })
+        assert asyncio.run(collector._lookup_spack(None, "llvm-project", "llvm"))["name"] == "llvm"
