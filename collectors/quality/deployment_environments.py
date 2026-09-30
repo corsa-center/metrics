@@ -53,6 +53,17 @@ _RUNNER_FAMILIES = {
     "macOS": re.compile(rf"\bmacos-{_RUNNER_SUFFIX}\b", re.I),
 }
 
+# CI whose runner OS the configuration doesn't state: self-hosted GitHub
+# runners (labelled by hardware -- cpu_intel, gpu_amd -- or chosen through a
+# matrix variable) and other CI services.
+_SELF_HOSTED = re.compile(r"runs-on:\s*(?:\[[^\]]*|-\s*)?\bself-hosted\b[^\n\]]*\]?", re.I)
+_MATRIX_RUNNER = re.compile(r"runs-on:\s*\$\{\{", re.I)
+# GitHub's default self-hosted labels include the OS.
+_SELF_HOSTED_OS = {"Linux": re.compile(r"\blinux\b", re.I),
+                   "Windows": re.compile(r"\bwindows\b", re.I),
+                   "macOS": re.compile(r"\bmacos\b", re.I)}
+_OTHER_CI = r"^(?:Jenkinsfile|\.travis\.ya?ml|azure-pipelines\.ya?ml|\.circleci/config\.ya?ml|\.buildkite/[^/]+\.ya?ml)$"
+
 # Explicit CPU architecture tokens. x86-64 is not listed: it is the implicit
 # default for every standard runner, so naming it proves nothing. What this
 # detects is a project that went out of its way to test something else.
@@ -214,6 +225,18 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
                 if pattern.search(text):
                     accelerators.add(accel)
 
+        unstated_ci = bool(gitlab_paths) or (isinstance(tree, RepoTree) and bool(tree.find(_OTHER_CI)))
+        for text in contents:
+            if isinstance(text, Exception) or not text:
+                continue
+            for m in _SELF_HOSTED.finditer(text):
+                named = [f for f, p in _SELF_HOSTED_OS.items() if p.search(m.group(0))]
+                for family in named:
+                    families[family].add("self-hosted")
+                unstated_ci = unstated_ci or not named
+            # A matrix-chosen runner is stated when the file lists standard ones.
+            if _MATRIX_RUNNER.search(text) and not any(p.search(text) for p in _RUNNER_FAMILIES.values()):
+                unstated_ci = True
         detected = {f: sorted(labels) for f, labels in families.items() if labels}
         documented = sorted(
             name for name, pattern in _PLATFORM_DOC_TERMS.items()
@@ -231,7 +254,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             "accelerators": sorted(accelerators),
             "documented_platforms": documented,
             "overall_score": self._calculate_score(
-                detected, sorted(architectures), documented, sorted(accelerators)),
+                detected, sorted(architectures), documented, sorted(accelerators), unstated_ci),
         }
 
     async def _read_platform_docs(
@@ -287,6 +310,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         architectures: Optional[List[str]] = None,
         documented: Optional[List[str]] = None,
         accelerators: Optional[List[str]] = None,
+        unstated_ci: bool = False,
     ) -> Dict[str, Any]:
         """Summarise coverage by OS family.
 
@@ -341,11 +365,18 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
                 "passing": docs_ok,
             },
         }
-        score = sum(1 for v in sub.values() if v["passing"])
+        if not passing and unstated_ci:
+            # Runners the configuration doesn't name an OS for may cover more.
+            sub["deployment_environment_testing"].update(
+                value=(value + "; other CI runs" if names else "CI runs")
+                      + " on self-hosted or non-GitHub runners whose OS isn't stated",
+                unmeasured=True)
+        scored = [v for v in sub.values() if not v.get("unmeasured")]
+        score = sum(1 for v in scored if v["passing"])
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": len(scored),
+            "percentage": round(score / len(scored) * 100, 2) if scored else None,
             "sub_scores": sub,
         }
 

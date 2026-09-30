@@ -236,3 +236,60 @@ def test_platform_guides_match(path, ok):
     import re
     from collectors.quality.deployment_environments import _PLATFORM_GUIDE
     assert bool(re.search(_PLATFORM_GUIDE, path, re.I)) is ok
+
+
+class TestUnstatedRunners:
+    def test_self_hosted_only_is_unmeasured(self):
+        from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
+        s = DeploymentEnvironmentCollector()._calculate_score({}, unstated_ci=True)
+        row = s["sub_scores"]["deployment_environment_testing"]
+        assert row["unmeasured"] is True
+        assert row["value"] == "CI runs on self-hosted or non-GitHub runners whose OS isn't stated"
+        assert s["max_score"] == 2
+
+    def test_hosted_linux_plus_self_hosted(self):
+        from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
+        s = DeploymentEnvironmentCollector()._calculate_score({"Linux": ["ubuntu-latest"]}, unstated_ci=True)
+        assert s["sub_scores"]["deployment_environment_testing"]["value"].startswith("1 environment: Linux; other CI runs")
+
+    def test_no_ci_at_all_is_still_a_fail(self):
+        from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
+        row = DeploymentEnvironmentCollector()._calculate_score({})["sub_scores"]["deployment_environment_testing"]
+        assert not row.get("unmeasured") and row["passing"] is False
+
+    @pytest.mark.parametrize("text,hit", [
+        ("runs-on: [self-hosted, cpu_intel]", True), ("runs-on: self-hosted", True),
+        ("runs-on:\n      - self-hosted\n      - gpu", True), ("runs-on: ubuntu-latest", False),
+    ])
+    def test_self_hosted_pattern(self, text, hit):
+        from collectors.quality.deployment_environments import _SELF_HOSTED
+        assert bool(_SELF_HOSTED.search(text)) is hit
+
+
+class TestCollectRunnerKinds:
+    def _collect(self, workflow_text, tree_paths=()):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from collectors.ecosystem.base import RepoTree
+        from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
+        c = DeploymentEnvironmentCollector()
+        tree = RepoTree("o", "r", [".github/workflows/ci.yml", *tree_paths], truncated=False)
+        with patch.object(c, "_list_workflows", new=AsyncMock(return_value=[{"name": "ci.yml", "url": "u"}])), \
+             patch.object(c, "_read_platform_docs", new=AsyncMock(return_value="")), \
+             patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(c, "_read_workflow", new=AsyncMock(return_value=workflow_text)):
+            return asyncio.run(c.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_matrix_of_standard_runners_is_stated(self):
+        r = self._collect("runs-on: ${{ matrix.os }}\nstrategy:\n  matrix:\n    os: [ubuntu-latest]\n")
+        row = r["overall_score"]["sub_scores"]["deployment_environment_testing"]
+        assert not row.get("unmeasured") and row["value"] == "1 environment: Linux"
+
+    def test_hardware_labelled_self_hosted_is_unmeasured(self):
+        r = self._collect("runs-on: [self-hosted, gpu_amd]\n")
+        assert r["overall_score"]["sub_scores"]["deployment_environment_testing"]["unmeasured"] is True
+
+    def test_self_hosted_os_labels_count(self):
+        r = self._collect("jobs:\n a:\n  runs-on: [self-hosted, macOS]\n b:\n  runs-on: ubuntu-latest\n")
+        row = r["overall_score"]["sub_scores"]["deployment_environment_testing"]
+        assert row["passing"] and "macOS" in row["value"]
