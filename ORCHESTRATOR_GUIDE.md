@@ -136,15 +136,23 @@ Contains:
 Detailed logs of the collection process
 
 ### 4. Per-Project Report
-**Location:** `./output/{repo}-metrics/report.md` (beside that package's `metrics.json`)
+**Location:** `./output/{repo}-metrics/report.html` (beside that package's `metrics.json`)
 
-A readable account of how one package's results were reached: every
-dashboard row with its value, pass/fail mark and supporting evidence (file
-links, counts, Scorecard checks), the thresholds from `config/thresholds.yaml`
-each section was judged against (with any `thresholds:` overrides applied),
-and any collectors the project's own config turned off. It is rendered from
-the same per-section data as `metrics.json`, so it always matches the
-dashboard. See `project_report.py`.
+A standalone page showing how one package's results were reached, meant to
+be linked from the package's dashboard page:
+
+- every dashboard row with its value, met / not met / not scored, and the
+  evidence behind it (file links, counts, failing Scorecard checks)
+- under each row, the threshold from `config/thresholds.yaml` it was judged
+  against, with any `thresholds:` overrides applied
+- rows whose text was set by `overrides` in `package_config/` or the
+  project's own metrics file, flagged as configured rather than measured
+- how the dimension scores are computed (the average of each collector's
+  percentage, listed per collector) and weighted into the overall score, and
+  which collectors the project's config turned off
+
+It is rendered from the same per-section data as `metrics.json`, so it
+always matches the dashboard. See `project_report.py`.
 
 ## Automation via GitHub Actions
 

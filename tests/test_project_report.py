@@ -1,14 +1,17 @@
 """Tests for the per-project metric report (project_report.py, issue #80)."""
 
+import asyncio
+
 import pytest
 
 from collectors.ecosystem.base import configure_threshold_overrides
 from orchestrator import MetricsOrchestrator
 from project_report import (
+    build_report,
+    parse_section,
     render_project_report,
-    section_lines,
+    section_thresholds,
     threshold_descriptions,
-    threshold_lines,
 )
 
 
@@ -23,32 +26,47 @@ def reset_overrides():
     configure_threshold_overrides(None)
 
 
-class TestSectionLines:
-    def test_rows_details_and_links(self):
+def _metrics(**ecosystem):
+    return {
+        "overall_score": 27,
+        "last_updated": "2026-09-30T02:25:04.582663+00:00",
+        "dimensions": {
+            "impact": {"score": 0.0, "metadata": {"status": "placeholder"}},
+            "ecosystem": {"score": 80.0, "sub_results": {}, **ecosystem},
+            "quality": {"score": 0.0, "sub_results": {}},
+        },
+    }
+
+
+class TestParseSection:
+    def test_rows_marks_details_and_links(self):
         html = (
             '<p><strong>Enhanced Security Analysis:</strong> '
             '<a href="https://x/codeql.yml">CodeQL enabled</a> ✓</p>\n'
-            '<p class="sub-detail">Practice indicators, not audited</p>'
+            '<p class="sub-detail">Practice indicators, not audited</p>\n'
+            '<p><strong>Score:</strong> 1/1</p>'
         )
-        assert section_lines(html) == [
-            "- **Enhanced Security Analysis:** [CodeQL enabled](https://x/codeql.yml) ✓",
-            "  - Practice indicators, not audited",
-        ]
+        rows, score = parse_section(html)
+        assert score == "1/1"
+        assert rows == [{
+            "label": "Enhanced Security Analysis",
+            "value": [("CodeQL enabled", "https://x/codeql.yml")],
+            "mark": "✓",
+            "details": [[("Practice indicators, not audited", None)]],
+        }]
 
     def test_detail_on_the_same_line_as_its_row(self):
         # 4.3.3 and 4.3.5 emit a row and its detail without a newline between.
         html = '<p><strong>Containerization Excellence:</strong> ✓</p><p class="sub-detail">Dockerfile</p>'
-        assert section_lines(html) == [
-            "- **Containerization Excellence:** ✓",
-            "  - Dockerfile",
-        ]
+        rows, _ = parse_section(html)
+        assert rows[0]["value"] == [] and rows[0]["mark"] == "✓"
+        assert rows[0]["details"] == [[("Dockerfile", None)]]
 
-    def test_entities_are_unescaped(self):
-        html = '<p><strong>License:</strong> Apache &amp; MIT</p>'
-        assert section_lines(html) == ["- **License:** Apache & MIT"]
-
-    def test_uncollected_section(self):
-        assert section_lines(None) == ["- Not yet collected"]
+    def test_unmarked_row_and_entities(self):
+        rows, score = parse_section('<p><strong>License:</strong> Apache &amp; MIT</p>')
+        assert score is None
+        assert rows[0]["mark"] is None
+        assert rows[0]["value"] == [("Apache & MIT", None)]
 
 
 class TestThresholds:
@@ -69,42 +87,87 @@ class TestThresholds:
 
     def test_overrides_are_what_gets_reported(self, reset_overrides):
         configure_threshold_overrides({"4.2.2": {"FAIR Metadata Assessment": 5}})
-        lines = threshold_lines("4.2.2", threshold_descriptions())
-        assert any(l.startswith("- FAIR Metadata Assessment: 5 ") for l in lines)
+        lines = section_thresholds("4.2.2", threshold_descriptions())
+        assert lines["FAIR Metadata Assessment"][0].startswith("5 — ")
 
-    def test_section_without_thresholds(self):
-        assert threshold_lines("4.3.7", threshold_descriptions()) == []
+    def test_keyed_by_the_label_the_dashboard_row_carries(self):
+        assert "OpenSSF Scorecard" in section_thresholds("4.2.1", threshold_descriptions())
 
 
-class TestReportOutput:
+class TestBuildReport:
+    def test_thresholds_attach_to_their_rows(self, orchestrator):
+        metrics = _metrics(sub_results={"governance": {"overall_score": {"max_score": 3}}})
+        dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        report = build_report(dashboard, metrics, orchestrator._metric_weights())
+        sec = report["dimensions"][1]["sections"][0]
+        assert sec["number"] == "4.2.1"
+        row = next(r for r in sec["rows"] if r["label"] == "Enhanced Document Detection")
+        assert row["mark"] == "✗"
+        assert row["thresholds"] == ["2 — of {CoC, Governance, Contributing}, minimum found"]
+        # No Scorecard row rendered for this package, so its threshold is
+        # listed separately rather than dropped.
+        assert "OpenSSF Scorecard" in sec["other_thresholds"]
+
+    def test_config_overridden_rows_are_flagged(self, orchestrator):
+        metrics = _metrics()
+        metrics["project_config"] = {"overrides": {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}}
+        dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        overrides = orchestrator._merged_overrides("owner/repo", metrics)
+        report = build_report(dashboard, metrics, orchestrator._metric_weights(), overrides)
+        rows = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")["rows"]
+        flagged = {r["label"] for r in rows if r["overridden"]}
+        assert flagged == {"NIH R50 Award Tracking"}
+
+
+class TestHtmlOutput:
     def test_report_written_beside_metrics_json(self, orchestrator, tmp_path):
         orchestrator.output_path = tmp_path
-        metrics = {
-            "overall_score": 27,
-            "last_updated": "2026-09-30T00:00:00+00:00",
-            "dimensions": {
-                "impact": {"score": 0.0, "sub_results": {}},
-                "ecosystem": {"score": 80.0, "sub_results": {}, "excluded_by_config": ["funding"]},
-                "quality": {"score": 0.0, "sub_results": {}},
-            },
-        }
+        metrics = _metrics(
+            excluded_by_config=["funding"],
+            score_components={"governance": 66.7, "licensing": 100},
+        )
         orchestrator._write_dashboard_output({"owner/repo": metrics})
-        report = (tmp_path / "repo-metrics" / "report.md").read_text()
+        page = (tmp_path / "repo-metrics" / "report.html").read_text()
 
-        assert report.startswith("# Sustainability Metrics Report: owner/repo\n")
-        assert "Overall score: 27/100" in report
-        assert "Ecosystem 80 × 0.34" in report
-        assert "turned off by this project's configuration: ecosystem/funding" in report
-        assert "## Ecosystem Dimension — 80/100" in report
-        assert "### 4.2.2 Open-Source Licensing and FAIR Compliance" in report
-        # Thresholds listed even when the section itself wasn't collected.
-        assert "- FAIR Metadata Assessment: 4 (of 6 CITATION.cff fields present, minimum)" in report
+        assert page.startswith("<!doctype html>")
+        assert "Sustainability metrics report: owner/repo" in page
+        assert "Collected 2026-09-30 02:25 UTC" in page
+        assert "Governance documents (4.2.1) 67; Licensing (4.2.2) 100" in page
+        assert "Not yet measured — counted as 0 in the overall score" in page
+        assert "not collected: Financial sustainability (4.2.8)" in page
+        assert 'id="s4-2-2"' in page
 
-    def test_report_matches_dashboard_rows(self, orchestrator):
-        metrics = {"dimensions": {"ecosystem": {"sub_results": {
-            "governance": {"overall_score": {"max_score": 3}},
-        }}}}
+    def test_collected_text_is_escaped(self, orchestrator):
+        metrics = _metrics(sub_results={"governance": {
+            "overall_score": {"max_score": 3},
+            "keyword_analysis": {"groups_found": ["<script>alert(1)</script>"]},
+        }})
         dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        report = render_project_report(dashboard, metrics, orchestrator._metric_weights())
-        assert "- **Enhanced Document Detection:** 0/3 ✗" in report
-        assert "  - Code of Conduct: Not found" in report
+        page = render_project_report(dashboard, metrics, orchestrator._metric_weights())
+        # The dashboard HTML carries it raw; the report reduces it to text.
+        assert "<script>" not in page
+        assert "alert(1)" in page
+
+
+class TestDimensionScoreComponents:
+    def test_components_are_what_the_score_averages(self, orchestrator, monkeypatch):
+        import collectors.ecosystem.community_health as community_health_mod
+        import collectors.ecosystem.licensing as licensing_mod
+
+        async def gov(self, package):
+            return {"overall_score": {"percentage": 50}}
+
+        async def lic(self, package):
+            return {"compliance_score": {"percentage": 100}}
+
+        monkeypatch.setattr(community_health_mod.CommunityHealthCollector, "collect", gov)
+        monkeypatch.setattr(licensing_mod.LicensingCollector, "collect", lic)
+        monkeypatch.setattr(
+            orchestrator, "_sub_enabled",
+            lambda group, key, package=None: key in ("community_health", "licensing"),
+        )
+        result = asyncio.run(orchestrator.collect_ecosystem_dimension(
+            {"name": "x", "repo_url": "https://github.com/o/r", "repository": "o/r"}
+        ))
+        assert result["score_components"] == {"governance": 50, "licensing": 100}
+        assert result["score"] == 75.0

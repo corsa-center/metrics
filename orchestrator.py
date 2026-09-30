@@ -714,46 +714,49 @@ class MetricsOrchestrator:
         # scores a gap as a confident 0. Excluded from the average entirely
         # instead, same as each collector already excludes it from its own
         # internal score.
-        scores = []
+        # (sub-collector key, percentage) -- kept by name so the per-project
+        # report can show which collectors this average was taken over.
+        components: List[tuple] = []
 
-        def _append_pct(container: Dict, *keys):
-            value = container
+        def _append_pct(name: str, *keys):
+            value = sub_results[name]
             for key in keys:
                 value = value.get(key, {}) if isinstance(value, dict) else {}
             if isinstance(value, (int, float)):
-                scores.append(value)
+                components.append((name, value))
 
         if "governance" in sub_results:
-            _append_pct(sub_results["governance"], "overall_score", "percentage")
+            _append_pct("governance", "overall_score", "percentage")
         if "licensing" in sub_results:
-            _append_pct(sub_results["licensing"], "compliance_score", "percentage")
+            _append_pct("licensing", "compliance_score", "percentage")
         if "maintenance" in sub_results:
-            _append_pct(sub_results["maintenance"], "score", "percentage")
+            _append_pct("maintenance", "score", "percentage")
         if "chaoss_activity" in sub_results:
-            _append_pct(sub_results["chaoss_activity"], "overall_score", "score")
+            _append_pct("chaoss_activity", "overall_score", "score")
         if "openssf_badge" in sub_results:
-            _append_pct(sub_results["openssf_badge"], "overall_score", "score")
+            _append_pct("openssf_badge", "overall_score", "score")
         if "engagement" in sub_results:
             eng_s = sub_results["engagement"].get("overall_score", {})
             mx = eng_s.get("max_score", 7)
             eng_score = eng_s.get("score")
             if mx and isinstance(eng_score, (int, float)):
-                scores.append(round(eng_score / mx * 100))
+                components.append(("engagement", round(eng_score / mx * 100)))
         if "openssf_scorecard" in sub_results:
             pct = sub_results["openssf_scorecard"].get("percentage")
             if pct is not None:
-                scores.append(pct)
+                components.append(("openssf_scorecard", pct))
         if "outreach" in sub_results:
-            _append_pct(sub_results["outreach"], "overall_score", "percentage")
+            _append_pct("outreach", "overall_score", "percentage")
         if "funding" in sub_results:
-            _append_pct(sub_results["funding"], "overall_score", "percentage")
+            _append_pct("funding", "overall_score", "percentage")
         if "welcomeness" in sub_results:
-            _append_pct(sub_results["welcomeness"], "overall_score", "percentage")
+            _append_pct("welcomeness", "overall_score", "percentage")
         if "collaboration" in sub_results:
-            _append_pct(sub_results["collaboration"], "overall_score", "percentage")
+            _append_pct("collaboration", "overall_score", "percentage")
         if "fair_licensing" in sub_results:
-            _append_pct(sub_results["fair_licensing"], "overall_score", "percentage")
+            _append_pct("fair_licensing", "overall_score", "percentage")
 
+        scores = [value for _, value in components]
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
         return {
@@ -761,6 +764,7 @@ class MetricsOrchestrator:
             "score": round(avg_score, 2),
             "max_score": 100.0,
             "sub_results": sub_results,
+            "score_components": dict(components),
             "excluded_by_config": self._package_excluded_keys("ecosystem", package),
         }
 
@@ -882,42 +886,44 @@ class MetricsOrchestrator:
         # missing, not when a collector's own percentage is None because
         # everything it measures gapped. Excluded from the average rather
         # than crashing sum()/len() or silently scoring a gap as 0.
-        scores = []
+        # (sub-collector key, percentage), as in the ecosystem dimension.
+        components: List[tuple] = []
 
-        def _append_quality_pct(container: Dict, *keys):
-            value = container
+        def _append_quality_pct(name: str, *keys):
+            value = sub_results[name]
             for key in keys:
                 value = value.get(key, {}) if isinstance(value, dict) else {}
             if isinstance(value, (int, float)):
-                scores.append(value)
+                components.append((name, value))
 
         if "ci_cd" in sub_results:
-            _append_quality_pct(sub_results["ci_cd"], "percentage")
+            _append_quality_pct("ci_cd", "percentage")
         if "reproducibility" in sub_results:
-            _append_quality_pct(sub_results["reproducibility"], "overall_score", "percentage")
+            _append_quality_pct("reproducibility", "overall_score", "percentage")
         if "accessibility" in sub_results:
-            _append_quality_pct(sub_results["accessibility"], "overall_score", "percentage")
+            _append_quality_pct("accessibility", "overall_score", "percentage")
         if sub_results.get("test_coverage", {}).get("coverage_exists"):
-            _append_quality_pct(sub_results["test_coverage"], "coverage_percentage")
+            _append_quality_pct("test_coverage", "coverage_percentage")
         if "static_analysis" in sub_results:
             sa = sub_results["static_analysis"]
             if sa.get("has_codeql"):
-                scores.append(100)
+                components.append(("static_analysis", 100))
             elif not sa.get("not_collected"):
-                scores.append(0)
+                components.append(("static_analysis", 0))
         if "dev_tooling" in sub_results:
-            _append_quality_pct(sub_results["dev_tooling"], "overall_score", "percentage")
+            _append_quality_pct("dev_tooling", "overall_score", "percentage")
         if "deployment_environments" in sub_results:
-            _append_quality_pct(sub_results["deployment_environments"], "overall_score", "percentage")
+            _append_quality_pct("deployment_environments", "overall_score", "percentage")
         if "usability" in sub_results:
-            _append_quality_pct(sub_results["usability"], "overall_score", "percentage")
+            _append_quality_pct("usability", "overall_score", "percentage")
         if "maintainability" in sub_results:
-            _append_quality_pct(sub_results["maintainability"], "overall_score", "percentage")
+            _append_quality_pct("maintainability", "overall_score", "percentage")
         if "reliability" in sub_results:
-            _append_quality_pct(sub_results["reliability"], "overall_score", "percentage")
+            _append_quality_pct("reliability", "overall_score", "percentage")
         if "supply_chain" in sub_results:
-            _append_quality_pct(sub_results["supply_chain"], "overall_score", "percentage")
+            _append_quality_pct("supply_chain", "overall_score", "percentage")
 
+        scores = [value for _, value in components]
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
         return {
@@ -925,6 +931,7 @@ class MetricsOrchestrator:
             "score": round(avg_score, 2),
             "max_score": 100.0,
             "sub_results": sub_results,
+            "score_components": dict(components),
             "excluded_by_config": self._package_excluded_keys("quality", package),
         }
 
@@ -1154,6 +1161,28 @@ class MetricsOrchestrator:
 
         logger.info(f"Summary report written to {output_file}")
 
+    def _merged_overrides(self, repo_name: str, metrics: Dict) -> Dict[str, Dict[str, str]]:
+        """Section -> {label: replacement text} from both config layers.
+
+        The project's own metrics file (fetched during collection, so it
+        travels on `metrics`) and the maintainer's central
+        package_config/<owner>_<repo>.yaml (re-read fresh here since it's a
+        cheap local file). On a conflicting label within the same section,
+        the maintainer's central file wins -- applied second, below.
+        """
+        project_overrides: Dict[str, Dict[str, str]] = (
+            metrics.get("project_config", {}).get("overrides", {})
+        )
+        pkg_config = self._load_package_config(repo_name)
+        central_overrides: Dict[str, Dict[str, str]] = pkg_config.get("overrides", {})
+
+        merged: Dict[str, Dict[str, str]] = {}
+        for section, labels in project_overrides.items():
+            merged.setdefault(section, {}).update(labels)
+        for section, labels in central_overrides.items():
+            merged.setdefault(section, {}).update(labels)
+        return merged
+
     def _transform_for_dashboard(self, repo_name: str, metrics: Dict) -> Dict:
         """Transform internal metrics into the per-package CASS v3 format.
 
@@ -1164,24 +1193,7 @@ class MetricsOrchestrator:
         each with a ``title`` and ``data`` (HTML string or None).
         """
         dims = metrics.get("dimensions", {})
-
-        # Merge sub-metric text overrides from both config layers: the
-        # project's own metrics file (fetched during collection, so it
-        # travels on `metrics`) and the maintainer's central
-        # package_config/<owner>_<repo>.yaml (re-read fresh here since it's a
-        # cheap local file). On a conflicting label within the same section,
-        # the maintainer's central file wins -- applied second, below.
-        project_overrides: Dict[str, Dict[str, str]] = (
-            metrics.get("project_config", {}).get("overrides", {})
-        )
-        pkg_config = self._load_package_config(repo_name)
-        central_overrides: Dict[str, Dict[str, str]] = pkg_config.get("overrides", {})
-
-        pkg_overrides: Dict[str, Dict[str, str]] = {}
-        for section, labels in project_overrides.items():
-            pkg_overrides.setdefault(section, {}).update(labels)
-        for section, labels in central_overrides.items():
-            pkg_overrides.setdefault(section, {}).update(labels)
+        pkg_overrides = self._merged_overrides(repo_name, metrics)
 
         def _stub(section_num: str) -> Optional[str]:
             """Return a stub HTML block if the section has any overrides, else None."""
@@ -2359,7 +2371,7 @@ class MetricsOrchestrator:
         """Write per-package metrics.json files for the dashboard.
 
         Creates: output/{repo-name}-metrics/metrics.json for each package,
-        and beside it report.md -- the same results as one readable page
+        and beside it report.html -- the same results as one readable page
         with the thresholds each row was judged against (see
         project_report.py). These are uploaded as workflow artifacts and
         downloaded by the dashboard's update workflow into
@@ -2379,9 +2391,14 @@ class MetricsOrchestrator:
 
             logger.info(f"Dashboard metrics written to {output_file}")
 
-            report_file = metrics_dir / "report.md"
+            report_file = metrics_dir / "report.html"
             report_file.write_text(
-                render_project_report(dashboard_data, metrics, self._metric_weights())
+                render_project_report(
+                    dashboard_data,
+                    metrics,
+                    self._metric_weights(),
+                    self._merged_overrides(repo_name, metrics),
+                )
             )
 
 
