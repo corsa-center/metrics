@@ -1,0 +1,27 @@
+METRICS_CATALOG.md
+  s_72fde105c4df10::t_ce6aff526918dc 195
+collectors/ecosystem/community_health.py
+  s_72fde105c4df10::t_a128a5ee431139 36-48,238-245
+collectors/ecosystem/outreach.py
+  s_72fde105c4df10::t_3eab622feaebe9 30-31,61,63-64,119-123,273,275-276,289-311
+collectors/quality/usability.py
+  s_72fde105c4df10::t_ce6146d8d667f9 53-58
+tests/test_outreach.py
+  s_72fde105c4df10::t_f6a6fe29cb8702 336-378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5ac941443ea6cb72f9d35fd4f4c164cb370b8dac",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
