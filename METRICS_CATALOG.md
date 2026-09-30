@@ -102,7 +102,7 @@ literature plus facility web scraping; see the "Hard" tier in
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Enhanced Document Detection | ✅ | ≥2 of CoC / Governance / Contributing found | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING file detection |
+| Enhanced Document Detection | ✅ | ≥2 of CoC / Governance / Contributing found | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING files at the root, `.github/`, `docs/`, or deeper in the project's own top-level documentation tree (`docs/source/…`, `src/docs/…`); contributor guidelines may also be a README "Contributing" section that describes a process (fork/branch/pull request/issues/style/tests/review) |
 | Governance Keyword Analysis | ✅ | ≥2 of 4 concept groups (decision process, defined roles, membership lifecycle, conflict resolution) found in the text | read from the full governance/CoC/contributing documents |
 | OpenSSF Badge Integration | ✅ | badge progress ≥100%; or, when **substituted** by an *OpenSSF Scorecard* row, each individual check scores ≥7/10 | `bestpractices.dev`, level + percentage. Scorecard (`api.securityscorecards.dev`) substitutes in with a per-check breakdown of failing checks whenever scorecard data exists, so the section is always 5 rows |
 | CHAOSS Governance Metrics | ✅ | weighted score ≥60/100 | [`chaoss_governance.py`](collectors/ecosystem/chaoss_governance.py) — weighted 0–100 health score, with a per-category breakdown (popularity 15%, docs 20%, time-to-close 15%, issue age 10%, PR closure ratio 15%, release frequency 15%, issue inclusivity 10%). A category that couldn't be measured is dropped from both the score and its weight, not counted as 0 |

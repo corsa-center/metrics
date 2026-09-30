@@ -233,3 +233,46 @@ class TestCalculateScore:
         assert result["score"] == 2
         assert result["max_score"] == 3
         assert result["percentage"] == pytest.approx(66.67)
+
+
+class TestDeeperLookup:
+    def _run(self, collector, paths, readme=None):
+        import base64
+        from collectors.ecosystem.base import RepoTree
+        tree = RepoTree("o", "r", paths, False)
+        data = ({"content": base64.b64encode(readme.encode()).decode(), "path": "README.md",
+                 "html_url": "https://github.com/o/r/blob/main/README.md"} if readme else None)
+        missing = {"exists": False, "file_path": None, "url": None, "repository": None}
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._check_deeper("o", "r", dict(missing), dict(missing), dict(missing)))
+
+    def test_contributing_guide_in_a_nested_docs_tree(self, collector):
+        coc, gov, contrib = self._run(collector, ["src/docs/sphinx/developer_docs/Contributing.rst"])
+        assert contrib["exists"] and contrib["file_path"] == "src/docs/sphinx/developer_docs/Contributing.rst"
+        assert not coc["exists"] and not gov["exists"]
+
+    @pytest.mark.parametrize("path", [
+        "third_party/zlib/docs/CONTRIBUTING.md", "packages/kokkos/docs/CONTRIBUTING.md"])
+    def test_bundled_projects_docs_do_not_count(self, collector, path):
+        _, _, contrib = self._run(collector, [path])
+        assert not contrib["exists"]
+
+    def test_readme_section_with_a_process_counts(self, collector):
+        md = "# X\n## Contributing\nPlease fork the repository, use a feature branch and open a pull request.\n## License\n"
+        _, _, contrib = self._run(collector, ["README.md"], md)
+        assert contrib["exists"] and contrib["source"] == "README section"
+        assert "pull request" in contrib["section_text"] and "License" not in contrib["section_text"]
+
+    def test_readme_wishlist_does_not_count(self, collector):
+        md = "## Contributing\nWe welcome contributions! Areas for enhancement:\n- New group actions\n- Performance\n"
+        _, _, contrib = self._run(collector, ["README.md"], md)
+        assert not contrib["exists"]
+
+    def test_keywords_read_only_the_section(self, collector):
+        doc = {"exists": True, "file_path": "README.md", "repository": "o/r",
+               "section_text": "open a pull request; maintainers review it"}
+        with patch.object(collector, "_get_file_text", new=AsyncMock(return_value="steering committee vote")) as get:
+            result = asyncio.run(collector._analyze_governance_keywords([doc]))
+            get.assert_not_called()
+        assert result["documents_read"] == 1
