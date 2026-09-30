@@ -1,0 +1,21 @@
+orchestrator.py
+  s_72fde105c4df10::t_52e67378ad2791 1371-1380,2360,2362-2369,2382-2384
+tests/test_orchestrator_dashboard_transform.py
+  s_72fde105c4df10::t_1f25da9e7f78bc 332-354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "520f07284c22051c0753b5fd3786e338d6574445",
+  "prompts": {},
+  "sessions": {
+    "s_72fde105c4df10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dcd906ae-b20a-47af-b19d-ac4e72fb806b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
