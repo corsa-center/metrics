@@ -294,3 +294,36 @@ class TestNestedTestSuite:
         out = self._run(collector, [".github/workflows/requirements/unit_tests/requirements.txt",
                                     "lib/pkg/test/test_a.py"])
         assert out["details"]["Test suite directory"]["file"] == "lib/pkg/test"
+
+
+class TestToolingBeyondRoot:
+    def _refine(self, collector, paths, files=None):
+        import base64
+        from collectors.ecosystem.base import RepoTree
+        from collectors.quality.development_practices.dev_tooling import _TOOLING_PATHS
+        files = files or {}
+        tree = RepoTree("o", "r", list(paths) + list(files), truncated=False)
+
+        async def get(client, url, params=None):
+            text = files.get(url.split("/contents/", 1)[-1])
+            return {"content": base64.b64encode(text.encode()).decode()} if text else None
+        collector._github_get = get
+        tooling = collector._scan(tree, _TOOLING_PATHS)
+        return asyncio.run(collector._refine_tooling(None, "o", "r", tree, tooling))["found"]
+
+    def test_component_formatter_and_linter_configs(self, collector):
+        found = self._refine(collector, ["runtime/legion/.clang-format", "realm/.clang-tidy"])
+        assert {"Code formatter config", "Linter config"} <= set(found)
+
+    def test_cmake_format_is_a_formatter(self, collector):
+        assert "Code formatter config" in self._refine(collector, [".cmake-format.yaml"])
+
+    def test_vendored_configs_do_not_count(self, collector):
+        assert self._refine(collector, ["third_party/fmt/.clang-format", "extern/x/.clang-tidy"]) == []
+
+    def test_ruff_in_pyproject_is_a_linter(self, collector):
+        found = self._refine(collector, [], {"pyproject.toml": "[project]\nname='x'\n[tool.ruff]\nline-length=100\n"})
+        assert found == ["Linter config"]
+
+    def test_setuptools_sections_are_not_tools(self, collector):
+        assert self._refine(collector, [], {"pyproject.toml": "[tool.setuptools]\npackages=['x']\n"}) == []

@@ -76,6 +76,26 @@ _TOOLING_PATHS = {
     ],
 }
 
+# Formatter and linter configs kept anywhere in the project's own tree (a
+# component's src/.clang-format, a subproject's .clang-tidy), in more tools
+# than the root list names.
+_TOOLING_TREE = {
+    "Code formatter config": (
+        r"(?:^|/)(?:[._]clang-format|\.cmake-format(?:\.ya?ml|\.json|\.py)?|\.gersemirc"
+        r"|\.fprettify\.rc|\.style\.yapf|\.prettierrc[\w.]*|\.?rustfmt\.toml|\.JuliaFormatter\.toml)$"
+    ),
+    "Linter config": (
+        r"(?:^|/)(?:\.clang-tidy|\.flake8|\.?pylintrc|\.?ruff\.toml|\.?mypy\.ini"
+        r"|\.eslintrc[\w.]*|\.lintr|CPPLINT\.cfg|\.cppcheck)$"
+    ),
+}
+# The same tools configured in a Python project's shared config files.
+_TOOLING_SECTIONS = {
+    "Code formatter config": re.compile(r"^\[tool\.(?:black|isort|yapf|ruff\.format)\]", re.M),
+    "Linter config": re.compile(r"^\[(?:tool\.(?:ruff|pylint|mypy|flake8)|flake8|mypy|pylint)[\].]", re.M),
+}
+_TOOLING_CONFIG_FILES = ["pyproject.toml", "setup.cfg", "tox.ini"]
+
 # How many recently-closed PRs to sample for review coverage.
 _PR_SAMPLE_SIZE = 50
 
@@ -108,6 +128,9 @@ class DevToolingCollector(GitHubCollectorBase):
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 testing = await self._refine_testing(client, owner, repo, tree, testing)
         tooling = self._scan(tree, _TOOLING_PATHS)
+        if tree is not COLLECTION_GAP and any(l in tooling["missing"] for l in _TOOLING_TREE):
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                tooling = await self._refine_tooling(client, owner, repo, tree, tooling)
         if isinstance(review, Exception):
             logger.warning(f"COLLECTION-GAP category=code_review reason=exception:{review!r}")
             review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
@@ -208,6 +231,37 @@ class DevToolingCollector(GitHubCollectorBase):
                 not_collected.append(label)
                 details[label] = {"not_collected": True}
         return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+
+    async def _refine_tooling(
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree, tooling: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Formatter and linter configs outside the root list: anywhere in
+        the project's own tree, then as sections of root Python config files."""
+        found, missing, details = list(tooling["found"]), list(tooling["missing"]), dict(tooling["details"])
+
+        def mark(label: str, path: str):
+            missing.remove(label)
+            found.append(label)
+            details[label] = {"exists": True, "url": tree.url_for(path), "file": path}
+
+        for label, pattern in _TOOLING_TREE.items():
+            if label in missing:
+                path = tree.find_owned(pattern)
+                if path:
+                    mark(label, path)
+        wanted = [l for l in _TOOLING_SECTIONS if l in missing]
+        for path in [p for p in (tree.match([c]) for c in _TOOLING_CONFIG_FILES) if p]:
+            if not wanted:
+                break
+            data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
+            if not isinstance(data, dict):
+                continue
+            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+            for label in list(wanted):
+                if _TOOLING_SECTIONS[label].search(text):
+                    mark(label, path)
+                    wanted.remove(label)
+        return {**tooling, "found": found, "missing": missing, "details": details}
 
     async def _analyze_review_coverage(
         self, client: httpx.AsyncClient, owner: str, repo: str
