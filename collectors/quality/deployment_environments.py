@@ -113,6 +113,13 @@ _INSTALL_DOC = (
     r"|(?:^|/)building[-_][\w-]*\.(?:md|rst|txt)$"
 )
 _MAX_INSTALL_DOCS = 2
+# Getting-started and platform-requirements pages, which is where many
+# projects list what they run on (LLVM's GettingStarted pages, not its
+# INSTALL files, name Linux and macOS). requirements.txt is a pip file.
+_PLATFORM_GUIDE = (
+    r"(?:^|/)(?:getting[-_]?started|quick[-_]?start|system[-_]requirements"
+    r"|supported[-_]platforms|platforms)\.(?:md|rst|txt)$"
+)
 
 _GITLAB_CI_RE = re.compile(r"^(?:\.gitlab-ci\.ya?ml|\.gitlab/.*\.ya?ml)$", re.I)
 _MAX_GITLAB_FILES = 10
@@ -167,10 +174,10 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             ) if files else []
             install_docs = []
             if isinstance(tree, RepoTree):
-                install_docs = sorted(
-                    (p for p in tree.find(_INSTALL_DOC) if not _VENDORED_DIR.search(p)),
-                    key=lambda p: (p.count("/"), p),
-                )[:_MAX_INSTALL_DOCS]
+                def owned(pattern):
+                    return sorted((p for p in tree.find(pattern) if not _VENDORED_DIR.search(p)),
+                                  key=lambda p: (p.count("/"), p))[:_MAX_INSTALL_DOCS]
+                install_docs = owned(_INSTALL_DOC) + owned(_PLATFORM_GUIDE)
             install_texts = await asyncio.gather(
                 *[self._read_workflow(
                     client, f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
@@ -312,7 +319,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         docs_value = (
             f"{len(documented)} platform{'s' if len(documented) != 1 else ''} named: "
             + ", ".join(documented)
-        ) if documented else "No supported platforms named in the README or install guide"
+        ) if documented else "No supported platforms named in the README, install or getting-started guide"
 
         sub = {
             "deployment_environment_testing": {

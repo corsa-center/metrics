@@ -225,3 +225,14 @@ class TestInstallDocPattern:
         import re
         from collectors.quality.deployment_environments import _INSTALL_DOC
         assert not re.search(_INSTALL_DOC, path, re.I), path
+
+
+@pytest.mark.parametrize("path,ok", [
+    ("llvm/docs/GettingStarted.rst", True), ("docs/source/quick_start.rst", True),
+    ("docs/supported_platforms.md", True), ("docs/system-requirements.md", True),
+    ("requirements.txt", False), ("docs/requirements.txt", False), ("src/platforms.cpp", False),
+])
+def test_platform_guides_match(path, ok):
+    import re
+    from collectors.quality.deployment_environments import _PLATFORM_GUIDE
+    assert bool(re.search(_PLATFORM_GUIDE, path, re.I)) is ok
