@@ -46,13 +46,15 @@ class TestScoring:
         assert not self._score(collector, review=below)["sub_scores"][
             "code_review_quality"]["passing"]
 
-    def test_no_merged_prs_does_not_pass(self, collector):
+    def test_no_merged_prs_is_unmeasured_not_failed(self, collector):
         s = self._score(collector)["sub_scores"]["code_review_quality"]
         assert not s["passing"]
-        assert "No merged PRs" in s["value"]
+        assert s["unmeasured"] is True
+        assert "No merged pull requests" in s["value"]
 
     def test_max_score_is_three(self, collector):
-        assert self._score(collector)["max_score"] == 3
+        assert self._score(collector, review={"coverage_pct": 50.0, "sampled": 10})["max_score"] == 3
+        assert self._score(collector)["max_score"] == 2
 
     def test_all_passing(self, collector):
         s = self._score(

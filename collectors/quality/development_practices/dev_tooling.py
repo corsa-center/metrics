@@ -280,6 +280,10 @@ class DevToolingCollector(GitHubCollectorBase):
         }
         if review.get("not_collected"):
             review_entry["not_collected"] = True
+        elif cov is None:
+            # Review coverage of zero pull requests is undefined, and the
+            # project may review changes somewhere other than GitHub.
+            review_entry.update(value="No merged pull requests to sample", unmeasured=True)
         sub["code_review_quality"] = review_entry
 
         tool_found = tooling.get("found", [])
@@ -294,7 +298,7 @@ class DevToolingCollector(GitHubCollectorBase):
             tooling_entry["not_collected"] = True
         sub["dev_tool_integration"] = tooling_entry
 
-        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        scorable = {k: v for k, v in sub.items() if not (v.get("not_collected") or v.get("unmeasured"))}
         score = sum(1 for s in scorable.values() if s["passing"])
         max_score = len(scorable)
         if not max_score:
