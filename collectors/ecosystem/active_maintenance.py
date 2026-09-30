@@ -26,6 +26,15 @@ from collectors.rate_limit import search_get
 
 logger = logging.getLogger(__name__)
 
+# A tag naming a version (v5.0.11, papi-7-2-0-t, checkpoint.1.14.0), and the
+# pre-release suffixes that shouldn't count as a release on their own.
+_VERSION_TAG = re.compile(r"\d+[._-]\d+")
+# "<consumer>-YYYY-MM-DD" marks a snapshot known to work with another project
+# (Albany's compass-2026-03-21, "compatible with E3SM"), not a release.
+_SNAPSHOT_TAG = re.compile(r"^(?!release)[a-z][\w.]*[-_]\d{4}-\d{2}-\d{2}$", re.I)
+_PRE_RELEASE_TAG = re.compile(
+    r"(?<![a-z])(?:rc|alpha|beta|pre|dev)(?:[._-]?\d+)?(?![a-z])|\d(?:a|b)\d+", re.I)
+
 # Community channels a project might link from its README, beyond the tracker.
 _CHANNEL_PATTERNS = PUBLIC_CHANNEL_PATTERNS
 
@@ -355,16 +364,51 @@ class ActiveMaintenanceCollector:
         return {"participation": participation, "last_commit": last_commit}
 
     async def _get_releases(self, owner: str, repo: str) -> List[Dict]:
-        """Get recent releases."""
+        """Recent releases, newest first: GitHub Releases plus version tags
+        that have no Release object. Many projects publish versions only as
+        tags (Open MPI's v5.0.x), which the Releases API doesn't list."""
         url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20"
+        releases: List[Dict] = []
         try:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code == 200:
-                    return resp.json()
+                    releases = resp.json()
+                named = {r.get("tag_name") for r in releases}
+                releases += [t for t in await self._get_version_tags(client, owner, repo)
+                             if t["tag_name"] not in named]
         except Exception as e:
             logger.debug(f"Error fetching releases: {e}")
-        return []
+        return sorted(releases, key=lambda r: r.get("published_at") or r.get("created_at") or "",
+                      reverse=True)
+
+    async def _get_version_tags(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[Dict]:
+        """The 50 most recent version tags (not release candidates), dated by
+        the annotated tag or else its commit, as release-shaped dicts. One
+        GraphQL query; needs a token, so returns [] without one."""
+        if "Authorization" not in self.headers:
+            return []
+        query = """query($o:String!,$n:String!){repository(owner:$o,name:$n){
+          refs(refPrefix:"refs/tags/",first:50,orderBy:{field:TAG_COMMIT_DATE,direction:DESC}){
+            nodes{name target{__typename ... on Commit{committedDate}
+              ... on Tag{tagger{date} target{... on Commit{committedDate}}}}}}}}"""
+        resp = await client.post("https://api.github.com/graphql", headers=self.headers,
+                                 json={"query": query, "variables": {"o": owner, "n": repo}})
+        if resp.status_code != 200:
+            return []
+        repo_data = (resp.json().get("data") or {}).get("repository") or {}
+        tags = []
+        for node in (repo_data.get("refs") or {}).get("nodes") or []:
+            name, target = node.get("name", ""), node.get("target") or {}
+            if (not _VERSION_TAG.search(name) or _PRE_RELEASE_TAG.search(name)
+                    or _SNAPSHOT_TAG.search(name)):
+                continue
+            date = ((target.get("tagger") or {}).get("date")
+                    or target.get("committedDate")
+                    or (target.get("target") or {}).get("committedDate"))
+            if date:
+                tags.append({"tag_name": name, "published_at": date, "from_tag": True})
+        return tags
 
     async def _get_contributors(self, owner: str, repo: str) -> List[Dict]:
         """Get contributors, paginated.

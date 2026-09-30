@@ -183,3 +183,63 @@ class TestRelatedRepositories:
                 "name": "spack", "repo_url": "https://github.com/spack/spack",
                 "package_config": {"related_repositories": ["spack/spack-packages"]}}))
         assert calls == ["spack/spack", "spack/spack-packages"]
+
+
+class TestVersionTagsAsReleases:
+    def _run(self, releases, graphql):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        class Resp:
+            def __init__(self, status, data):
+                self.status_code, self._data = status, data
+
+            def json(self):
+                return self._data
+
+        class Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, headers=None):
+                return Resp(200, releases)
+
+            async def post(self, url, headers=None, json=None):
+                return Resp(200, graphql)
+
+        c = ActiveMaintenanceCollector("token")
+        with patch("collectors.ecosystem.active_maintenance.httpx.AsyncClient", Client):
+            return asyncio.run(c._get_releases("o", "r"))
+
+    @staticmethod
+    def _tags(*items):
+        return {"data": {"repository": {"refs": {"nodes": [
+            {"name": n, "target": {"__typename": "Commit", "committedDate": d}} for n, d in items]}}}}
+
+    def test_tag_only_versions_count(self):
+        rel = self._run([], self._tags(("v5.0.11", "2026-08-26T00:00:00Z"),
+                                       ("v5.0.11rc1", "2026-08-01T00:00:00Z"),
+                                       ("v5.0.10", "2026-02-01T00:00:00Z")))
+        assert [r["tag_name"] for r in rel] == ["v5.0.11", "v5.0.10"]
+
+    def test_tags_already_released_are_not_doubled(self):
+        rel = self._run([{"tag_name": "v2.0", "published_at": "2026-05-01T00:00:00Z"}],
+                        self._tags(("v2.0", "2026-04-30T00:00:00Z"), ("v1.9", "2025-12-01T00:00:00Z")))
+        assert [r["tag_name"] for r in rel] == ["v2.0", "v1.9"]
+
+    def test_annotated_tag_uses_its_own_date(self):
+        g = {"data": {"repository": {"refs": {"nodes": [{"name": "v1.0", "target": {
+            "__typename": "Tag", "tagger": {"date": "2026-01-02T00:00:00Z"},
+            "target": {"committedDate": "2025-06-01T00:00:00Z"}}}]}}}}
+        assert self._run([], g)[0]["published_at"] == "2026-01-02T00:00:00Z"
+
+    def test_compatibility_snapshots_are_not_releases(self):
+        rel = self._run([], self._tags(("compass-2026-03-21", "2026-03-21T00:00:00Z"),
+                                       ("release-2022.05.15", "2022-05-15T00:00:00Z")))
+        assert [r["tag_name"] for r in rel] == ["release-2022.05.15"]

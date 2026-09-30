@@ -149,7 +149,7 @@ for every other project with a modified licence.)
 | Commit Activity Pattern Analysis | ✅ | >0 commits in the last 52 weeks | `/stats/participation`, 52-week series |
 | Maintenance Mode Indicator Detection | ✅ | not archived, and no maintenance-mode keywords in the description | `archived` flag + description keywords |
 | Activity Trend Monitoring | ✅ | last 13 weeks' commit volume is stable or increasing vs. the previous 13 | `/stats/participation` |
-| Release Pattern Assessment | ✅ | ≥1 release in the last year | `/releases` |
+| Release Pattern Assessment | ✅ | ≥1 release in the last year | `/releases`, plus version tags without a Release object (dated by the annotated tag or its commit; release candidates, alphas, betas and `<name>-YYYY-MM-DD` compatibility snapshots excluded) |
 | Multi-Channel Communication Activity | ✅ | ≥2 of: Discussions, wiki, GitHub Issues, mailing list, chat, forum, help-desk link in the README | Discussions flag; wiki only if it has pages (GitHub's `has_wiki` flag is on by default); issue tracker only if ≥5 of the newest issues from the last year were filed from outside the maintainer group; links detected in the README |
 | Contributor Abandonment Forecasting | ✅ | departure rate ≤50% (unmeasurable if there's no prior-year contributor history to compare against) | contributors active in the prior 52 weeks who committed nothing in the last 52, from `/stats/contributors` |
 
