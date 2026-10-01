@@ -4,8 +4,8 @@
 # Based on CASS Sustainability Metrics Report v3 (3 dimensions):
 #   4.1 Impact, 4.2 Ecosystem, 4.3 Quality
 
-# Dashboard catalog URL (served via GitHub Pages)
-dashboard_base_url: "https://corsa.center/dashboard"
+# Location of catalog
+catalog_url: "https://raw.githubusercontent.com/corsa-center/dashboard/refs/heads/main/explore/github-data/intReposInfo.json"
 output_path: "./output"              # Local output directory (published to GitHub Pages)
 
 # Enable/disable CASS dimension collectors
