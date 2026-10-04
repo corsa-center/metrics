@@ -10,6 +10,8 @@ now produce and feed them straight into the dashboard transform, so a
 regression here fails locally instead of on the next scheduled run.
 """
 
+import asyncio
+
 import pytest
 
 from orchestrator import MetricsOrchestrator
@@ -256,8 +258,7 @@ class TestScoreAggregationDoesNotCrashOnNonePercentage:
     2026-09-17 run did, rather than only in the dashboard-transform layer.
     """
 
-    @pytest.mark.asyncio
-    async def test_ecosystem_dimension_survives_a_fully_gapped_sub_collector(self, orchestrator, monkeypatch):
+    def test_ecosystem_dimension_survives_a_fully_gapped_sub_collector(self, orchestrator, monkeypatch):
         import collectors.ecosystem.community_health as community_health_mod
 
         async def fake_collect(self, package):
@@ -273,13 +274,12 @@ class TestScoreAggregationDoesNotCrashOnNonePercentage:
             lambda group, key, package=None: key == "governance",
         )
 
-        result = await orchestrator.collect_ecosystem_dimension(
+        result = asyncio.run(orchestrator.collect_ecosystem_dimension(
             {"name": "x", "repo_url": "https://github.com/o/r", "repository": "o/r"}
-        )
+        ))
         assert result["score"] == 0.0
 
-    @pytest.mark.asyncio
-    async def test_quality_dimension_survives_a_fully_gapped_sub_collector(self, orchestrator, monkeypatch):
+    def test_quality_dimension_survives_a_fully_gapped_sub_collector(self, orchestrator, monkeypatch):
         import collectors.quality.reliability as reliability_mod
 
         async def fake_collect(self, package):
@@ -291,9 +291,9 @@ class TestScoreAggregationDoesNotCrashOnNonePercentage:
             lambda group, key, package=None: key == "reliability",
         )
 
-        result = await orchestrator.collect_quality_dimension(
+        result = asyncio.run(orchestrator.collect_quality_dimension(
             {"name": "x", "repo_url": "https://github.com/o/r", "repository": "o/r"}
-        )
+        ))
         assert result["score"] == 0.0
 
 
