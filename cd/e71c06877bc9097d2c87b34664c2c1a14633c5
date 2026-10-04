@@ -1,0 +1,35 @@
+ORCHESTRATOR_GUIDE.md
+  s_cecddd38a72a85::t_15532da16de831 138-156
+QUICK_REFERENCE.md
+  s_cecddd38a72a85::t_4a93330cf90310 67-68
+collectors/ecosystem/base.py
+  s_cecddd38a72a85::t_4927a5fde8547a 591-607,616-620
+config/orchestrator.yaml
+  s_cecddd38a72a85::t_f843ca4c5e4ce4 7-8
+orchestrator.py
+  s_cecddd38a72a85::t_685276d94427b3 31,172,373-376,380,717-719,721-722,726,729,731,733,735,737,743,747,749,751,753,755,757,759,767,889-890,892-893,897,900,902,904,906,910,912,914,916,918,920,922,924,926,934,1022-1030,1044-1047,1164-1165,1167-1171,1179,1181,1183-1196,2379-2384,2417-2426
+project_report.py
+  s_cecddd38a72a85::t_3847a8b75ccfbd 1-449
+tests/test_cicd.py
+  s_cecddd38a72a85::t_8ac84ce2595b2d 3-4,143,153,156,160
+tests/test_orchestrator_dashboard_transform.py
+  s_cecddd38a72a85::t_09d7e4c256e846 13-14,261,277,279,282,294,296
+tests/test_project_report.py
+  s_cecddd38a72a85::t_f20516cc400384 1-173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cde71c06877bc9097d2c87b34664c2c1a14633c5",
+  "prompts": {},
+  "sessions": {
+    "s_cecddd38a72a85": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aa2adf77-7b4d-499c-9327-96233641872e",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
