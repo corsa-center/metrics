@@ -186,3 +186,19 @@ class TestOtherBuildPaths:
     ])
     def test_not_a_build(self, collector, paths):
         assert collector._other_build(RepoTree("o", "r", paths, False)) is None
+
+
+class TestE4SContainerImage:
+    def test_package_in_e4s_image_is_container_available(self, monkeypatch):
+        from collectors.quality import accessibility
+        from collectors.ecosystem import collaboration
+        monkeypatch.setattr(accessibility, "_e4s_specs", {"tau", "aml"})
+        monkeypatch.setattr(collaboration, "_spack_by_repo", {"uo-oaciss/tau2": ["tau"]})
+        c = accessibility.AccessibilityCollector()
+        assert asyncio.run(c._e4s_image(None, "UO-OACISS", "tau2")) == "E4S container image (Spack package tau)"
+        assert asyncio.run(c._e4s_image(None, "anlsys", "aml")) == "E4S container image (Spack package aml)"
+
+    def test_package_not_in_e4s_is_not(self, monkeypatch):
+        from collectors.quality import accessibility
+        monkeypatch.setattr(accessibility, "_e4s_specs", {"tau"})
+        assert asyncio.run(accessibility.AccessibilityCollector()._e4s_image(None, "o", "other")) is None

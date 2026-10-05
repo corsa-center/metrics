@@ -15,7 +15,36 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import re
 
-from collectors.ecosystem.base import COLLECTION_GAP, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
+
+# The same documents kept deeper in the project's own documentation tree
+# (docs/source/..., src/docs/sphinx/...), found only when the root, .github/
+# and docs/ listings come up empty. Anchored at the top level so a bundled
+# sub-project's docs (packages/<lib>/docs/) aren't taken as the project's.
+_DOC_TREE = r"^(?:src/|source/)?docs?/(?:[^/]+/)*"
+_DEEP_DOC_PATTERNS = {
+    "code_of_conduct": _DOC_TREE + r"code[-_]?of[-_]?conduct[^/]*\.(?:md|rst|txt)$",
+    "governance": _DOC_TREE + r"governance[^/]*\.(?:md|rst|txt)$",
+    "contributing_guidelines": _DOC_TREE + r"contribut(?:ing|e|ion|ors?[-_]guide)[^/]*\.(?:md|rst|txt)$",
+}
+# A README "Contributing" section counts as contributor guidelines only if
+# it describes a process; "We welcome contributions! Ideas: ..." doesn't.
+_README_CONTRIB_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*contribut\w*.*$", re.I | re.M)
+_CONTRIB_PROCESS = re.compile(
+    r"\b(?:fork|pull request|PRs?|branch|issue|style|tests?|ctest|commit|review|sign[- ]?off|DCO|CLA)\b", re.I)
+
+
+
+def readme_contributing_section(text: str) -> Optional[str]:
+    """The README's Contributing section, if it describes a process."""
+    m = _README_CONTRIB_HEADING.search(text)
+    if not m:
+        return None
+    rest = text[m.end():]
+    nxt = re.search(r"^\s{0,3}#{1,6}\s", rest, re.M)
+    section = rest[:nxt.start()] if nxt else rest[:3000]
+    return section if _CONTRIB_PROCESS.search(section) else None
+
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +179,9 @@ class CommunityHealthCollector:
         coc_result, governance_result, contributing_result = await self._check_fallback_repos(
             owner, coc_result, governance_result, contributing_result
         )
+        coc_result, governance_result, contributing_result = await self._check_deeper(
+            owner, repo, coc_result, governance_result, contributing_result
+        )
 
         # Get community profile from GitHub API (if token available)
         community_profile = await self._get_community_profile(owner, repo)
@@ -181,6 +213,38 @@ class CommunityHealthCollector:
             ),
         }
 
+    async def _check_deeper(self, owner: str, repo: str, *results: Dict[str, Any]) -> tuple:
+        """Documents still missing after the fixed listings: look through the
+        whole tree's documentation directories, and for contributor
+        guidelines, a README section describing how to contribute."""
+        keys = ["code_of_conduct", "governance", "contributing_guidelines"]
+        results = list(results)
+        if all(r.get("exists") or r.get("not_collected") for r in results):
+            return tuple(results)
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            tree = await RepoTree.fetch(client, self.headers, owner, repo)
+        for i, key in enumerate(keys):
+            if results[i].get("exists") or results[i].get("not_collected") or tree is COLLECTION_GAP:
+                continue
+            path = tree.find_owned(_DEEP_DOC_PATTERNS[key])
+            if path:
+                results[i] = {"exists": True, "file_path": path, "url": tree.url_for(path),
+                              "size": 0, "content_preview": "", "repository": f"{owner}/{repo}"}
+        if not results[2].get("exists") and not results[2].get("not_collected"):
+            readme = await self._github_get(f"https://api.github.com/repos/{owner}/{repo}/readme")
+            if isinstance(readme, dict):
+                import base64
+                text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")
+                section = readme_contributing_section(text)
+                if section:
+                    results[2] = {
+                        "exists": True, "file_path": readme.get("path", "README.md"),
+                        "url": (readme.get("html_url") or "") + "#contributing", "size": 0,
+                        "content_preview": "", "repository": f"{owner}/{repo}",
+                        "section_text": section, "source": "README section",
+                    }
+        return tuple(results)
+
     async def _analyze_governance_keywords(
         self, documents: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
@@ -195,17 +259,18 @@ class CommunityHealthCollector:
         actually found), so this reads each from wherever it really lives
         rather than assuming they're all co-located.
         """
+        present = [d for d in documents if d.get("exists") and d.get("file_path") and d.get("repository")]
+        if not present:
+            return {"groups_found": [], "documents_read": 0}
         located = [
             (d["repository"].split("/", 1)[0], d["repository"].split("/", 1)[1], d["file_path"])
-            for d in documents if d.get("exists") and d.get("file_path") and d.get("repository")
+            for d in present if not d.get("section_text")
         ]
-        if not located:
-            return {"groups_found": [], "documents_read": 0}
-
-        texts = await asyncio.gather(
+        # A README section is read on its own, not the whole README.
+        texts = list(await asyncio.gather(
             *[self._get_file_text(o, r, p) for o, r, p in located],
             return_exceptions=True,
-        )
+        )) + [d["section_text"] for d in present if d.get("section_text")]
         corpus = " ".join(
             t.lower() for t in texts if isinstance(t, str) and t
         )
@@ -216,7 +281,7 @@ class CommunityHealthCollector:
             group for group, terms in self.GOVERNANCE_KEYWORDS.items()
             if any(term in corpus for term in terms)
         ]
-        return {"groups_found": found, "documents_read": len(located)}
+        return {"groups_found": found, "documents_read": len(present)}
 
     async def _assess_effectiveness(
         self, owner: str, repo: str, documents: List[Dict[str, Any]]

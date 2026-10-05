@@ -18,6 +18,7 @@ import base64
 import httpx
 import logging
 import re
+import tomllib
 from typing import Any, Dict, List, Optional
 
 from collectors.quality.usability import readme_covers
@@ -109,6 +110,7 @@ _FILE_CHECKS: Dict[str, Dict[str, List[str]]] = {
         "Cargo.lock": ["Cargo.lock"],
         "go.sum": ["go.sum"],
         "uv.lock / pdm.lock": ["uv.lock", "pdm.lock"],
+        "Other lockfile": ["Manifest.toml", "renv.lock", "pixi.lock"],
     },
     "fair4rs_metadata": {
         "CITATION.cff": ["CITATION.cff"],
@@ -145,6 +147,42 @@ _TREE_PATTERNS = {
     ("reproducibility_docs", "Environment specification"): ENVIRONMENT_SPEC_PATTERN,
 }
 
+# Dependency management shown by content rather than by a lockfile: a
+# manifest that constrains versions, or Dependabot keeping the software's own
+# dependencies current (not just CI actions or pre-commit hooks).
+_PEP508_VERSION = re.compile(r"(?:===?|>=|<=|~=|!=|<|>)\s*\d|\s@\s")
+_VERSION_SPEC = re.compile(r"^\s*(?:[<>=~^!]=?\s*)?\d")
+
+
+def _versioned_dependencies(name: str, text: str) -> bool:
+    """Whether a root manifest constrains any dependency's version."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return False
+    if name == "pyproject.toml":
+        # PEP 621 requirement strings ("numpy>=1.26"), and Poetry tables
+        # ({numpy = "^1.26"}); python itself isn't a dependency.
+        reqs = data.get("project", {}).get("dependencies", [])
+        if any(isinstance(r, str) and _PEP508_VERSION.search(r.split(";")[0]) for r in reqs):
+            return True
+        poetry = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
+        return any(k.lower() != "python" and _VERSION_SPEC.search(v if isinstance(v, str) else str(v.get("version", "")))
+                   for k, v in poetry.items() if isinstance(v, (str, dict)))
+    if name == "fpm.toml":
+        # A dependency pinned to a tag, revision or version.
+        return any(isinstance(v, dict) and ({"tag", "rev", "version"} & v.keys())
+                   for v in data.get("dependencies", {}).values())
+    if name == "Project.toml":
+        # Julia [compat] bounds other than julia itself.
+        return any(k != "julia" for k in data.get("compat", {}))
+    return False
+
+
+_VERSIONED_MANIFESTS = ["pyproject.toml", "fpm.toml", "Project.toml"]
+_DEPENDABOT_PATHS = [".github/dependabot.yml", ".github/dependabot.yaml"]
+_DEPENDABOT_CI_ONLY = {"github-actions", "pre-commit", "docker", "docker-compose", "devcontainers"}
+
 # Weights used to compute the overall percentage score.
 _WEIGHTS = {
     "containers": 0.20,
@@ -176,6 +214,11 @@ class ReproducibilityCollector(GitHubCollectorBase):
                 self._check_semantic_versioning(client, owner, repo),
             )
             categories = {**self._scan_files(tree), "semantic_versioning": semver}
+            pinning = categories["dependency_pinning"]
+            if tree is not COLLECTION_GAP and not pinning["found"]:
+                for label, path in await self._managed_dependencies(client, owner, repo, tree):
+                    pinning["found"].append(label)
+                    pinning["details"][label] = {"exists": True, "file": path, "url": tree.url_for(path)}
             docs = categories["reproducibility_docs"]
             if tree is not COLLECTION_GAP and "Install / build guide" in docs["missing"]:
                 readme = await self._readme_install_section(client, owner, repo)
@@ -255,6 +298,34 @@ class ReproducibilityCollector(GitHubCollectorBase):
             }
 
         return results
+
+    async def _managed_dependencies(
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+    ) -> List[tuple]:
+        """(label, path) for root manifests that constrain dependency
+        versions, and for Dependabot configured for the software's own
+        package ecosystem."""
+        found = []
+        for name in _VERSIONED_MANIFESTS:
+            path = tree.match([name])
+            if path:
+                text = await self._file_text(client, owner, repo, path)
+                if text and _versioned_dependencies(name, text):
+                    found.append(("Versioned dependency manifest", path))
+                    break
+        path = tree.match(_DEPENDABOT_PATHS)
+        if path:
+            text = await self._file_text(client, owner, repo, path) or ""
+            ecosystems = set(re.findall(r"package-ecosystem:\s*[\"']?([\w-]+)", text))
+            if ecosystems - _DEPENDABOT_CI_ONLY:
+                found.append(("Dependabot dependency updates", path))
+        return found
+
+    async def _file_text(self, client: httpx.AsyncClient, owner: str, repo: str, path: str) -> Optional[str]:
+        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
+        if not isinstance(data, dict):
+            return None
+        return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
     async def _readme_install_section(
         self, client: httpx.AsyncClient, owner: str, repo: str

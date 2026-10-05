@@ -1389,12 +1389,16 @@ class MetricsOrchestrator:
                 chaoss_score = chaoss.get("overall_score", {})
                 score_val = chaoss_score.get("score", 0)
                 status = chaoss_score.get("status", "unknown")
-                chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
-                gov_pts += 1 if chaoss_ok else 0
-                gov_lines.append(
-                    f'<p><strong>CHAOSS Governance Metrics:</strong> '
-                    f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
-                )
+                if score_val is None:
+                    # Every category unmeasured or gapped: no score to judge.
+                    gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+                else:
+                    chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
+                    gov_pts += 1 if chaoss_ok else 0
+                    gov_lines.append(
+                        f'<p><strong>CHAOSS Governance Metrics:</strong> '
+                        f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
+                    )
                 # Per-category breakdown, weakest first, so the failing areas
                 # are what a maintainer sees rather than just the headline score.
                 # A category can be {"not_collected": True} instead of a
@@ -2174,6 +2178,8 @@ class MetricsOrchestrator:
             if accessibility.get("python_package"):
                 build_found = build_found + [f'pip-installable Python package ({accessibility["python_package"]})']
             container_found = cats.get("containers", {}).get("found", [])
+            if accessibility.get("container_image"):
+                container_found = container_found + [accessibility["container_image"]]
 
             # 5. Deployment Environment Testing comes from its own collector, so
             #    it is rendered with _sub_row and scored alongside the _acc_row
@@ -2377,11 +2383,28 @@ class MetricsOrchestrator:
         downloaded by the dashboard's update workflow into
         explore/github-data/.
         """
+        failed = []
+        written: Dict[str, str] = {}
         for repo_name, metrics in all_metrics.items():
-            dashboard_data = self._transform_for_dashboard(repo_name, metrics)
+            # One package's rendering error used to abort the loop and drop
+            # every later package's output; write the rest, then fail the run.
+            try:
+                dashboard_data = self._transform_for_dashboard(repo_name, metrics)
+            except Exception as e:
+                logger.error(f"Could not render dashboard output for {repo_name}: {e!r}", exc_info=True)
+                failed.append(repo_name)
+                continue
 
             # Extract repo part from "Owner/repo" for directory name
             repo_short = repo_name.split("/")[-1]
+            # The dashboard keys files by repository name alone, so two
+            # catalog entries with the same name overwrite each other.
+            if repo_short.lower() in written:
+                logger.error(
+                    f"{repo_name} and {written[repo_short.lower()]} both write "
+                    f"{repo_short}-metrics/metrics.json; the dashboard shows only {repo_name}"
+                )
+            written[repo_short.lower()] = repo_name
             metrics_dir = self.output_path / f"{repo_short}-metrics"
             metrics_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2400,6 +2423,9 @@ class MetricsOrchestrator:
                     self._merged_overrides(repo_name, metrics),
                 )
             )
+
+        if failed:
+            raise RuntimeError(f"Dashboard output failed for: {', '.join(failed)}")
 
 
 async def main():

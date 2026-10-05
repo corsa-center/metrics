@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 # enumerated here (METRIC_BLIND_SPOTS.md class F1).
 _TESTING_PATHS = {
     "Test suite directory": ["test", "tests", "testing", "src/test"],
-    "CTest / CMake testing": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
-    "pytest configuration": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
+    "Build-system test target": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
+    "pytest": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
     "Unit-test framework": [
         "test/googletest", "extern/googletest", "third_party/googletest",
         "test/catch2", "extern/Catch2",
@@ -50,8 +50,10 @@ _FRAMEWORK_DIR = r"(?:^|/)(?:googletest|gtest|catch2?|doctest|cmocka|pfunit)(?:/
 _CONFTEST = r"(?:^|/)conftest\.py$"
 _NESTED_TEST_DIR = r"(?:^|/)(?:tests?|testing|unit_?tests?)/"
 _CONTENT_MARKERS = {
-    "CTest / CMake testing": re.compile(r"^\s*(?:enable_testing\s*\(|include\s*\(\s*CTest\b)", re.M | re.I),
-    "pytest configuration": re.compile(r"^\[tool(?:\.|:)pytest", re.M),
+    # CTest, or an automake check target.
+    "Build-system test target": re.compile(
+        r"^\s*(?:enable_testing\s*\(|include\s*\(\s*CTest\b|(?-i:TESTS)\s*\+?=|check-local\s*:)", re.M | re.I),
+    "pytest": re.compile(r"^\[tool(?:\.|:)pytest", re.M),
     "Unit-test framework": re.compile(
         r"FetchContent_Declare\s*\(\s*(?:googletest|catch2|doctest)\b"
         r"|find_package\s*\(\s*(?:GTest|Catch2|doctest)\b",
@@ -61,7 +63,16 @@ _CONTENT_MARKERS = {
 # CMake modules whose name mentions testing, read after the root CMakeLists.
 _TEST_CMAKE_FILE = r"(?:^|/)[^/]*test[^/]*\.cmake$"
 _MAX_TEST_CMAKE_FILES = 3
-_CONFIG_FILES = ["CMakeLists.txt", "pyproject.toml", "setup.cfg"]
+_CONFIG_FILES = ["CMakeLists.txt", "pyproject.toml", "setup.cfg", "Makefile.am"]
+# Test runners a project's CI invokes: evidence of the framework in use even
+# where no config file declares it (a CMake helper module calling
+# enable_testing, pytest run with defaults).
+_CI_FILES = r"^(?:\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml)$"
+_MAX_CI_FILES = 10
+_CI_TEST_RUNNERS = {
+    "Build-system test target": re.compile(r"\bctest\b|\bmake\s+(?:-\S+\s+)*(?:check|test)\b|\bfpm\s+test\b", re.I),
+    "pytest": re.compile(r"\bpytest\b(?![-_.])", re.I),
+}
 
 # Tooling that enforces consistency without a human in the loop.
 _TOOLING_PATHS = {
@@ -75,6 +86,30 @@ _TOOLING_PATHS = {
         ".github/dependabot.yml", ".github/dependabot.yaml", "renovate.json",
     ],
 }
+
+# Formatter and linter configs kept anywhere in the project's own tree (a
+# component's src/.clang-format, a subproject's .clang-tidy), in more tools
+# than the root list names.
+_TOOLING_TREE = {
+    # A git hook committed to the repository (installed with core.hooksPath
+    # or a setup script), or husky's.
+    "Pre-commit hooks": r"(?:^|/)(?:\.?githooks|\.husky|hooks)/pre-commit$",
+    "Code formatter config": (
+        r"(?:^|/)(?:[._]clang-format|\.cmake-format(?:\.ya?ml|\.json|\.py)?|\.gersemirc"
+        r"|\.fprettify\.rc|\.style\.yapf|\.prettierrc[\w.]*|\.?rustfmt\.toml|\.JuliaFormatter\.toml"
+        r"|[\w.-]*\.?astylerc|uncrustify[\w.-]*\.cfg)$"
+    ),
+    "Linter config": (
+        r"(?:^|/)(?:\.clang-tidy|\.flake8|\.?pylintrc|\.?ruff\.toml|\.?mypy\.ini"
+        r"|\.eslintrc[\w.]*|\.lintr|CPPLINT\.cfg|\.cppcheck)$"
+    ),
+}
+# The same tools configured in a Python project's shared config files.
+_TOOLING_SECTIONS = {
+    "Code formatter config": re.compile(r"^\[tool\.(?:black|isort|yapf|ruff\.format)\]", re.M),
+    "Linter config": re.compile(r"^\[(?:tool\.(?:ruff|pylint|mypy|flake8)|flake8|mypy|pylint)[\].]", re.M),
+}
+_TOOLING_CONFIG_FILES = ["pyproject.toml", "setup.cfg", "tox.ini"]
 
 # How many recently-closed PRs to sample for review coverage.
 _PR_SAMPLE_SIZE = 50
@@ -108,6 +143,9 @@ class DevToolingCollector(GitHubCollectorBase):
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 testing = await self._refine_testing(client, owner, repo, tree, testing)
         tooling = self._scan(tree, _TOOLING_PATHS)
+        if tree is not COLLECTION_GAP and any(l in tooling["missing"] for l in _TOOLING_TREE):
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                tooling = await self._refine_tooling(client, owner, repo, tree, tooling)
         if isinstance(review, Exception):
             logger.warning(f"COLLECTION-GAP category=code_review reason=exception:{review!r}")
             review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
@@ -173,12 +211,19 @@ class DevToolingCollector(GitHubCollectorBase):
                 path = min(hits, key=lambda p: (p.count("/"), p))
                 m = re.search(_NESTED_TEST_DIR, path, re.I)
                 mark("Test suite directory", path[:m.end()].rstrip("/"))
-        if "pytest configuration" in missing:
+        if "pytest" in missing:
             path = tree.find_owned(_CONFTEST)
             if path:
-                mark("pytest configuration", path)
+                mark("pytest", path)
+        if "Build-system test target" in missing:
+            # fpm builds and runs everything under test/ with `fpm test`.
+            fpm = tree.match(["fpm.toml"])
+            if fpm and tree.has_dir("test"):
+                mark("Build-system test target", fpm)
 
-        wanted = [label for label in _CONTENT_MARKERS if label in missing]
+        wanted = [label for label in list(_CONTENT_MARKERS) + list(_CI_TEST_RUNNERS)
+                  if label in missing]
+        wanted = list(dict.fromkeys(wanted))
         if not wanted:
             return {**testing, "found": found, "missing": missing, "details": details}
 
@@ -187,6 +232,7 @@ class DevToolingCollector(GitHubCollectorBase):
             key=lambda p: (p.count("/"), p),
         )[:_MAX_TEST_CMAKE_FILES]
         paths = [p for p in (tree.match([c]) for c in _CONFIG_FILES) if p] + cmake_modules
+        ci_paths = tree.find(_CI_FILES)[:_MAX_CI_FILES]
 
         async def read(path: str):
             data = await self._github_get(
@@ -196,10 +242,13 @@ class DevToolingCollector(GitHubCollectorBase):
                 return data if data is COLLECTION_GAP else ""
             return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
 
-        texts = await asyncio.gather(*[read(p) for p in paths])
+        texts = await asyncio.gather(*[read(p) for p in paths + ci_paths])
         for label in wanted:
-            for path, text in zip(paths, texts):
-                if text and text is not COLLECTION_GAP and _CONTENT_MARKERS[label].search(text):
+            for i, (path, text) in enumerate(zip(paths + ci_paths, texts)):
+                marker = _CONTENT_MARKERS.get(label) if i < len(paths) else _CI_TEST_RUNNERS.get(label)
+                if i >= len(paths) and text and text is not COLLECTION_GAP:
+                    text = re.sub(r"(?m)^\s*#.*$", "", text)  # a comment isn't a step
+                if text and text is not COLLECTION_GAP and marker and marker.search(text):
                     mark(label, path)
                     break
         if any(t is COLLECTION_GAP for t in texts):
@@ -208,6 +257,37 @@ class DevToolingCollector(GitHubCollectorBase):
                 not_collected.append(label)
                 details[label] = {"not_collected": True}
         return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+
+    async def _refine_tooling(
+        self, client: httpx.AsyncClient, owner: str, repo: str, tree, tooling: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Formatter and linter configs outside the root list: anywhere in
+        the project's own tree, then as sections of root Python config files."""
+        found, missing, details = list(tooling["found"]), list(tooling["missing"]), dict(tooling["details"])
+
+        def mark(label: str, path: str):
+            missing.remove(label)
+            found.append(label)
+            details[label] = {"exists": True, "url": tree.url_for(path), "file": path}
+
+        for label, pattern in _TOOLING_TREE.items():
+            if label in missing:
+                path = tree.find_owned(pattern)
+                if path:
+                    mark(label, path)
+        wanted = [l for l in _TOOLING_SECTIONS if l in missing]
+        for path in [p for p in (tree.match([c]) for c in _TOOLING_CONFIG_FILES) if p]:
+            if not wanted:
+                break
+            data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
+            if not isinstance(data, dict):
+                continue
+            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+            for label in list(wanted):
+                if _TOOLING_SECTIONS[label].search(text):
+                    mark(label, path)
+                    wanted.remove(label)
+        return {**tooling, "found": found, "missing": missing, "details": details}
 
     async def _analyze_review_coverage(
         self, client: httpx.AsyncClient, owner: str, repo: str
@@ -280,6 +360,10 @@ class DevToolingCollector(GitHubCollectorBase):
         }
         if review.get("not_collected"):
             review_entry["not_collected"] = True
+        elif cov is None:
+            # Review coverage of zero pull requests is undefined, and the
+            # project may review changes somewhere other than GitHub.
+            review_entry.update(value="No merged pull requests to sample", unmeasured=True)
         sub["code_review_quality"] = review_entry
 
         tool_found = tooling.get("found", [])
@@ -294,7 +378,7 @@ class DevToolingCollector(GitHubCollectorBase):
             tooling_entry["not_collected"] = True
         sub["dev_tool_integration"] = tooling_entry
 
-        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        scorable = {k: v for k, v in sub.items() if not (v.get("not_collected") or v.get("unmeasured"))}
         score = sum(1 for s in scorable.values() if s["passing"])
         max_score = len(scorable)
         if not max_score:

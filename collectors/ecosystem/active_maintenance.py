@@ -20,11 +20,12 @@ from typing import Dict, Any, Optional, List
 from urllib.parse import urlencode
 
 from collectors.ecosystem.base import (
-    PUBLIC_CHANNEL_PATTERNS, RetryingTransport, get_threshold, wiki_has_content,
+    PUBLIC_CHANNEL_PATTERNS, RetryingTransport, fetch_version_tags, get_threshold, wiki_has_content,
 )
 from collectors.rate_limit import search_get
 
 logger = logging.getLogger(__name__)
+
 
 # Community channels a project might link from its README, beyond the tracker.
 _CHANNEL_PATTERNS = PUBLIC_CHANNEL_PATTERNS
@@ -355,16 +356,26 @@ class ActiveMaintenanceCollector:
         return {"participation": participation, "last_commit": last_commit}
 
     async def _get_releases(self, owner: str, repo: str) -> List[Dict]:
-        """Get recent releases."""
+        """Recent releases, newest first: GitHub Releases plus version tags
+        that have no Release object. Many projects publish versions only as
+        tags, which the Releases API doesn't list."""
         url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20"
+        releases: List[Dict] = []
         try:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code == 200:
-                    return resp.json()
+                    releases = resp.json()
+                named = {r.get("tag_name") for r in releases}
+                releases += [t for t in await self._get_version_tags(client, owner, repo)
+                             if t["tag_name"] not in named]
         except Exception as e:
             logger.debug(f"Error fetching releases: {e}")
-        return []
+        return sorted(releases, key=lambda r: r.get("published_at") or r.get("created_at") or "",
+                      reverse=True)
+
+    async def _get_version_tags(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[Dict]:
+        return await fetch_version_tags(client, self.headers, owner, repo)
 
     async def _get_contributors(self, owner: str, repo: str) -> List[Dict]:
         """Get contributors, paginated.

@@ -29,17 +29,21 @@ logger = logging.getLogger(__name__)
 # README headings that answer a new user's first questions. Matched against
 # heading text only, so a passing mention in a paragraph doesn't count.
 _README_SECTIONS = {
-    "Installation": r"(?:install|building|build from source|getting started|setup)",
+    "Installation": r"(?:install|build(?:ing)?\b|getting started|set ?up\b)",
     "Usage": r"(?:usage|using|quick ?start|how to use|basic use|tutorial)",
     "Examples": r"(?:examples?|demos?|sample)",
-    "Support": r"(?:support|help|contact|community|questions|mailing list)",
+    "Support": r"(?:support|help|contact|community|questions|mailing list|who (?:do|to) (?:i )?talk to)",
 }
 
 _DOC_DIRECTORIES = ["docs", "doc", "documentation"]
 
 # Markdown ATX headings and Setext underlines both appear in real READMEs.
 _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
-_SETEXT_HEADING = re.compile(r"^\s{0,3}(\S.*)\n\s{0,3}[=-]{3,}\s*$", re.MULTILINE)
+# Underlines also in reStructuredText's other adornment characters.
+_SETEXT_HEADING = re.compile(
+    r"^\s{0,3}(\S.*)\n\s{0,3}(?:={3,}|-{3,}|~{3,}|\^{3,}|\*{3,}|#{3,}|\+{3,})\s*$", re.MULTILINE)
+# Plain-text READMEs with no markup often mark sections "* Quick start".
+_PLAIN_HEADING = re.compile(r"^\* ([A-Z][^\n*]{2,60})\n\s*\n", re.MULTILINE)
 # Link text counts too: a README can cover a topic with a link instead of a
 # section ("[Getting Started](...)", "[Contact Us](...)"). Image and badge
 # links (![...]) are excluded.
@@ -50,8 +54,16 @@ def readme_covers(text: str, label: str) -> bool:
     """Whether README markdown covers one of _README_SECTIONS, by a heading or
     by link text starting with the topic. Anchored at the start for links: a
     link reading "Building X using Spack" is an install guide, not usage."""
-    pattern = _README_SECTIONS[label]
-    headings = _ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)
+    return readme_mentions(text, _README_SECTIONS[label])
+
+
+def readme_mentions(text: str, pattern: str) -> bool:
+    """Whether a README heading, or link text starting with the topic,
+    matches pattern."""
+    atx = _ATX_HEADING.findall(text)
+    headings = atx + _SETEXT_HEADING.findall(text)
+    if not atx:
+        headings += _PLAIN_HEADING.findall(text)
     return (any(re.search(pattern, h, re.IGNORECASE) for h in headings)
             or any(re.match(rf"\W*{pattern}", t, re.IGNORECASE) for t in _LINK_TEXT.findall(text)))
 

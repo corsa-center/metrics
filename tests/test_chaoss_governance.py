@@ -301,3 +301,27 @@ class TestParseDate:
 
     def test_invalid_returns_none(self, collector):
         assert collector._parse_date("not-a-date") is None
+
+
+class TestNothingToMeasure:
+    def test_no_closed_prs_is_not_collected(self, collector):
+        with patch.object(collector, "_get_closed_pull_requests", new=AsyncMock(return_value=[])):
+            r = asyncio.run(collector._get_change_request_metrics(None, "o", "r"))
+        assert r["closure_ratio"]["not_collected"] is True
+
+    def test_no_issues_inclusivity_is_not_collected(self, collector):
+        with patch.object(collector, "_get_recent_issues_with_comments", new=AsyncMock(return_value=[])):
+            r = asyncio.run(collector._get_issues_inclusivity(None, "o", "r"))
+        assert r["not_collected"] is True
+
+
+class TestReleaseFrequencyFromTags:
+    def test_version_tags_count_when_there_are_no_releases(self, collector):
+        tags = [{"tag_name": "v5.0.11", "published_at": "2026-08-26T00:00:00Z", "from_tag": True},
+                {"tag_name": "v5.0.10", "published_at": "2026-02-01T00:00:00Z", "from_tag": True}]
+        with patch.object(collector, "_github_get", new=AsyncMock(return_value=[])), \
+             patch("collectors.ecosystem.chaoss_governance.fetch_version_tags", new=AsyncMock(return_value=tags)):
+            r = asyncio.run(collector._get_release_frequency(None, "o", "r"))
+        assert r["total_releases"] == 2
+        assert r["latest_release"]["tag"] == "v5.0.11"
+        assert r["score"] > 0
