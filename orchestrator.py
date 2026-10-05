@@ -391,22 +391,6 @@ class MetricsOrchestrator:
             logger.error(f"Failed to fetch {url}: {e}")
             return None
 
-    # def load_software_catalog(self) -> Dict:
-    #     """Load software catalog from the dashboard (fetched via HTTP)
-    #
-    #     Returns:
-    #         Dictionary of software packages with metadata
-    #     """
-    #     if not self.catalog_url:
-    #         raise RuntimeError(f"No catalog URL specified")
-    #
-    #     data = self._fetch_json(self.catalog_url)
-    #     if data is None:
-    #         # Fail loudly: an empty catalog would let the run report success
-    #         # having collected nothing.
-    #         raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
-    #     return data.get("data", {})
-
     async def load_software_catalog(self) -> Dict:
         """Load software catalog from the metrics_data directory
         Returns:
