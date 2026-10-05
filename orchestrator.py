@@ -445,25 +445,6 @@ class MetricsOrchestrator:
                 logger.warning(f"Skipping {name} because no repository url found")
                 continue
             software_list.append(package)
-        print(json.dumps(catalog, indent=2))
-        # for repo_name, metadata in catalog.items():
-        #     if not isinstance(metadata, dict):
-        #         logger.warning(f"Skipping {repo_name}: metadata is not a dict ({type(metadata).__name__})")
-        #         continue
-        #     # Apply filter if specified
-        #     if filter_software and filter_software.lower() not in repo_name.lower():
-        #         continue
-        #
-        #     package = {
-        #         "name": metadata.get("name", repo_name),
-        #         "repository": repo_name,
-        #         "repo_url": metadata.get("url", f"https://github.com/{repo_name}"),
-        #         "description": metadata.get("description", ""),
-        #         "homepage": metadata.get("homepageUrl"),
-        #         "license": (metadata.get("licenseInfo") or {}).get("spdxId"),
-        #         "primary_language": (metadata.get("primaryLanguage") or {}).get("name"),
-        #     }
-        #     software_list.append(package)
 
         if group_count and group_count > 1 and not filter_software:
             # Sort first so the slice is stable regardless of any incidental
