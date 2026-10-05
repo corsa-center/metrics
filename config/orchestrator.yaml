@@ -5,7 +5,7 @@
 #   4.1 Impact, 4.2 Ecosystem, 4.3 Quality
 
 # Location of catalog
-catalog_url: "https://raw.githubusercontent.com/corsa-center/dashboard/refs/heads/main/explore/github-data/intReposInfo.json"
+catalog_url: "https://api.github.com/repos/corsa-center/metrics_data/contents/package_config"
 output_path: "./output"              # Local output directory (published to GitHub Pages)
 
 # Enable/disable CASS dimension collectors

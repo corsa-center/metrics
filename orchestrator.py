@@ -28,6 +28,7 @@ import re
 import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
+from integrations.github_api import GitHubClient
 from project_report import render_project_report
 
 # Setup logging
@@ -87,6 +88,8 @@ PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
 # config (see docs/PROJECT_CONFIG.md). Fetched fresh per collection run.
 PROJECT_CONFIG_SCHEMA_VERSION = 1
 
+# Catalog package schems
+PACKAGE_CONFIG_SCHEMA_VERSION = 1
 
 _MAIN_ROW = re.compile(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>')
 _SCORE_LINE = re.compile(r'<p[^>]*><strong>Score:</strong>[^<]*</p>')
@@ -248,8 +251,7 @@ class MetricsOrchestrator:
         """Fetch a project's self-declared metrics file from its own repo.
 
         Lets a project narrow which collectors run for it and annotate
-        sub-metric overrides, same shape as package_config/ (see
-        docs/PROJECT_CONFIG.md). Any problem -- missing file, network error,
+        sub-metric overrides. Any problem -- missing file, network error,
         bad YAML, schema mismatch, a repo: field that disagrees with the
         package being collected -- fails open and returns {}, i.e. collect
         everything, exactly as if the project had never added the file.
@@ -257,28 +259,19 @@ class MetricsOrchestrator:
         if not self.project_config.get("enabled"):
             return {}
 
-        metrics_file = self.project_config.get("metrics_file")
-        if not metrics_file:
-            logger.warning("missing metrics_file in configuration")
+        metrics_url = package.get("metrics_url", None)
+        if not metrics_url:
             return {}
 
-        repo_name = package["repository"]
         token = self._get_github_token()
 
         try:
-            # repo_name comes from the live-fetched catalog's own keys
-            # (prepare_software_list), not from anything we control -- a
-            # malformed one (no "/") must fail open like every other
-            # problem here, not raise past this method.
-            owner, repo = repo_name.split("/", 1)
-
-            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{metrics_file}"
             headers = {"Accept": "application/vnd.github.v3+json"}
             if token:
                 headers["Authorization"] = f"token {token}"
 
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url, headers=headers)
+                resp = await client.get(metrics_url, headers=headers)
             if resp.status_code != 200:
                 return {}
             content = base64.b64decode(resp.json().get("content", "")).decode(
@@ -286,25 +279,59 @@ class MetricsOrchestrator:
             )
             data = yaml.safe_load(content) or {}
         except Exception as e:
-            logger.warning(f"Could not fetch {metrics_file} for {repo_name}: {e}")
+            logger.warning(f"Could not fetch {metrics_url} for {package["name"]}: {e}")
             return {}
 
         if not isinstance(data, dict):
-            logger.warning(f"Ignoring {metrics_file} for {repo_name}: not a mapping")
+            logger.warning(f"Ignoring {metrics_url} for {package["name"]}: not a mapping")
             return {}
         if data.get("schema") != PROJECT_CONFIG_SCHEMA_VERSION:
             logger.warning(
-                f"Ignoring {metrics_file} for {repo_name}: "
+                f"Ignoring {metrics_url} for {package["name"]}: "
                 f"unsupported schema {data.get('schema')!r}"
             )
             return {}
-        if str(data.get("repo", "")).lower() != repo_name.lower():
+        if str(data.get("name", "")).lower() != package["name"].lower():
             logger.warning(
-                f"Ignoring {metrics_file} for {repo_name}: "
-                f"repo field {data.get('repo')!r} does not match"
+                f"Ignoring {metrics_url} for {package["name"]}: "
+                f"name field {data.get('name')!r} does not match"
             )
             return {}
         return _sanitize_metric_config(data)
+
+    async def _fetch_package_config(self, package_url) -> Dict:
+        """Fetch a catalog package.
+        """
+
+        token = self._get_github_token()
+
+        try:
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            if token:
+                headers["Authorization"] = f"token {token}"
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(package_url, headers=headers)
+            if resp.status_code != 200:
+                return {}
+            content = base64.b64decode(resp.json().get("content", "")).decode(
+                "utf-8", "replace"
+            )
+            package = yaml.safe_load(content) or {}
+        except Exception as e:
+            logger.warning(f"Could not fetch {package_url}: {e}")
+            return {}
+
+        if not isinstance(package, dict):
+            logger.warning(f"Ignoring {package_url}: not a mapping")
+            return {}
+        if package.get("schema") != PACKAGE_CONFIG_SCHEMA_VERSION:
+            logger.warning(
+                f"Ignoring {package_url}: "
+                f"unsupported schema {package.get('schema')!r}"
+            )
+            return {}
+        return package
 
     @staticmethod
     def _apply_section_overrides(html: Optional[str], section_overrides: Dict[str, str]) -> Optional[str]:
@@ -364,23 +391,43 @@ class MetricsOrchestrator:
             logger.error(f"Failed to fetch {url}: {e}")
             return None
 
-    def load_software_catalog(self) -> Dict:
-        """Load software catalog from the dashboard (fetched via HTTP)
+    # def load_software_catalog(self) -> Dict:
+    #     """Load software catalog from the dashboard (fetched via HTTP)
+    #
+    #     Returns:
+    #         Dictionary of software packages with metadata
+    #     """
+    #     if not self.catalog_url:
+    #         raise RuntimeError(f"No catalog URL specified")
+    #
+    #     data = self._fetch_json(self.catalog_url)
+    #     if data is None:
+    #         # Fail loudly: an empty catalog would let the run report success
+    #         # having collected nothing.
+    #         raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
+    #     return data.get("data", {})
 
+    async def load_software_catalog(self) -> Dict:
+        """Load software catalog from the metrics_data directory
         Returns:
-            Dictionary of software packages with metadata
         """
         if not self.catalog_url:
             raise RuntimeError(f"No catalog URL specified")
-
-        data = self._fetch_json(self.catalog_url)
-        if data is None:
+        catalog_files = self._fetch_json(self.catalog_url)
+        if catalog_files is None:
             # Fail loudly: an empty catalog would let the run report success
             # having collected nothing.
             raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
-        return data.get("data", {})
+        catalog = {}
+        for catalog_file in catalog_files:
+            git_url = catalog_file["git_url"]
+            package = await self._fetch_package_config(git_url)
+            if package is None:
+                raise RuntimeError(f"Could not load the package from {git_url}")
+            catalog[catalog_file["name"]] = package
+        return catalog
 
-    def prepare_software_list(
+    async def prepare_software_list(
         self,
         filter_software: Optional[str] = None,
         group: Optional[int] = None,
@@ -406,32 +453,38 @@ class MetricsOrchestrator:
         Returns:
             List of software packages with required metadata
         """
-        catalog = self.load_software_catalog()
+        catalog = await self.load_software_catalog()
 
         software_list = []
-        for repo_name, metadata in catalog.items():
-            if not isinstance(metadata, dict):
-                logger.warning(f"Skipping {repo_name}: metadata is not a dict ({type(metadata).__name__})")
+        for name, package in catalog.items():
+            if not package.get("repo_url", 0):
+                logger.warning(f"Skipping {name} because no repository url found")
                 continue
-            # Apply filter if specified
-            if filter_software and filter_software.lower() not in repo_name.lower():
-                continue
-
-            package = {
-                "name": metadata.get("name", repo_name),
-                "repository": repo_name,
-                "repo_url": metadata.get("url", f"https://github.com/{repo_name}"),
-                "description": metadata.get("description", ""),
-                "homepage": metadata.get("homepageUrl"),
-                "license": (metadata.get("licenseInfo") or {}).get("spdxId"),
-                "primary_language": (metadata.get("primaryLanguage") or {}).get("name"),
-            }
             software_list.append(package)
+        print(json.dumps(catalog, indent=2))
+        # for repo_name, metadata in catalog.items():
+        #     if not isinstance(metadata, dict):
+        #         logger.warning(f"Skipping {repo_name}: metadata is not a dict ({type(metadata).__name__})")
+        #         continue
+        #     # Apply filter if specified
+        #     if filter_software and filter_software.lower() not in repo_name.lower():
+        #         continue
+        #
+        #     package = {
+        #         "name": metadata.get("name", repo_name),
+        #         "repository": repo_name,
+        #         "repo_url": metadata.get("url", f"https://github.com/{repo_name}"),
+        #         "description": metadata.get("description", ""),
+        #         "homepage": metadata.get("homepageUrl"),
+        #         "license": (metadata.get("licenseInfo") or {}).get("spdxId"),
+        #         "primary_language": (metadata.get("primaryLanguage") or {}).get("name"),
+        #     }
+        #     software_list.append(package)
 
         if group_count and group_count > 1 and not filter_software:
             # Sort first so the slice is stable regardless of any incidental
             # reordering of the catalog JSON between runs.
-            software_list.sort(key=lambda p: p["repository"])
+            software_list.sort(key=lambda p: p["name"])
             software_list = software_list[group::group_count]
             logger.info(f"Group {group}/{group_count}: {len(software_list)} packages")
 
@@ -555,7 +608,7 @@ class MetricsOrchestrator:
         """
         return bool(repo_url) and "github.com/" not in repo_url
 
-    async def _confirm_repo_exists(self, repo_name: str) -> bool:
+    async def _confirm_github_repo_exists(self, repo_url: str) -> bool:
         """Whether repo_name ("owner/repo") resolves to a real, accessible
         GitHub repository.
 
@@ -569,6 +622,7 @@ class MetricsOrchestrator:
         package from the run; per-collector gap handling is the right tool
         for that uncertainty.
         """
+        owner, repo = GitHubClient.extract_owner_repo(repo_url)
         token = self._get_github_token()
         headers = {"Accept": "application/vnd.github.v3+json"}
         if token:
@@ -576,10 +630,10 @@ class MetricsOrchestrator:
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
-                    f"https://api.github.com/repos/{repo_name}", headers=headers
+                    f"https://api.github.com/repos/{owner}/{repo}", headers=headers
                 )
         except Exception as e:
-            logger.warning(f"Could not verify {repo_name} exists: {e!r} -- proceeding as if it does")
+            logger.warning(f"Could not verify {owner}/{repo} exists: {e!r} -- proceeding as if it does")
             return True
         return resp.status_code != 404
 
@@ -936,7 +990,7 @@ class MetricsOrchestrator:
         }
 
     async def collect_all_metrics(self, package: Dict) -> Dict:
-        """Collect all metrics for a package across the 3 CASS dimensions
+        """Collect all metrics for a package across the 3 dimensions.
 
         Args:
             package: Package metadata
@@ -945,38 +999,37 @@ class MetricsOrchestrator:
             Complete metrics dictionary
         """
         logger.info(
-            f"Starting metrics collection for {package['name']} ({package['repository']})"
+            f"Starting metrics collection for {package['name']} ({package['repo_url']})"
         )
 
         # Attach both per-package config layers before the three dimensions
         # (which read them via _sub_enabled) run concurrently below. Each is
         # {} if no config exists or it failed to load -- collect as normal.
-        package["package_config"] = self._load_package_config(package["repository"])
+        # package["package_config"] = self._load_package_config(package["repo_url"])
         package["project_config"] = await self._fetch_project_config(package)
 
-        if self._is_known_non_github_repo(package.get("repo_url", "")):
-            # Every collector assumes GitHub; see _is_known_non_github_repo.
+        if package.get("repo_type", "") != "github":
+            # Every collector assumes GitHub
             # Leave all sub-metrics unset ("not yet collected" downstream)
             # rather than let each one silently 404 against the wrong host
             # and report a false "not found"/"failing" result.
             logger.info(
                 f"Skipping collection for {package['name']}: "
-                f"{package.get('repo_url')} is not a GitHub repo, not yet supported"
+                f"{package["repo_url"]} is not a GitHub repo, not yet supported"
             )
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
-        elif not await self._confirm_repo_exists(package["repository"]):
+        elif not await self._confirm_github_repo_exists(package["repo_url"]):
             logger.error(
                 f"Skipping collection for {package['name']}: "
-                f"{package['repository']} does not exist on GitHub "
-                f"(catalog entry may be stale)"
+                f"{package["repo_url"]} does not exist"
             )
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
         else:
-            # Collect all 3 CASS dimensions in parallel
+            # Collect all 3 dimensions in parallel
             (
                 impact_metrics,
                 ecosystem_metrics,
@@ -1034,7 +1087,7 @@ class MetricsOrchestrator:
         ecosystem: Dict,
         quality: Dict,
     ) -> int:
-        """Calculate weighted overall sustainability score based on 3 CASS dimensions
+        """Calculate weighted overall sustainability score based on 3 dimensions
 
         Default weights (can be configured):
         - Impact: 33%
@@ -1078,7 +1131,7 @@ class MetricsOrchestrator:
         Returns:
             Dictionary of all metrics keyed by repository name
         """
-        software_list = self.prepare_software_list(filter_software, group, group_count)
+        software_list = await self.prepare_software_list(filter_software, group, group_count)
         all_metrics = {}
 
         # Packages are independent, and each one spends nearly all its time
@@ -1104,7 +1157,7 @@ class MetricsOrchestrator:
             async with semaphore:
                 try:
                     metrics = await self.collect_all_metrics(package)
-                    all_metrics[package["repository"]] = metrics
+                    all_metrics[package["name"]] = metrics
                 except Exception as e:
                     logger.error(f"Failed to process {package['name']}: {e}")
                 finally:

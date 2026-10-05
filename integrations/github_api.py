@@ -53,7 +53,8 @@ class GitHubClient(BaseAPIClient):
         except Exception as e:
             self.logger.warning(f"GitHub rate-limit check failed (continuing): {e}")
 
-    def _parse_repo_url(self, repo_url: str) -> tuple:
+    @staticmethod
+    def extract_owner_repo(repo_url: str) -> tuple:
         """
         Parse GitHub repository URL to get owner and repo name
 
@@ -98,7 +99,7 @@ class GitHubClient(BaseAPIClient):
         await self._check_rate_limit()
 
         try:
-            owner, repo = self._parse_repo_url(repo_url)
+            owner, repo = self.extract_owner_repo(repo_url)
         except ValueError as e:
             self.logger.error(f"Invalid repository URL {repo_url}: {e}")
             raise
