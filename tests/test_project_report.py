@@ -98,7 +98,7 @@ class TestBuildReport:
     def test_thresholds_attach_to_their_rows(self, orchestrator):
         metrics = _metrics(sub_results={"governance": {"overall_score": {"max_score": 3}}})
         dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        report = build_report(dashboard, metrics, orchestrator._metric_weights())
+        report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         sec = report["dimensions"][1]["sections"][0]
         assert sec["number"] == "4.2.1"
         row = next(r for r in sec["rows"] if r["label"] == "Enhanced Document Detection")
@@ -113,7 +113,7 @@ class TestBuildReport:
         metrics["project_config"] = {"overrides": {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}}
         dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
         overrides = orchestrator._merged_overrides("owner/repo", metrics)
-        report = build_report(dashboard, metrics, orchestrator._metric_weights(), overrides)
+        report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights(), overrides)
         rows = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")["rows"]
         flagged = {r["label"] for r in rows if r["overridden"]}
         assert flagged == {"NIH R50 Award Tracking"}
@@ -126,7 +126,7 @@ class TestHtmlOutput:
             excluded_by_config=["funding"],
             score_components={"governance": 66.7, "licensing": 100},
         )
-        orchestrator._write_dashboard_output({"owner/repo": metrics})
+        orchestrator._write_dashboard_output({"owner/repo": {}}, {"owner/repo": metrics})
         page = (tmp_path / "repo-metrics" / "report.html").read_text()
 
         assert page.startswith("<!doctype html>")
@@ -143,7 +143,7 @@ class TestHtmlOutput:
             "keyword_analysis": {"groups_found": ["<script>alert(1)</script>"]},
         }})
         dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        page = render_project_report(dashboard, metrics, orchestrator._metric_weights())
+        page = render_project_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         # The dashboard HTML carries it raw; the report reduces it to text.
         assert "<script>" not in page
         assert "alert(1)" in page

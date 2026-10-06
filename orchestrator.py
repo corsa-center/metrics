@@ -21,7 +21,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 import re
@@ -182,6 +182,8 @@ class MetricsOrchestrator:
         # not affect the maintainer-authored package_config/ files, which are
         # operator-controlled regardless of this switch.
         self.project_config = self.config.get("project_config", {}) or {}
+        # Main software catalog
+        self.catalog = {}
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
@@ -331,8 +333,15 @@ class MetricsOrchestrator:
             Parsed JSON as dict, or None on failure
         """
         logger.info(f"Fetching {url}")
+
+        token = self._get_github_token()
+
         try:
-            response = httpx.get(url, timeout=30.0, follow_redirects=True)
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            if token:
+                headers["Authorization"] = f"token {token}"
+
+            response = httpx.get(url, timeout=30.0, follow_redirects=True, headers=headers)
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -356,7 +365,7 @@ class MetricsOrchestrator:
             package = await self._fetch_package_config(git_url)
             if package is None:
                 raise RuntimeError(f"Could not load the package from {git_url}")
-            catalog[catalog_file["name"]] = package
+            catalog[package["name"]] = package
         return catalog
 
     async def prepare_software_list(
@@ -364,7 +373,7 @@ class MetricsOrchestrator:
         filter_software: Optional[str] = None,
         group: Optional[int] = None,
         group_count: Optional[int] = None,
-    ) -> List[Dict]:
+    ) -> Tuple[Dict, List[Dict]]:
         """Prepare list of software packages to process
 
         Args:
@@ -405,7 +414,7 @@ class MetricsOrchestrator:
             logger.info(f"Group {group}/{group_count}: {len(software_list)} packages")
 
         logger.info(f"Prepared {len(software_list)} software packages for processing")
-        return software_list
+        return catalog, software_list
 
     async def collect_impact_dimension(self, package: Dict) -> Dict:
         """Collect Impact dimension metrics (CASS Report Section 4.1)
@@ -500,6 +509,7 @@ class MetricsOrchestrator:
     def _get_github_token(self) -> Optional[str]:
         """Extract GitHub token from resolved config"""
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
+        print(token)
         return token if token else None
 
     @staticmethod
@@ -1041,7 +1051,7 @@ class MetricsOrchestrator:
         Returns:
             Dictionary of all metrics keyed by repository name
         """
-        software_list = await self.prepare_software_list(filter_software, group, group_count)
+        catalog, software_list = await self.prepare_software_list(filter_software, group, group_count)
         all_metrics = {}
 
         # Packages are independent, and each one spends nearly all its time
@@ -1082,7 +1092,7 @@ class MetricsOrchestrator:
         # Write output
         if not dry_run:
             self._write_summary_report(all_metrics)
-            self._write_dashboard_output(all_metrics)
+            self._write_dashboard_output(catalog, all_metrics)
 
         return all_metrics
 
@@ -2283,7 +2293,6 @@ class MetricsOrchestrator:
         }
 
         result = {
-            "package": repo_name,
             "stars": github_stats.get("stars", 0),
             "forks": github_stats.get("forks", 0),
             "config_exclusions": config_exclusions,
@@ -2330,7 +2339,7 @@ class MetricsOrchestrator:
                 section["data"] = _rescore_section(section["data"])
         return result
 
-    def _write_dashboard_output(self, all_metrics: Dict):
+    def _write_dashboard_output(self, catalog: Dict, all_metrics: Dict):
         """Write per-package metrics.json files for the dashboard.
 
         Creates: output/{repo-name}-metrics/metrics.json for each package,
@@ -2341,7 +2350,11 @@ class MetricsOrchestrator:
         explore/github-data/.
         """
         for repo_name, metrics in all_metrics.items():
-            dashboard_data = self._transform_for_dashboard(repo_name, metrics)
+            dashboard_data = {
+                "package": repo_name,
+                "metadata": catalog[repo_name],
+                "metrics": self._transform_for_dashboard(repo_name, metrics)
+            }
 
             # Extract repo part from "Owner/repo" for directory name
             repo_short = repo_name.split("/")[-1]
@@ -2357,7 +2370,8 @@ class MetricsOrchestrator:
             report_file = metrics_dir / "report.html"
             report_file.write_text(
                 render_project_report(
-                    dashboard_data,
+                    repo_name,
+                    dashboard_data["metrics"],
                     metrics,
                     self._metric_weights(),
                     self._merged_overrides(repo_name, metrics),

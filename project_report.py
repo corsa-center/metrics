@@ -212,6 +212,7 @@ def _collector_label(key: str) -> str:
 
 
 def build_report(
+    package:str,
     dashboard: Dict,
     metrics: Dict,
     weights: Dict[str, float],
@@ -255,7 +256,7 @@ def build_report(
 
     exclusions = dashboard.get("config_exclusions", {})
     return {
-        "package": dashboard.get("package", ""),
+        "package": package,
         "collected": _fmt_time(metrics.get("last_updated")),
         "overall": metrics.get("overall_score"),
         "dimensions": dimensions,
@@ -433,6 +434,7 @@ def _render_row(row: Dict) -> str:
 
 
 def render_project_report(
+    package: str,
     dashboard: Dict,
     metrics: Dict,
     weights: Dict[str, float],
@@ -441,9 +443,10 @@ def render_project_report(
     """The full HTML report for one package.
 
     Args:
+        package: the name of the package
         dashboard: the package's _transform_for_dashboard output
         metrics: the package's collect_all_metrics output
         weights: dimension -> weight used for the overall score
         overrides: section -> {label: text} rows whose text came from config
     """
-    return render_html(build_report(dashboard, metrics, weights, overrides))
+    return render_html(build_report(package, dashboard, metrics, weights, overrides))

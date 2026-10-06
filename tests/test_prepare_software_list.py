@@ -30,7 +30,8 @@ def orch():
 
 async def _prepare(orch, catalog, **kwargs):
     with patch.object(orch, "load_software_catalog", new=AsyncMock(return_value=catalog)):
-        return await orch.prepare_software_list(**kwargs)
+        result = await orch.prepare_software_list(**kwargs)
+        return result[1]
 
 
 class TestNoGrouping:
