@@ -114,6 +114,10 @@ class TestComputePrStats:
 # Scoring                                                              #
 # ------------------------------------------------------------------ #
 
+# Issue stats from a real sample, for tests about the other rows.
+_SAMPLED = {"sample_size": 30, "discussion_sample_size": 30}
+
+
 class TestScore:
     def _score(self, collector, frt=None, mct=None, mrp=None, ratio=None):
         flow = {}
@@ -122,7 +126,7 @@ class TestScore:
         if ratio is not None:
             flow.update(opened=round(ratio * 100), closed=100)
         return collector._score(
-            {"median_first_response_hours": frt},
+            {"median_first_response_hours": frt, "sample_size": 30, "discussion_sample_size": 30},
             {"merge_rate_pct": mrp},
             {},
             flow,
@@ -416,7 +420,7 @@ class TestIssueFlowScoring:
         assert self._sub(collector, opened=5, closed=0)["support_closure"]["passing"] is False
 
     def test_unmeasured_rows_are_excluded_not_failed(self, collector):
-        result = collector._score({}, {}, {}, {})
+        result = collector._score(_SAMPLED, {}, {}, {})
         assert result["sub_scores"]["issue_resolution"]["not_collected"] is True
         assert result["sub_scores"]["support_closure"]["not_collected"] is True
         assert result["max_score"] == 5
@@ -451,7 +455,7 @@ class TestIssueFlowQueries:
 
 class TestThinWindows:
     def test_single_issue_window_is_reported_but_unscored(self, collector):
-        result = collector._score({}, {}, {}, {"cohort_size": 1, "cohort_still_open": 1,
+        result = collector._score(_SAMPLED, {}, {}, {"cohort_size": 1, "cohort_still_open": 1,
                                                "median_close_hours": float("inf"),
                                                "opened": 1, "closed": 0})
         for key in ("issue_resolution", "support_closure"):
@@ -470,3 +474,12 @@ class TestThinWindows:
         row = collector._score({"median_first_response_hours": None, "sample_size": 1}, {}, {})[
             "sub_scores"]["response_time_tracking"]
         assert row["insufficient_sample"] is True
+
+
+class TestNoIssues:
+    def test_issue_rows_with_nothing_to_measure_are_unmarked(self, collector):
+        result = collector._score({"sample_size": 0, "discussion_sample_size": 0}, {}, {}, {})
+        for key in ("response_time_tracking", "engagement_quality", "communication_patterns"):
+            row = result["sub_scores"][key]
+            assert row["insufficient_sample"] is True, key
+            assert "to assess" in row["value"]

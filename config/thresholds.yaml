@@ -85,6 +85,7 @@
   Contributor Retention Analysis:
     retained_min_commits: 2       # commits within the recent window to count as "retained"
     min_retention_rate_pct: 50    # share of new contributors who return, minimum
+    min_new_contributors: 3       # fewer newcomers than this: too few to judge retention
   Contributor Lifecycle Mapping:
     casual_max_commits: 4         # commits at or below this bucket as "casual" rather than "repeat"
     min_repeat_contributors: 3    # repeat contributors, minimum

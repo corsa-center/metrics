@@ -420,6 +420,9 @@ class EngagementCollector(GitHubCollectorBase):
         if 0 < sampled < _MIN_DISCUSSION_SAMPLE:
             self._mark_thin_sample(sub["response_time_tracking"], sampled, "issue(s) sampled")
             unscored += 1
+        elif not sampled and frt is None:
+            self._mark_no_sample(sub["response_time_tracking"], "No issues to assess")
+            unscored += 1
         pts += sub["response_time_tracking"]["pts"]
 
         # 2. Issue Resolution Analysis — median time to close, over a cohort of
@@ -494,6 +497,9 @@ class EngagementCollector(GitHubCollectorBase):
         if thin_sample:
             self._mark_thin_sample(sub["engagement_quality"], discussion_n)
             unscored += 1
+        elif not discussion_n and mc is None:
+            self._mark_no_sample(sub["engagement_quality"], "No community issues to assess")
+            unscored += 1
         pts += sub["engagement_quality"]["pts"]
 
         # 6. Communication Pattern Analysis — whether everyone gets an answer,
@@ -509,6 +515,9 @@ class EngagementCollector(GitHubCollectorBase):
         }
         if thin_sample:
             self._mark_thin_sample(sub["communication_patterns"], discussion_n)
+            unscored += 1
+        elif not discussion_n and timely is None:
+            self._mark_no_sample(sub["communication_patterns"], "No community issues to assess")
             unscored += 1
         pts += sub["communication_patterns"]["pts"]
 
@@ -547,6 +556,11 @@ class EngagementCollector(GitHubCollectorBase):
         entry["insufficient_sample"] = True
         entry["passing"] = False
         entry["pts"] = 0
+
+    @staticmethod
+    def _mark_no_sample(entry: Dict[str, Any], value: str) -> None:
+        """Nothing to measure is neither a pass nor a fail."""
+        entry.update(value=value, insufficient_sample=True, passing=False, pts=0)
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {

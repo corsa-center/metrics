@@ -1362,12 +1362,16 @@ class MetricsOrchestrator:
                 chaoss_score = chaoss.get("overall_score", {})
                 score_val = chaoss_score.get("score", 0)
                 status = chaoss_score.get("status", "unknown")
-                chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
-                gov_pts += 1 if chaoss_ok else 0
-                gov_lines.append(
-                    f'<p><strong>CHAOSS Governance Metrics:</strong> '
-                    f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
-                )
+                if score_val is None:
+                    # Every category unmeasured or gapped: no score to judge.
+                    gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+                else:
+                    chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
+                    gov_pts += 1 if chaoss_ok else 0
+                    gov_lines.append(
+                        f'<p><strong>CHAOSS Governance Metrics:</strong> '
+                        f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
+                    )
                 # Per-category breakdown, weakest first, so the failing areas
                 # are what a maintainer sees rather than just the headline score.
                 # A category can be {"not_collected": True} instead of a
@@ -2147,6 +2151,8 @@ class MetricsOrchestrator:
             if accessibility.get("python_package"):
                 build_found = build_found + [f'pip-installable Python package ({accessibility["python_package"]})']
             container_found = cats.get("containers", {}).get("found", [])
+            if accessibility.get("container_image"):
+                container_found = container_found + [accessibility["container_image"]]
 
             # 5. Deployment Environment Testing comes from its own collector, so
             #    it is rendered with _sub_row and scored alongside the _acc_row
@@ -2396,6 +2402,9 @@ class MetricsOrchestrator:
                     self._merged_overrides(repo_name, metrics),
                 )
             )
+
+        if failed:
+            raise RuntimeError(f"Dashboard output failed for: {', '.join(failed)}")
 
 
 async def main():

@@ -34,6 +34,7 @@ Compliance Tracking (both need domain-specific standards knowledge).
 
 import asyncio
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -46,6 +47,13 @@ logger = logging.getLogger(__name__)
 _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
 _ANACONDA_API = "https://api.anaconda.org/package/conda-forge"
 _SPACK_PACKAGES = "https://packages.spack.io/data/packages"
+# Every Spack recipe with its homepages and download URLs, for finding the
+# recipe that builds a repository when it goes by another name than the
+# repository. Fetched once per run.
+_SPACK_INDEX = "https://packages.spack.io/data/repology.json"
+_GITHUB_REPO_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?=[/#?]|$)", re.I)
+_spack_by_repo: Optional[Dict[str, List[str]]] = None
+_spack_index_lock = asyncio.Lock()
 
 # Source-level dependents found by the dependency-audit tool
 # (corsa-center/dependent-audit), published per project. Registries miss
@@ -77,7 +85,7 @@ class CollaborationCollector(GitHubCollectorBase):
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             by_repo, spack, conda, source = await asyncio.gather(
                 self._lookup_by_repository(client, owner, repo),
-                self._lookup_spack(client, repo),
+                self._lookup_spack(client, repo, owner),
                 self._lookup_conda_forge(client, owner, repo),
                 self._source_dependents(client, owner, repo),
                 return_exceptions=True,
@@ -152,14 +160,18 @@ class CollaborationCollector(GitHubCollectorBase):
         return [self._normalize(p) for p in data if p.get("ecosystem") and p.get("name")]
 
     async def _lookup_spack(
-        self, client: httpx.AsyncClient, repo: str
+        self, client: httpx.AsyncClient, repo: str, owner: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Spack recipe for this project, looked up by name.
 
         Tried lower-cased as well, since Spack package names are lower-case by
-        convention while repository names often are not (ADIOS2 -> adios2).
+        convention while repository names often are not (ADIOS2 -> adios2),
+        then under any name whose recipe downloads from this repository.
         """
-        for name in dict.fromkeys([repo, repo.lower()]):
+        names = [repo, repo.lower()]
+        if owner:
+            names += await self._main_spack_recipe(client, owner, repo)
+        for name in dict.fromkeys(names):
             data = await self._get_json(
                 client, f"{_PACKAGES_API}/registries/spack.io/packages/{quote(name)}"
             )
@@ -174,6 +186,54 @@ class CollaborationCollector(GitHubCollectorBase):
                     )
                 return record
         return None
+
+    async def _spack_names_for(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+        """Spack packages whose homepage or download URLs are this GitHub
+        repository."""
+        global _spack_by_repo
+        async with _spack_index_lock:
+            if _spack_by_repo is None:
+                data = await self._get_json(client, _SPACK_INDEX)
+                if not isinstance(data, dict):
+                    return []  # retried by the next package
+                _spack_by_repo = self._index_spack_by_repository(data.get("packages", {}))
+        return sorted(_spack_by_repo.get(f"{owner}/{repo}".lower(), []))
+
+    async def _main_spack_recipe(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+        """Of the recipes built from this repository (a monorepo can feed
+        several), the one most packages depend on."""
+        names = (await self._spack_names_for(client, owner, repo))[:5]
+        if len(names) < 2:
+            return names
+        counts = []
+        for name in names:
+            own = await self._get_json(client, f"{_SPACK_PACKAGES}/{quote(name)}.json")
+            deps = own.get("dependent_to") if isinstance(own, dict) else None
+            counts.append(len(deps) if isinstance(deps, list) else 0)
+        return [max(zip(counts, names), key=lambda cn: (cn[0], -names.index(cn[1])))[1]]
+
+    @staticmethod
+    def _index_spack_by_repository(packages: Dict[str, Any]) -> Dict[str, List[str]]:
+        def strings(x):
+            if isinstance(x, str):
+                yield x
+            elif isinstance(x, list):
+                for y in x:
+                    yield from strings(y)
+            elif isinstance(x, dict):
+                for y in x.values():
+                    yield from strings(y)
+
+        index: Dict[str, List[str]] = {}
+        for name, pkg in packages.items():
+            if not isinstance(pkg, dict):
+                continue
+            for text in strings([pkg.get("homepages"), pkg.get("downloads"), pkg.get("version")]):
+                for m in _GITHUB_REPO_URL.finditer(text):
+                    key = f"{m.group(1)}/{m.group(2)}".lower()
+                    if name not in index.setdefault(key, []):
+                        index[key].append(name)
+        return index
 
     async def _lookup_conda_forge(
         self, client: httpx.AsyncClient, owner: str, repo: str

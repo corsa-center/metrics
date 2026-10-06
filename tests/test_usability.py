@@ -213,3 +213,21 @@ class TestReadmeLinkSections:
     def test_badges_do_not_count(self, collector):
         md = "[![Build and install status](https://x/badge.svg)](https://x/actions)"
         assert self._sections(collector, md) == []
+
+
+class TestMoreReadmeShapes:
+    @pytest.mark.parametrize("text,label", [
+        ("### How do I get set up? ###\nbuild it\n", "Installation"),
+        ("### Who do I talk to? ###\nemail us\n", "Support"),
+        ("## Build TorchBraid: pip (recommended):\npip install .\n", "Installation"),
+        ("*************\nInstallation\n*************\n\npip install x\n", "Installation"),
+        ("Quick Start\n~~~~~~~~~~~\n\nrun it\n", "Usage"),
+        ("MAGMA README\n\n* Quick start (make)\n\n    make\n", "Usage"),
+    ])
+    def test_heading_found(self, text, label):
+        from collectors.quality.usability import readme_covers
+        assert readme_covers(text, label)
+
+    def test_markdown_bullets_are_not_headings(self):
+        from collectors.quality.usability import readme_covers
+        assert not readme_covers("# Tool\n\n* Examples of output\n\nmore\n", "Examples")

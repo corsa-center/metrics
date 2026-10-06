@@ -23,7 +23,9 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
+from collectors.ecosystem.base import (
+    COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, fetch_version_tags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -283,10 +285,9 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         if closed_prs is COLLECTION_GAP:
             return {"closure_ratio": {"not_collected": True}}
         if not closed_prs:
-            # A genuinely empty list -- a real repo with zero closed PRs --
-            # is a legitimate, confirmed result, not a gap. Contrast with
-            # the COLLECTION_GAP branch above.
-            return {"closure_ratio": {"total": 0, "merged": 0, "closed_without_merge": 0, "ratio": 0, "score": 0}}
+            # No closed pull requests: there is no ratio to take, and changes
+            # may be reviewed somewhere other than GitHub.
+            return {"closure_ratio": {"total": 0, "not_collected": True, "reason": "no closed pull requests"}}
 
         merged = sum(1 for pr in closed_prs if pr.get("merged_at"))
         closed_without_merge = len(closed_prs) - merged
@@ -314,6 +315,12 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             )
             if releases is COLLECTION_GAP:
                 return {"not_collected": True}
+            # Version tags without a Release object are releases too.
+            named = {r.get("tag_name") for r in releases}
+            releases = sorted(
+                list(releases) + [t for t in await fetch_version_tags(client, self.github_headers, owner, repo)
+                                  if t["tag_name"] not in named],
+                key=lambda r: r.get("published_at") or "", reverse=True)
             if not releases:
                 return {"total_releases": 0, "recent_releases": 0, "avg_days_between_releases": 0, "latest_release": None, "score": 0}
 
@@ -358,7 +365,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         if issues is COLLECTION_GAP:
             return {"not_collected": True}
         if not issues:
-            return {"total_issues": 0, "unique_participants": 0, "avg_participants_per_issue": 0, "score": 0}
+            return {"total_issues": 0, "not_collected": True, "reason": "no issues"}
 
         all_participants: set = set()
         participants_per_issue = []

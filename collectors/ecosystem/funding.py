@@ -32,7 +32,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,14 @@ _GRANT_AGENCY = {
 # lab codes usually carry it in NOTICE: AMReX's says "developed under funding
 # from the U.S. Department of Energy", with no award number anywhere.
 _ACKNOWLEDGMENT_FILE = r"^(?:notice|acknowledge?ments?|funding|copyright)(?:\.(?:md|txt|rst))?$"
+# Documentation pages that commonly carry the funding statement: the docs
+# landing page and any acknowledgments page, in the project's own top-level
+# doc tree. Built output (_build/, _sources/) is skipped; the shallowest few
+# are read.
+_DOC_FUNDING_FILE = (r"^(?:src/)?(?:docs?|documentation|sphinx)/(?:[^/]+/)*"
+                     r"(?:index|acknowledge?ments?|funding)\.(?:md|rst|txt)$")
+_DOC_BUILD_DIR = re.compile(r"(?:^|/)(?:_build|_sources|build|html)/")
+_MAX_DOC_FUNDING_FILES = 3
 
 # Funding agencies an acknowledgment can name, as (agency, pattern).
 _AGENCIES = [
@@ -125,8 +135,12 @@ _AGENCIES = [
 # `supports` is excluded by the word boundary after `support(ed)`.
 _FUNDING_VERB = r"\b(?:fund(?:ed|ing)?|support(?:ed)?|sponsor(?:ed|ship)?|grants?|awards?|financed)\b"
 _SENTENCE_WINDOW = 160
+_FUNDING_TOPIC = r"(?:acknowledge?ments?|funding|financial support|sponsors?)\b"
+# Markdown ATX headings, and underlined (Setext / reStructuredText) ones.
 _FUNDING_HEADING = re.compile(
-    r"^\s{0,3}#{1,6}\s+(?:acknowledge?ments?|funding|financial support|sponsors?)\b.*$", re.I | re.M)
+    rf"^\s{{0,3}}#{{1,6}}\s+{_FUNDING_TOPIC}.*$"
+    rf"|^[ \t]*{_FUNDING_TOPIC}[^\n]*\n[ \t]*([=\-~^*#])\1{{2,}}[ \t]*$", re.I | re.M)
+_NEXT_HEADING = re.compile(r"^\s{0,3}#{1,6}\s|^[^\n]+\n[ \t]*([=\-~^*#])\1{2,}[ \t]*$", re.M)
 
 # Contributors sampled for affiliation. The GitHub Users API is one call each,
 # so this is capped; top contributors carry most of the signal anyway.
@@ -254,8 +268,9 @@ class FundingCollector(GitHubCollectorBase):
     async def _find_grant_references(
         self, client: httpx.AsyncClient, owner: str, repo: str, tree=None
     ) -> tuple:
-        """Award numbers and agency funding acknowledgments in the README
-        and in root NOTICE / ACKNOWLEDGMENTS / FUNDING files.
+        """Award numbers and agency funding acknowledgments in the README,
+        root NOTICE / ACKNOWLEDGMENTS / FUNDING files, and the docs landing
+        and acknowledgments pages.
 
         Returns (grants, saw_gap). Each entry is {"value", "kind"}; kind is
         an award-number kind or "acknowledgment" (agency named in a funding
@@ -271,7 +286,11 @@ class FundingCollector(GitHubCollectorBase):
         if tree is COLLECTION_GAP:
             saw_gap = True
         elif tree is not None:
-            for path in [p for p in tree.find(_ACKNOWLEDGMENT_FILE) if "/" not in p]:
+            doc_pages = sorted(
+                (p for p in tree.find(_DOC_FUNDING_FILE)
+                 if not _VENDORED_DIR.search(p) and not _DOC_BUILD_DIR.search(p)),
+                key=lambda p: (p.count("/"), p))[:_MAX_DOC_FUNDING_FILES]
+            for path in [p for p in tree.find(_ACKNOWLEDGMENT_FILE) if "/" not in p] + doc_pages:
                 data = await self._github_get(
                     client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
                 )
@@ -310,8 +329,8 @@ class FundingCollector(GitHubCollectorBase):
         first-seen order."""
         windows = []
         for m in _FUNDING_HEADING.finditer(text):
-            rest = text[m.end():]
-            nxt = re.search(r"^\s{0,3}#{1,6}\s", rest, re.M)
+            rest = text[m.end():].lstrip("\n")
+            nxt = _NEXT_HEADING.search(rest)
             windows.append(rest[:nxt.start()] if nxt else rest[:2000])
         # "U.S." would otherwise read as sentence ends inside the window.
         flat = re.sub(r"\bU\.\s?S\.", "US", re.sub(r"\s+", " ", text))

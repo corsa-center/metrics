@@ -102,7 +102,7 @@ literature plus facility web scraping; see the "Hard" tier in
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Enhanced Document Detection | ✅ | ≥2 of CoC / Governance / Contributing found | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING file detection |
+| Enhanced Document Detection | ✅ | ≥2 of CoC / Governance / Contributing found | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING files at the root, `.github/`, `docs/`, or deeper in the project's own top-level documentation tree (`docs/source/…`, `src/docs/…`); contributor guidelines may also be a README "Contributing" section that describes a process (fork/branch/pull request/issues/style/tests/review) |
 | Governance Keyword Analysis | ✅ | ≥2 of 4 concept groups (decision process, defined roles, membership lifecycle, conflict resolution) found in the text | read from the full governance/CoC/contributing documents |
 | OpenSSF Badge Integration | ✅ | badge progress ≥100%; or, when **substituted** by an *OpenSSF Scorecard* row, each individual check scores ≥7/10 | `bestpractices.dev`, level + percentage. Scorecard (`api.securityscorecards.dev`) substitutes in with a per-check breakdown of failing checks whenever scorecard data exists, so the section is always 5 rows |
 | CHAOSS Governance Metrics | ✅ | weighted score ≥60/100 | [`chaoss_governance.py`](collectors/ecosystem/chaoss_governance.py) — weighted 0–100 health score, with a per-category breakdown (popularity 15%, docs 20%, time-to-close 15%, issue age 10%, PR closure ratio 15%, release frequency 15%, issue inclusivity 10%). A category that couldn't be measured is dropped from both the score and its weight, not counted as 0 |
@@ -128,7 +128,7 @@ three)
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | Enhanced License Detection | ✅ | a license is identified, from the API or the text fallback | GitHub License API and SPDX identifier, falling back to the family named in the licence text |
-| Automated FAIR4RS Assessment | ✅ | ≥3 of the 4 FAIR4RS principles satisfied: **Findable** (a DOI in CITATION.cff, or `.zenodo.json`), **Accessible** (a license identified), **Interoperable** (a CITATION.cff exists, or `codemeta.json`), **Reusable** (a license identified **and** ≥1 release exists) | each principle is an AND/OR of independently-fetched signals; one that couldn't be fully checked (a gap on one signal, with the others not yet enough to decide it either way) is excluded rather than counted against the total |
+| Automated FAIR4RS Assessment | ✅ | ≥3 of the 4 FAIR4RS principles satisfied: **Findable** (a DOI in CITATION.cff, or `.zenodo.json`), **Accessible** (a license identified), **Interoperable** (a CITATION.cff exists, or `codemeta.json`), **Reusable** (a license identified **and** ≥1 GitHub release or version tag exists) | each principle is an AND/OR of independently-fetched signals; one that couldn't be fully checked (a gap on one signal, with the others not yet enough to decide it either way) is excluded rather than counted against the total |
 | OSI License Validation | ✅ | the identified license is on the SPDX/OSI-approved list | a text-resolved family counts as approved too |
 | License Exception Handling | ✅ | a license family is identified — from the API, or recovered from the text when GitHub returns `NOASSERTION` | plus exception / extra-terms markers surfaced as detail |
 | FAIR Metadata Assessment | ✅ | ≥4 of 6 citation fields present (title, authors, version, license, repository-code, DOI) | CITATION.cff; without one, BibTeX entries in a root-level citation file (`CITATION.bib`, `CITATIONS.md`, …). BibTeX fields are scored here only — not in FAIR4RS, since a cited paper's DOI identifies the paper, not the software |
@@ -149,7 +149,7 @@ for every other project with a modified licence.)
 | Commit Activity Pattern Analysis | ✅ | >0 commits in the last 52 weeks | `/stats/participation`, 52-week series |
 | Maintenance Mode Indicator Detection | ✅ | not archived, and no maintenance-mode keywords in the description | `archived` flag + description keywords |
 | Activity Trend Monitoring | ✅ | last 13 weeks' commit volume is stable or increasing vs. the previous 13 | `/stats/participation` |
-| Release Pattern Assessment | ✅ | ≥1 release in the last year | `/releases` |
+| Release Pattern Assessment | ✅ | ≥1 release in the last year | `/releases`, plus version tags without a Release object (dated by the annotated tag or its commit; release candidates, alphas, betas and `<name>-YYYY-MM-DD` compatibility snapshots excluded) |
 | Multi-Channel Communication Activity | ✅ | ≥2 of: Discussions, wiki, GitHub Issues, mailing list, chat, forum, help-desk link in the README | Discussions flag; wiki only if it has pages (GitHub's `has_wiki` flag is on by default); issue tracker only if ≥5 of the newest issues from the last year were filed from outside the maintainer group; links detected in the README |
 | Contributor Abandonment Forecasting | ✅ | departure rate ≤50% (unmeasurable if there's no prior-year contributor history to compare against) | contributors active in the prior 52 weeks who committed nothing in the last 52, from `/stats/contributors` |
 
@@ -185,14 +185,14 @@ ADIOS2 53%, zfp 93%.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| New Contributor Tracking | ✅ | >0 new contributors found | contributors whose all-time count is fully inside the last 365 days |
-| Contributor Retention Analysis | ✅ | ≥50% of new contributors made ≥2 commits | share of newcomers with ≥2 commits |
-| Contributor Lifecycle Mapping | ✅ | ≥3 repeat contributors (5+ commits) | one-time (1) / casual (2–4) / repeat (5+) buckets from `/contributors` |
+| New Contributor Tracking | ✅ | >0 new contributors found | contributors whose all-time count is fully inside the last 365 days; not measurable (no mark) when many recent authors are missing from GitHub's contributor list, which links only the first 500 author emails, or when 1000 commits don't reach back a year |
+| Contributor Retention Analysis | ✅ | ≥50% of new contributors made ≥2 commits | share of newcomers with ≥2 commits; no mark with fewer than 3 newcomers, or when newcomers aren't measurable |
+| Contributor Lifecycle Mapping | ✅ | ≥3 repeat contributors (5+ commits) | one-time (1) / casual (2–4) / repeat (5+) buckets from `/contributors`; not measurable when that list is cut off |
 | Contribution Type Diversity | 🔲 | — | non-code contributions aren't recorded in the repo |
-| Good First Issue Effectiveness | ✅ | ≥1 **open** issue labelled `good first issue`, `help wanted`, or `newcomer` | search API counts |
+| Good First Issue Effectiveness | ✅ | ≥1 **open** issue with a newcomer label | the repository's own labels matching good-first / help-wanted / newcomer / beginner / first-timer / starter / up-for-grabs / easy (e.g. `is:good-first-issue`, `difficulty: easy`); the common names if none match; search API counts |
 | External Event Participation | 🔲 | — | needs conference programmes |
 | Training Material Integration | 🔲 | — | needs course syllabi |
-| Onboarding Infrastructure Assessment | ✅ | ≥3 of 4: Contributing guide, issue template, PR template, getting-started guide | |
+| Onboarding Infrastructure Assessment | ✅ | ≥3 of 4: Contributing guide, issue template, PR template, getting-started guide | Contributing guide and getting-started guide also found in the project's own docs tree, a top-level tutorial directory, or a README section (a Contributing section must describe a process) |
 
 > "New" is inferred by comparing each author's all-time contribution count
 > against their commits in the window, rather than walking the whole log to find
@@ -231,7 +231,11 @@ Spack is additionally looked up by name, because Spack recipes usually record
 the project's own homepage as their repository URL rather than the GitHub repo.
 HDF5's Spack entry points at `support.hdfgroup.org`, so the repository-URL
 lookup alone misses the single most relevant package manager for this portfolio
-— and with it HDF5's 161 Spack dependents.
+— and with it HDF5's 161 Spack dependents. When the recipe goes by another
+name, it is found through Spack's own index as the recipe whose homepage or
+download URLs are this repository (SCOREC/core is `pumi`, UO-OACISS/tau2 is
+`tau`); of several such recipes, the one most packages depend on. A fork is
+not credited with its upstream's recipe.
 
 Duplicate entries for one package are collapsed keeping the highest count:
 conda-forge and anaconda.org both index `hdf5`, and summing would double-count.
@@ -246,7 +250,7 @@ only 9 packages); both are real evidence of ecosystem integration.
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Enhanced Funding Documentation Analysis | ✅ | a funding file exists, **or** ≥1 award reference or funder acknowledgment found | FUNDING.yml / funding.json; award numbers in the README and root NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT files, in formats used by US (DOE, NNSA, NSF, NIH, DoD), EU/ERC, UKRI, DFG, ANR, NSERC, JSPS/JST, ARC, NSFC, SNSF and Wellcome awards, or given in context ("grant agreement No …", "project number …"); funders named in a funding sentence or under an Acknowledgments/Funding heading |
+| Enhanced Funding Documentation Analysis | ✅ | a funding file exists, **or** ≥1 award reference or funder acknowledgment found | FUNDING.yml / funding.json; award numbers in the README, root NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT files, and the docs landing and acknowledgments pages, in formats used by US (DOE, NNSA, NSF, NIH, DoD), EU/ERC, UKRI, DFG, ANR, NSERC, JSPS/JST, ARC, NSFC, SNSF and Wellcome awards, or given in context ("grant agreement No …", "project number …"); funders named in a funding sentence or under an Acknowledgments/Funding heading (Markdown or reStructuredText) |
 | Institutional Affiliation Tracking | ✅ | ≥3 distinct organizations found | `company` field of the top 25 contributors |
 | NIH R50 Award Tracking | 🔲 | — | NIH RePORTER API is public and unauthenticated — a Tier 2 win, not yet wired |
 | Corporate Sponsorship Detection | ✅ | ≥1 declared funding platform, **or** the repository is organization-owned | |
@@ -340,9 +344,9 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | CI/CD Effectiveness Assessment | ✅ | ≥1 of 6 internal checks met (workflow present, a recent successful run, deploy/release cadence at or above 1/year, elite-tier <24h cycle time, etc.) | `.github/workflows/` parsing + run status |
-| Testing Framework Excellence | ✅ | ≥2 of 4: test directory (at the root, or the shallowest `test/`/`tests/`/`testing/`/`unit_test(s)/` outside vendored and hidden trees), CTest/CMake config, pytest config, vendored test framework | |
+| Testing Framework Excellence | ✅ | ≥2 of 4: test directory (at the root, or the shallowest `test/`/`tests/`/`testing/`/`unit_test(s)/` outside vendored and hidden trees), build-system test target (CTest config or `enable_testing`, an automake `TESTS`/`check-local` target, an fpm project with `test/`, or CI running `ctest` / `make check|test` / `fpm test`), pytest (config, `conftest.py`, or CI running pytest), unit-test framework | CI YAML comments are ignored |
 | Code Review Quality Analysis | ✅ | ≥70% of the last 50 merged PRs had ≥1 review | |
-| Development Tool Integration | ✅ | ≥2 of 4: pre-commit hooks, formatter config, linter config, Dependabot/Renovate config | |
+| Development Tool Integration | ✅ | ≥2 of 4: pre-commit hooks, formatter config, linter config, Dependabot/Renovate config | pre-commit hooks also as a committed git hook (`githooks/pre-commit`, `.husky/pre-commit`); formatter (clang-format, cmake-format, gersemi, fprettify, yapf, prettier, rustfmt, JuliaFormatter, astyle, uncrustify) and linter (clang-tidy, flake8, pylint, ruff, mypy, eslint, lintr, cpplint, cppcheck) configs anywhere outside vendored code, or as `[tool.*]` / `[flake8]` sections in pyproject.toml, setup.cfg or tox.ini |
 | Community Contribution Facilitation | ✅ | OpenSSF Best Practices badge progress = 100% (the *passing* level) | proxy — the report's own metric needs data this framework doesn't have another source for. A badge registered at 0% gets the repository scan for its criteria, like no badge |
 
 ### 4.3.3 Reproducibility
@@ -353,7 +357,7 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | FAIR4RS Compliance Assessment | ✅ | any of CITATION.cff, codemeta.json, `.zenodo.json` found | |
 | Containerization Excellence | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
 | Version Control Best Practices | ✅ | ≥1 of the last 5 releases (or tags, if no releases exist) follows semantic versioning | `/releases`, falling back to `/tags` |
-| Environment Management | ✅ | any dependency-pinning file found (`requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, etc.), **or** an environment specification (Spack `spack.yaml`/`spack.lock`, conda `environment*.yml`, `.devcontainer`, uberenv config) | the report's "dependency management practices, environment specification completeness" |
+| Environment Management | ✅ | any dependency-pinning file found (`requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, Julia `Manifest.toml`, `renv.lock`, `pixi.lock`, etc.), a root manifest that constrains dependency versions (`pyproject.toml` dependencies, `fpm.toml` tag/rev, Julia `[compat]`), Dependabot configured for the software's own packages (not only CI actions), **or** an environment specification (Spack `spack.yaml`/`spack.lock` or an in-repo Spack recipe, conda `environment*.yml`, Nix, pixi, `.devcontainer`, uberenv config) | the report's "dependency management practices, environment specification completeness" |
 | Reproducibility Documentation | ✅ | any of an install/build guide, release notes, or environment spec (`environment.yml`, `spack.yaml`, devcontainer) found | |
 
 Each of the 5 rows is itself a weighted blend (containers 20%, dependency
@@ -391,10 +395,10 @@ ecosyste.ms a second time for the same answer.
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | Portable Build System Detection | ✅ | any of CMake, Spack recipe, Conda recipe, Autoconf, Makefile found at the root; failing those, Meson, the Fortran Package Manager, a Spack recipe or environment elsewhere in the tree, a CMake/configure build one directory down (`llvm/`, `src/`), a root install script, or a pip-installable Python package (`setup.py`, or `pyproject.toml` with `[project]`/`[build-system]`) | docs, test, example and template directories are ignored |
-| Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
+| Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found, **or** the project's Spack recipe is in the E4S container image environment | E4S builds its Docker/Singularity images (ecpe4s/e4s-cpu) from `environments/x86_64/gnu/cpu/spack.yaml` in E4S-Project/e4s; the recipe is found as for Collaboration (repository name, or the recipe whose URLs are this repository). 4.3.3 Containerization still requires a recipe in the repository. |
 | Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build configuration only (Spack variants, CMake options, GPU arch targets, vendor images, GPU model names in runner labels, Kokkos architecture names) |
-| Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | |
-| Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels | [`deployment_environments.py`](collectors/quality/deployment_environments.py) |
+| Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | also the two shallowest install guides and the two shallowest getting-started / platform-requirements pages |
+| Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels (GitHub-hosted labels, and the OS labels of self-hosted runners); no mark when it falls short and some CI runs on runners whose OS the configuration doesn't state (hardware-labelled self-hosted runners, a matrix variable with no standard labels in the file, GitLab CI, Jenkins, Travis, Azure, CircleCI, Buildkite) | [`deployment_environments.py`](collectors/quality/deployment_environments.py) |
 
 ### 4.3.6 Maintainability and Understandability
 **Collector:** [`maintainability.py`](collectors/quality/maintainability.py),
