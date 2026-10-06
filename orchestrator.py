@@ -182,8 +182,6 @@ class MetricsOrchestrator:
         # not affect the maintainer-authored package_config/ files, which are
         # operator-controlled regardless of this switch.
         self.project_config = self.config.get("project_config", {}) or {}
-        # Main software catalog
-        self.catalog = {}
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
@@ -509,7 +507,6 @@ class MetricsOrchestrator:
     def _get_github_token(self) -> Optional[str]:
         """Extract GitHub token from resolved config"""
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
-        print(token)
         return token if token else None
 
     @staticmethod
