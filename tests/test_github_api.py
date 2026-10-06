@@ -35,19 +35,19 @@ class TestParseRepoUrl:
 
     @pytest.mark.parametrize("name", ["flang", "dyninst", "hpctoolkit", "papi", "ompi", "gasnet"])
     def test_name_ending_in_git_letters_is_not_truncated(self, client, name):
-        owner, repo = client._parse_repo_url(f"https://github.com/org/{name}")
+        owner, repo = client.extract_owner_repo(f"https://github.com/org/{name}")
         assert repo == name
 
     def test_git_suffix_is_still_stripped(self, client):
-        owner, repo = client._parse_repo_url("https://github.com/HDFGroup/hdf5.git")
+        owner, repo = client.extract_owner_repo("https://github.com/HDFGroup/hdf5.git")
         assert repo == "hdf5"
 
     def test_git_suffix_with_trailing_slash(self, client):
-        owner, repo = client._parse_repo_url("https://github.com/HDFGroup/hdf5.git/")
+        owner, repo = client.extract_owner_repo("https://github.com/HDFGroup/hdf5.git/")
         assert repo == "hdf5"
 
     def test_ordinary_name_unaffected(self, client):
-        owner, repo = client._parse_repo_url("https://github.com/kokkos/kokkos")
+        owner, repo = client.extract_owner_repo("https://github.com/kokkos/kokkos")
         assert (owner, repo) == ("kokkos", "kokkos")
 
 

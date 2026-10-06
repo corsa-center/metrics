@@ -32,7 +32,7 @@ class TestConfirmRepoExists:
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = asyncio.run(orchestrator._confirm_repo_exists("RAJA-llnl/RAJA"))
+            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/RAJA-llnl/RAJA"))
         assert result is False
 
     def test_200_confirms_it_exists(self, orchestrator):
@@ -41,7 +41,7 @@ class TestConfirmRepoExists:
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = asyncio.run(orchestrator._confirm_repo_exists("LLNL/RAJA"))
+            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/LLNL/RAJA"))
         assert result is True
 
     def test_network_exception_fails_open(self, orchestrator):
@@ -49,7 +49,7 @@ class TestConfirmRepoExists:
         # the per-collector gap handling is the right tool for that
         # uncertainty, not a hard skip at this preflight stage.
         with patch("httpx.AsyncClient", side_effect=Exception("boom")):
-            result = asyncio.run(orchestrator._confirm_repo_exists("HDFGroup/hdf5"))
+            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/HDFGroup/hdf5"))
         assert result is True
 
     def test_rate_limited_403_fails_open(self, orchestrator):
@@ -59,22 +59,21 @@ class TestConfirmRepoExists:
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = asyncio.run(orchestrator._confirm_repo_exists("HDFGroup/hdf5"))
+            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/HDFGroup/hdf5"))
         assert result is True
 
 
 class TestCollectAllMetricsSkipsMissingRepo:
     def _package(self, repository="RAJA-llnl/RAJA"):
         return {
-            "name": "RAJA",
-            "repository": repository,
+            "name": f"{repository}",
+            "repo_type": "github",
             "repo_url": f"https://github.com/{repository}",
         }
 
     def test_confirmed_missing_repo_skips_the_three_dimensions(self, orchestrator):
         async def go():
             with patch.object(orchestrator, "_load_package_config", return_value={}), \
-                 patch.object(orchestrator, "_fetch_project_config", new=AsyncMock(return_value={})), \
                  patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=False)), \
                  patch.object(orchestrator, "collect_impact_dimension") as impact, \
                  patch.object(orchestrator, "collect_ecosystem_dimension") as eco, \
@@ -92,7 +91,6 @@ class TestCollectAllMetricsSkipsMissingRepo:
 
         async def go():
             with patch.object(orchestrator, "_load_package_config", return_value={}), \
-                 patch.object(orchestrator, "_fetch_project_config", new=AsyncMock(return_value={})), \
                  patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)), \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
@@ -106,11 +104,9 @@ class TestCollectAllMetricsSkipsMissingRepo:
         # A GitLab repo shouldn't trigger a GitHub existence lookup at all.
         async def go():
             with patch.object(orchestrator, "_load_package_config", return_value={}), \
-                 patch.object(orchestrator, "_fetch_project_config", new=AsyncMock(return_value={})), \
                  patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)) as confirm:
                 pkg = {
                     "name": "GitLabThing",
-                    "repository": "owner/thing",
                     "repo_url": "https://gitlab.com/owner/thing",
                 }
                 await orchestrator.collect_all_metrics(pkg)
