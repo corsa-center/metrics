@@ -347,6 +347,8 @@ class MetricsOrchestrator:
             raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
         catalog = {}
         for catalog_file in catalog_files:
+            if catalog_file["type"] != "file":
+                continue
             git_url = catalog_file["git_url"]
             package = await self._fetch_package_config(git_url)
             if not package:
