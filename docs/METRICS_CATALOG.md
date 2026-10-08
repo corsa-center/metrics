@@ -6,7 +6,7 @@ named by the report, whether the framework fills them today, and where the data 
 
 The report defines three dimensions — **4.1 Impact**, **4.2 Sustainability**,
 **4.3 Quality** — and 19 sections beneath them. Sub-metric names below are the
-report's own; they are also the keys used by the `package_config/` override
+report's own; they are also the keys used by the `../package_config` override
 files and by `SECTION_SUBMETRICS` in [`orchestrator.py`](orchestrator.py).
 
 > [!NOTE]
@@ -22,7 +22,7 @@ itself (§3.5) treats an unmeasured indicator as excluded from scoring, not as a
 failure.
 
 The values shown are current defaults, not fixed constants —
-[`config/thresholds.yaml`](config/thresholds.yaml) is the authoritative,
+[`../config/thresholds.yaml`](../config/thresholds.yaml) is the authoritative,
 configurable source (see [`ORCHESTRATOR_GUIDE.md`](ORCHESTRATOR_GUIDE.md#configurable-passfail-thresholds)
 for how to override one). If a deployment has overridden a value, what
 actually runs may differ from what's written here; this table isn't
@@ -57,7 +57,7 @@ up yet.
 | 4.3.7 | Performance and Efficiency | ⬜ 0/10 |
 | 4.3.8 | Software Supply Chain Integrity | 4/5 |
 
-A stub section renders nothing unless the package's `package_config/` file
+A stub section renders nothing unless the package's `../package_config` file
 supplies overrides, in which case it renders those values against a 0/N score.
 
 ---
@@ -65,7 +65,7 @@ supplies overrides, in which case it renders those values against a 0/N score.
 ## 4.1 Impact
 
 ### 4.1.1 Software Citation and Adoption
-**Collector:** [`collectors/impact/citation.py`](collectors/impact/citation.py)
+**Collector:** [`../collectors/impact/citation.py`](../collectors/impact/citation.py)
 
 This section renders its own labels rather than the report's five sub-metric
 names, because the underlying sources return directly comparable counts. None
@@ -95,17 +95,17 @@ literature plus facility web scraping; see the "Hard" tier in
 ## 4.2 Ecosystem
 
 ### 4.2.1 Codes of Conduct, Governance, and Contributor Guidelines
-**Collectors:** [`community_health.py`](collectors/ecosystem/community_health.py),
-[`chaoss_governance.py`](collectors/ecosystem/chaoss_governance.py),
-[`openssf_badge.py`](collectors/ecosystem/openssf_badge.py),
-[`openssf_scorecard.py`](collectors/ecosystem/openssf_scorecard.py)
+**Collectors:** [`community_health.py`](../collectors/ecosystem/community_health.py),
+[`chaoss_governance.py`](../collectors/ecosystem/chaoss_governance.py),
+[`openssf_badge.py`](../collectors/ecosystem/openssf_badge.py),
+[`openssf_scorecard.py`](../collectors/ecosystem/openssf_scorecard.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| Enhanced Document Detection | ✅ | ≥2 of CoC / Governance / Contributing found | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING files at the root, `.github/`, `docs/`, or deeper in the project's own top-level documentation tree (`docs/source/…`, `src/docs/…`); contributor guidelines may also be a README "Contributing" section that describes a process (fork/branch/pull request/issues/style/tests/review) |
+| Enhanced Document Detection | ✅ | ≥2 of CoC / Governance / Contributing found | CODE_OF_CONDUCT / GOVERNANCE / CONTRIBUTING files at the root, `../.github`, `docs/`, or deeper in the project's own top-level documentation tree (`docs/source/…`, `src/docs/…`); contributor guidelines may also be a README "Contributing" section that describes a process (fork/branch/pull request/issues/style/tests/review) |
 | Governance Keyword Analysis | ✅ | ≥2 of 4 concept groups (decision process, defined roles, membership lifecycle, conflict resolution) found in the text | read from the full governance/CoC/contributing documents |
 | OpenSSF Badge Integration | ✅ | badge progress ≥100%; or, when **substituted** by an *OpenSSF Scorecard* row, each individual check scores ≥7/10 | `bestpractices.dev`, level + percentage. Scorecard (`api.securityscorecards.dev`) substitutes in with a per-check breakdown of failing checks whenever scorecard data exists, so the section is always 5 rows |
-| CHAOSS Governance Metrics | ✅ | weighted score ≥60/100 | [`chaoss_governance.py`](collectors/ecosystem/chaoss_governance.py) — weighted 0–100 health score, with a per-category breakdown (popularity 15%, docs 20%, time-to-close 15%, issue age 10%, PR closure ratio 15%, release frequency 15%, issue inclusivity 10%). A category that couldn't be measured is dropped from both the score and its weight, not counted as 0 |
+| CHAOSS Governance Metrics | ✅ | weighted score ≥60/100 | [`chaoss_governance.py`](../collectors/ecosystem/chaoss_governance.py) — weighted 0–100 health score, with a per-category breakdown (popularity 15%, docs 20%, time-to-close 15%, issue age 10%, PR closure ratio 15%, release frequency 15%, issue inclusivity 10%). A category that couldn't be measured is dropped from both the score and its weight, not counted as 0 |
 | Governance Effectiveness Assessment | ✅ | CODEOWNERS present **and** governance docs touched within 1,095 days (3 years) | |
 
 > `community_health.py` is named for the report's older phrasing but is the
@@ -116,13 +116,13 @@ literature plus facility web scraping; see the "Hard" tier in
 case-sensitive, so the old enumerated pattern list could only match spellings
 somebody thought to write down. ADIOS2 names its guide `Contributing.md`, which
 no list of upper/lower variants catches, and the file was invisible. The root,
-`.github/` and `docs/` directories are now listed once and matched
+`../.github` and `docs/` directories are now listed once and matched
 case-insensitively — fewer requests as well as more hits.
 
 ### 4.2.2 Open-Source Licensing and FAIR Compliance
-**Collectors:** [`licensing.py`](collectors/ecosystem/licensing.py) (Enhanced
+**Collectors:** [`licensing.py`](../collectors/ecosystem/licensing.py) (Enhanced
 License Detection, OSI License Validation),
-[`fair_licensing.py`](collectors/ecosystem/fair_licensing.py) (the other
+[`fair_licensing.py`](../collectors/ecosystem/fair_licensing.py) (the other
 three)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -142,7 +142,7 @@ also being fixed at source so GitHub classifies it directly; the fallback stays
 for every other project with a modified licence.)
 
 ### 4.2.3 Active Maintenance
-**Collector:** [`active_maintenance.py`](collectors/ecosystem/active_maintenance.py)
+**Collector:** [`active_maintenance.py`](../collectors/ecosystem/active_maintenance.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
@@ -154,7 +154,7 @@ for every other project with a modified licence.)
 | Contributor Abandonment Forecasting | ✅ | departure rate ≤50% (unmeasurable if there's no prior-year contributor history to compare against) | contributors active in the prior 52 weeks who committed nothing in the last 52, from `/stats/contributors` |
 
 ### 4.2.4 Engagement
-**Collector:** [`engagement.py`](collectors/ecosystem/engagement.py)
+**Collector:** [`engagement.py`](../collectors/ecosystem/engagement.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
@@ -181,7 +181,7 @@ within a week separates the portfolio meaningfully instead — HDF5 43%,
 ADIOS2 53%, zfp 93%.
 
 ### 4.2.5 Outreach
-**Collector:** [`outreach.py`](collectors/ecosystem/outreach.py)
+**Collector:** [`outreach.py`](../collectors/ecosystem/outreach.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
@@ -200,7 +200,7 @@ ADIOS2 53%, zfp 93%.
 > recent commits exceed the 10-page pagination cap.
 
 ### 4.2.6 Welcomeness
-**Collector:** [`welcomeness.py`](collectors/ecosystem/welcomeness.py)
+**Collector:** [`welcomeness.py`](../collectors/ecosystem/welcomeness.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
@@ -213,7 +213,7 @@ ADIOS2 53%, zfp 93%.
 | Decision-Making Visibility | ✅ | ≥2 of: Discussions, wiki, Pages, roadmap doc, meeting notes, decision records, governance doc | `has_discussions` / `has_wiki` / `has_pages` plus roadmap, meeting notes, decision records, governance doc |
 
 ### 4.2.7 Collaboration
-**Collector:** [`collaboration.py`](collectors/ecosystem/collaboration.py)
+**Collector:** [`collaboration.py`](../collectors/ecosystem/collaboration.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
@@ -246,7 +246,7 @@ repositories (zfp: 111 repos from
 only 9 packages); both are real evidence of ecosystem integration.
 
 ### 4.2.8 Financial Sustainability
-**Collector:** [`funding.py`](collectors/ecosystem/funding.py)
+**Collector:** [`funding.py`](../collectors/ecosystem/funding.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
@@ -262,7 +262,7 @@ only 9 packages); both are real evidence of ecosystem integration.
 > organizations instead of its actual 3.
 
 ### 4.2.9 Institutional & Organizational Support
-**Collector:** [`funding.py`](collectors/ecosystem/funding.py) — shares
+**Collector:** [`funding.py`](../collectors/ecosystem/funding.py) — shares
 4.2.8's contributor-affiliation pass rather than fetching it twice.
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -275,7 +275,7 @@ only 9 packages); both are real evidence of ecosystem integration.
 
 ### 4.2.10 Project Longevity and Community Health
 **Collector:** none of its own — derived in `_transform_for_dashboard`
-([`orchestrator.py`](orchestrator.py)) from data `active_maintenance.py`
+([`../orchestrator.py`](../orchestrator.py)) from data `active_maintenance.py`
 already fetched for 4.2.3. Costs **zero additional API calls**.
 
 | Sub-metric | Status | Meets threshold when | Derivation |
@@ -305,9 +305,9 @@ creation (zfp, by one day), so the repo date is sometimes the longer span.
 ## 4.3 Quality
 
 ### 4.3.1 Reliability and Robustness
-**Collectors:** [`test_coverage.py`](collectors/quality/test_coverage.py),
-[`static_analysis.py`](collectors/quality/static_analysis.py),
-[`reliability.py`](collectors/quality/reliability.py)
+**Collectors:** [`test_coverage.py`](../collectors/quality/test_coverage.py),
+[`static_analysis.py`](../collectors/quality/static_analysis.py),
+[`reliability.py`](../collectors/quality/reliability.py)
 
 **Defects are counted by GitHub issue *type* first, then by label.** Issue types
 are a native field, separate from labels, and are what several of these projects
@@ -337,27 +337,27 @@ render "No Codecov data found" rather than a number. Coveralls was evaluated
 and rejected — its public JSON endpoint returns HTTP 403 to non-browser clients.
 
 ### 4.3.2 Development Practices
-**Collectors:** [`ci_cd.py`](collectors/quality/development_practices/ci_cd.py),
-[`dev_tooling.py`](collectors/quality/development_practices/dev_tooling.py),
-[`openssf_badge.py`](collectors/ecosystem/openssf_badge.py)
+**Collectors:** [`ci_cd.py`](../collectors/quality/development_practices/ci_cd.py),
+[`dev_tooling.py`](../collectors/quality/development_practices/dev_tooling.py),
+[`openssf_badge.py`](../collectors/ecosystem/openssf_badge.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
-| CI/CD Effectiveness Assessment | ✅ | ≥1 of 6 internal checks met (workflow present, a recent successful run, deploy/release cadence at or above 1/year, elite-tier <24h cycle time, etc.) | `.github/workflows/` parsing + run status |
-| Testing Framework Excellence | ✅ | ≥2 of 4: test directory (at the root, or the shallowest `test/`/`tests/`/`testing/`/`unit_test(s)/` outside vendored and hidden trees), build-system test target (CTest config or `enable_testing`, an automake `TESTS`/`check-local` target, an fpm project with `test/`, or CI running `ctest` / `make check|test` / `fpm test`), pytest (config, `conftest.py`, or CI running pytest), unit-test framework | CI YAML comments are ignored |
+| CI/CD Effectiveness Assessment | ✅ | ≥1 of 6 internal checks met (workflow present, a recent successful run, deploy/release cadence at or above 1/year, elite-tier <24h cycle time, etc.) | `../.github/workflows` parsing + run status |
+| Testing Framework Excellence | ✅ | ≥2 of 4: test directory (at the root, or the shallowest `test/`/`../tests`/`testing/`/`unit_test(s)/` outside vendored and hidden trees), build-system test target (CTest config or `enable_testing`, an automake `TESTS`/`check-local` target, an fpm project with `test/`, or CI running `ctest` / `make check|test` / `fpm test`), pytest (config, `conftest.py`, or CI running pytest), unit-test framework | CI YAML comments are ignored |
 | Code Review Quality Analysis | ✅ | ≥70% of the last 50 merged PRs had ≥1 review | |
 | Development Tool Integration | ✅ | ≥2 of 4: pre-commit hooks, formatter config, linter config, Dependabot/Renovate config | pre-commit hooks also as a committed git hook (`githooks/pre-commit`, `.husky/pre-commit`); formatter (clang-format, cmake-format, gersemi, fprettify, yapf, prettier, rustfmt, JuliaFormatter, astyle, uncrustify) and linter (clang-tidy, flake8, pylint, ruff, mypy, eslint, lintr, cpplint, cppcheck) configs anywhere outside vendored code, or as `[tool.*]` / `[flake8]` sections in pyproject.toml, setup.cfg or tox.ini |
 | Community Contribution Facilitation | ✅ | OpenSSF Best Practices badge progress = 100% (the *passing* level) | proxy — the report's own metric needs data this framework doesn't have another source for. A badge registered at 0% gets the repository scan for its criteria, like no badge |
 
 ### 4.3.3 Reproducibility
-**Collector:** [`reproducibility.py`](collectors/quality/reproducibility.py)
+**Collector:** [`reproducibility.py`](../collectors/quality/reproducibility.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | FAIR4RS Compliance Assessment | ✅ | any of CITATION.cff, codemeta.json, `.zenodo.json` found | |
 | Containerization Excellence | ✅ | any of Dockerfile, Singularity/Apptainer definition found | |
 | Version Control Best Practices | ✅ | ≥1 of the last 5 releases (or tags, if no releases exist) follows semantic versioning | `/releases`, falling back to `/tags` |
-| Environment Management | ✅ | any dependency-pinning file found (`requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, Julia `Manifest.toml`, `renv.lock`, `pixi.lock`, etc.), a root manifest that constrains dependency versions (`pyproject.toml` dependencies, `fpm.toml` tag/rev, Julia `[compat]`), Dependabot configured for the software's own packages (not only CI actions), **or** an environment specification (Spack `spack.yaml`/`spack.lock` or an in-repo Spack recipe, conda `environment*.yml`, Nix, pixi, `.devcontainer`, uberenv config) | the report's "dependency management practices, environment specification completeness" |
+| Environment Management | ✅ | any dependency-pinning file found (`../requirements.txt`, `poetry.lock`, `conda-lock.yml`, `package-lock.json`, `Cargo.lock`, `uv.lock`, Julia `Manifest.toml`, `renv.lock`, `pixi.lock`, etc.), a root manifest that constrains dependency versions (`pyproject.toml` dependencies, `fpm.toml` tag/rev, Julia `[compat]`), Dependabot configured for the software's own packages (not only CI actions), **or** an environment specification (Spack `spack.yaml`/`spack.lock` or an in-repo Spack recipe, conda `environment*.yml`, Nix, pixi, `.devcontainer`, uberenv config) | the report's "dependency management practices, environment specification completeness" |
 | Reproducibility Documentation | ✅ | any of an install/build guide, release notes, or environment spec (`environment.yml`, `spack.yaml`, devcontainer) found | |
 
 Each of the 5 rows is itself a weighted blend (containers 20%, dependency
@@ -367,13 +367,13 @@ that couldn't be measured at all (every candidate path gapped) is dropped from
 both the score and its weight, not counted as 0.
 
 ### 4.3.4 Usability
-**Collectors:** [`usability.py`](collectors/quality/usability.py),
-[`collaboration.py`](collectors/ecosystem/collaboration.py)
+**Collectors:** [`usability.py`](../collectors/quality/usability.py),
+[`collaboration.py`](../collectors/ecosystem/collaboration.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | User Experience Assessment | 🔲 | — | the report specifies the UEQ instrument, which needs a survey |
-| Documentation Completeness Analysis | ✅ | README covers ≥3 of 4 core sections (installation / usage / examples / support); or, with ≥1 section, a `docs/` tree **and** a published site | README headings, and link text that starts with a section keyword ("Getting Started…", "Contact Us"); `docs/` tree, published site |
+| Documentation Completeness Analysis | ✅ | README covers ≥3 of 4 core sections (installation / usage / examples / support); or, with ≥1 section, a `` tree **and** a published site | README headings, and link text that starts with a section keyword ("Getting Started…", "Contact Us"); `` tree, published site |
 | Accessibility Feature Detection | 🔲 | — | — |
 | Installation Success Tracking | ✅ | ≥1 package manager with a documented install command | from 4.2.7's registry data |
 | Usage Analytics Integration | 🔲 | — | — |
@@ -381,7 +381,7 @@ both the score and its weight, not counted as 0.
 README sections are matched against **heading text only**, so "you can install
 it somehow" in a paragraph doesn't count as an installation section.
 
-A thin README still meets the threshold when it is backed by both a `docs/` tree and a
+A thin README still meets the threshold when it is backed by both a `` tree and a
 published site — HDF5's README covers 2 of 4 sections but its real
 documentation lives elsewhere.
 
@@ -389,8 +389,8 @@ Installation Success reuses the 4.2.7 registry lookup rather than querying
 ecosyste.ms a second time for the same answer.
 
 ### 4.3.5 Accessibility
-**Collectors:** [`accessibility.py`](collectors/quality/accessibility.py),
-[`deployment_environments.py`](collectors/quality/deployment_environments.py)
+**Collectors:** [`accessibility.py`](../collectors/quality/accessibility.py),
+[`deployment_environments.py`](../collectors/quality/deployment_environments.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
@@ -398,10 +398,10 @@ ecosyste.ms a second time for the same answer.
 | Container Availability Assessment | ✅ | any of Dockerfile, Singularity/Apptainer definition found, **or** the project's Spack recipe is in the E4S container image environment | E4S builds its Docker/Singularity images (ecpe4s/e4s-cpu) from `environments/x86_64/gnu/cpu/spack.yaml` in E4S-Project/e4s; the recipe is found as for Collaboration (repository name, or the recipe whose URLs are this repository). 4.3.3 Containerization still requires a recipe in the repository. |
 | Architecture Compatibility Analysis | ✅ | ≥1 non-x86 CPU architecture (ARM64, POWER, RISC-V, s390x) or GPU accelerator target (CUDA, ROCm/HIP, SYCL) in CI — x86-64 alone doesn't count | GitHub workflows plus GitLab CI config kept in the repo (`.gitlab-ci.yml`, `.gitlab/`); Apple Silicon macOS runners (`macos-14`+, `macos-latest`) count as ARM64; GPU targets from build configuration only (Spack variants, CMake options, GPU arch targets, vendor images, GPU model names in runner labels, Kokkos architecture names) |
 | Platform Documentation Evaluation | ✅ | ≥2 platform families named in the README | also the two shallowest install guides and the two shallowest getting-started / platform-requirements pages |
-| Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels (GitHub-hosted labels, and the OS labels of self-hosted runners); no mark when it falls short and some CI runs on runners whose OS the configuration doesn't state (hardware-labelled self-hosted runners, a matrix variable with no standard labels in the file, GitLab CI, Jenkins, Travis, Azure, CircleCI, Buildkite) | [`deployment_environments.py`](collectors/quality/deployment_environments.py) |
+| Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels (GitHub-hosted labels, and the OS labels of self-hosted runners); no mark when it falls short and some CI runs on runners whose OS the configuration doesn't state (hardware-labelled self-hosted runners, a matrix variable with no standard labels in the file, GitLab CI, Jenkins, Travis, Azure, CircleCI, Buildkite) | [`deployment_environments.py`](../collectors/quality/deployment_environments.py) |
 
 ### 4.3.6 Maintainability and Understandability
-**Collector:** [`maintainability.py`](collectors/quality/maintainability.py),
+**Collector:** [`maintainability.py`](../collectors/quality/maintainability.py),
 plus the bus factor reused from `active_maintenance.py`.
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -419,7 +419,7 @@ breakdown, and recent commit messages.
 tools that measure computational complexity; that needs the source checked out.
 What this reports is file size and nesting, and says so in the rendered row.
 
-**Two counting rules that materially change the numbers.** Files under a `docs/`
+**Two counting rules that materially change the numbers.** Files under a ``
 tree only count as documentation if they are prose — HDF5's docs tree holds 165
 `.gif`, 82 `.png` and 33 `.c` files, which had doubled its documentation figure.
 And `.txt` counts only at the repo root or under a doc directory, since deeper in
@@ -444,13 +444,13 @@ All ten require running benchmarks on target hardware, profiling
 (Valgrind/Darshan/RAPL/NVML), or domain expertise to interpret.
 
 ### 4.3.8 Software Supply Chain Integrity
-**Collector:** [`supply_chain.py`](collectors/quality/supply_chain.py)
+**Collector:** [`supply_chain.py`](../collectors/quality/supply_chain.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
 |---|---|---|---|
 | SBOM Detection and Validation | ✅ | an SPDX/CycloneDX-named file found at the repo root, or among the last 5 releases' assets | filename matching only — no SBOM content is parsed or validated |
 | Build Provenance Assessment | ✅ | a SLSA/in-toto-attestation-named file found among the last 5 releases' assets | filename matching only |
-| Dependency Vulnerability Posture | ✅ | no pinned dependency in `requirements.txt`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`, or `go.sum` has a known OSV.dev vulnerability | [OSV.dev](https://osv.dev) batch query API — free, unauthenticated, no Dependabot alert access needed on the target repo |
+| Dependency Vulnerability Posture | ✅ | no pinned dependency in `../requirements.txt`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`, or `go.sum` has a known OSV.dev vulnerability | [OSV.dev](https://osv.dev) batch query API — free, unauthenticated, no Dependabot alert access needed on the target repo |
 | Dependency Freshness (libyears) | 🔲 | — | needs a machine-readable dependency manifest with enough history to compute a lag, not just pinned versions |
 | Badge and Scorecard Level | ✅ | not independently scored — display-only, read from the 4.2 OpenSSF Badge / Scorecard collectors | passthrough, not re-fetched |
 
@@ -468,7 +468,7 @@ SPDX/CycloneDX/SLSA specs.
 
 **Dependency Vulnerability Posture's coverage is real but narrow.** Six
 kinds of lockfiles are read, all at the repository root only, all resolved
-against `RepoTree`: `requirements.txt` and `Pipfile.lock` (PyPI, only exact
+against `RepoTree`: `../requirements.txt` and `Pipfile.lock` (PyPI, only exact
 `==` pins — OSV.dev's query API takes a single version, not a range, so
 `numpy>=1.20` names a real dependency the check can't evaluate; `Pipfile.lock`
 is checked in both its `default` and `develop` sections, since a dev/test-only
@@ -484,7 +484,7 @@ are deliberately not matched, since a stale doc-theme or sub-tool pin isn't a
 supply-chain finding the way a stale runtime dependency is. `package-lock.json`
 and `yarn.lock` (npm) aren't parsed yet.
 
-Of the 71 tracked repositories, 9 pin `requirements.txt` at the repository
+Of the 71 tracked repositories, 9 pin `../requirements.txt` at the repository
 root and 1 has a root-level `uv.lock` — this check found two real, currently
 unpatched vulnerabilities during development: a **CRITICAL**
 remote-code-execution in `torch==2.2.0+cu118`
@@ -521,7 +521,7 @@ Each section reports `Score: n/N`, where `N` is the number of sub-metrics the
 report defines for it and `n` is how many currently meet their threshold.
 Section scores roll up into three dimension scores, which combine into an
 overall score using the weights in
-[`config/orchestrator.yaml`](config/orchestrator.yaml):
+[`../config/orchestrator.yaml`](../config/orchestrator.yaml):
 
 ```yaml
 metric_weights:
@@ -538,7 +538,7 @@ average rather than dragging it down.
 ## Configuration
 
 Collectors are toggled per **dimension** in
-[`config/orchestrator.yaml`](config/orchestrator.yaml):
+[`../config/orchestrator.yaml`](../config/orchestrator.yaml):
 
 ```yaml
 collectors:
@@ -594,7 +594,7 @@ package recipes to `spack/spack-packages`).
 A project can also narrow its *own* collection by adding `.metrics/metrics.yaml`
 to its own repo -- same `collectors:` / `overrides:` shape, fetched at
 collection time, and unable to re-enable anything the global config or a
-`package_config/` file already turned off. See
+`../package_config` file already turned off. See
 [docs/PROJECT_CONFIG.md](docs/PROJECT_CONFIG.md).
 
 ---

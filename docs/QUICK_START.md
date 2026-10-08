@@ -179,15 +179,15 @@ export GITHUB_TOKEN="your_token_here"
 |------|---------|
 | `test_citation.py` | Basic test script |
 | `test_citation_detailed.py` | Detailed API test |
-| `scripts/generate_corsa_citations.py` | CORSA integration |
-| `collectors/impact/citation.py` | Main collector |
+| `../scripts/generate_corsa_citations.py` | CORSA integration |
+| `../collectors/impact/citation.py` | Main collector |
 | `catalog/doi_mapping.json` | DOI mappings |
 
 ---
 
 ## 📖 Full Documentation
 
-- **[README.md](README.md)** - Complete documentation
+- **[README.md](../README.md)** - Complete documentation
 - **[ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md)** - Integration guide
 - **[METRICS_CATALOG.md](METRICS_CATALOG.md)** - Project summary
 
@@ -199,7 +199,7 @@ export GITHUB_TOKEN="your_token_here"
 - [ ] Basic test runs successfully
 - [ ] Detailed test shows API results
 - [ ] CORSA integration script tested
-- [ ] Results in `output/` directory
+- [ ] Results in `../output` directory
 
 ---
 
@@ -215,11 +215,11 @@ export GITHUB_TOKEN="your_token_here"
 
 3. **To customize:**
    - Edit weights in `test_citation.py`
-   - Add new API integrations in `integrations/`
+   - Add new API integrations in `../integrations`
    - Modify normalization in `citation.py`
 
 ---
 
 **Status:** ✅ Ready to use!
 
-*For questions: Read [README.md](README.md) or check [METRICS_CATALOG.md](METRICS_CATALOG.md)*
+*For questions: Read [README.md](../README.md) or check [METRICS_CATALOG.md](METRICS_CATALOG.md)*

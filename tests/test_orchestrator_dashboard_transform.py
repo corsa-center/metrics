@@ -48,7 +48,7 @@ class TestChaossCategoryScoresGapHandling:
                 }
             }
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         assert result is not None
 
     def test_all_categories_gapped_does_not_crash(self, orchestrator):
@@ -64,7 +64,7 @@ class TestChaossCategoryScoresGapHandling:
                 }
             }
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         assert result is not None
 
     def test_gapped_category_is_labeled_not_collected_in_output(self, orchestrator):
@@ -84,7 +84,7 @@ class TestChaossCategoryScoresGapHandling:
                 }
             }
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         section_data = result["ecosystem"]["4.2.1"]["data"]
         assert "Not collected" in section_data
         assert "Documentation Usability" in section_data
@@ -114,7 +114,7 @@ class TestScoreLineUsesDynamicMaxScore:
                 ["contribution_type_diversity", "external_event_participation", "training_material_integration"],
             )}}
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         assert "Score:</strong> 2/5" in result["ecosystem"]["4.2.5"]["data"]
 
     def test_outreach_fully_gapped_score_renders_as_text_not_none(self, orchestrator):
@@ -124,7 +124,7 @@ class TestScoreLineUsesDynamicMaxScore:
                 "status": "not_collected", "sub_scores": {},
             }}
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         assert "None/0" not in result["ecosystem"]["4.2.5"]["data"]
         assert "Score:</strong> Not collected" in result["ecosystem"]["4.2.5"]["data"]
 
@@ -133,7 +133,7 @@ class TestScoreLineUsesDynamicMaxScore:
             "welcomeness": {"overall_score": {"score": 1, "max_score": 1,
                                               "sub_scores": _rows(["decision_making_visibility"])}}
         })
-        data = orchestrator._transform_for_dashboard("owner/repo", metrics)["ecosystem"]["4.2.6"]["data"]
+        data = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.6"]["data"]
         assert "✗" not in data
         assert "Score:</strong> 1/1" in data
 
@@ -145,7 +145,7 @@ class TestScoreLineUsesDynamicMaxScore:
                 ["funding_portfolio"], ["nih_r50"],
             )}}
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         assert "Score:</strong> 3/4" in result["ecosystem"]["4.2.8"]["data"]
         assert "Score:</strong> 1/1" in result["ecosystem"]["4.2.9"]["data"]
 
@@ -159,7 +159,7 @@ class TestScoreLineUsesDynamicMaxScore:
             ecosystem_sub={"collaboration": {"overall_score": {"score": 1, "sub_scores": collab}}},
             quality_sub={"usability": {"overall_score": {"score": 1, "sub_scores": usab}}},
         )
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         assert "Score:</strong> 1/2" in result["ecosystem"]["4.2.7"]["data"]
         assert "Score:</strong> 2/2" in result["quality"]["4.3.4"]["data"]
 
@@ -168,7 +168,7 @@ class TestScoreLineUsesDynamicMaxScore:
             "funding": {"overall_score": {"score": 2, "max_score": 3, "sub_scores": _rows(
                 [], [], ["institutional_support"])}}
         })
-        section_429 = orchestrator._transform_for_dashboard("owner/repo", metrics)["ecosystem"]["4.2.9"]["data"]
+        section_429 = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.9"]["data"]
         assert "0/5" not in section_429
         assert "Score:</strong> Not collected" in section_429
 
@@ -199,7 +199,7 @@ class TestStaticAnalysisGapNotShownAsConfirmedFail:
             "reliability": {},
             "static_analysis": {"has_codeql": False, "not_collected": True},
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         section_431 = result["quality"]["4.3.1"]["data"]
         assert "No CodeQL workflow found" not in section_431
         assert "Not yet collected" in section_431
@@ -209,7 +209,7 @@ class TestStaticAnalysisGapNotShownAsConfirmedFail:
             "reliability": {},
             "static_analysis": {"has_codeql": False},
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         assert "No CodeQL workflow found" in result["quality"]["4.3.1"]["data"]
 
 
@@ -227,7 +227,7 @@ class TestReproducibilityAndAccessibilityGapRows:
                 },
             },
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         section = result["quality"]["4.3.3"]["data"]
         assert "FAIR4RS Compliance Assessment:</strong> ✗" not in section
         assert "FAIR4RS Compliance Assessment:</strong> Not yet collected" in section
@@ -242,7 +242,7 @@ class TestReproducibilityAndAccessibilityGapRows:
                 },
             },
         })
-        result = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        result = orchestrator._transform_for_dashboard(metrics, {})
         section = result["quality"]["4.3.5"]["data"]
         assert "Portable Build System Detection:</strong> ✗" not in section
         assert "Portable Build System Detection:</strong> Not yet collected" in section
@@ -308,7 +308,7 @@ class TestUnmeasuredRowsCarryNoMark:
                 "semantic_versioning": {},
             },
         }})
-        section = orchestrator._transform_for_dashboard("o/r", metrics)["quality"]["4.3.3"]["data"]
+        section = orchestrator._transform_for_dashboard(metrics, {})["quality"]["4.3.3"]["data"]
         assert "<p><strong>Environment Management:</strong> ✓</p>" in section
         assert "spack.yaml" in section
 
@@ -318,7 +318,7 @@ class TestUnmeasuredRowsCarryNoMark:
             "contributor_activity": {}, "score": {}, "channels": {"found": []},
             "abandonment": {"measurable": False},
         }})
-        section = orchestrator._transform_for_dashboard("o/r", metrics)["ecosystem"]["4.2.3"]["data"]
+        section = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.3"]["data"]
         row = [l for l in section.split("\n") if "Contributor Abandonment" in l][0]
         assert "✗" not in row and "needs two years" in row
 
@@ -326,7 +326,7 @@ class TestUnmeasuredRowsCarryNoMark:
         from collectors.ecosystem.collaboration import CollaborationCollector
         score = CollaborationCollector()._calculate_score([])
         metrics = _base_metrics(ecosystem_sub={"collaboration": {"overall_score": score, "registries": []}})
-        section = orchestrator._transform_for_dashboard("o/r", metrics)["ecosystem"]["4.2.7"]["data"]
+        section = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.7"]["data"]
         row = [l for l in section.split("\n") if "Collaboration Network" in l][0]
         assert "✗" not in row and "not audited" in row
 
@@ -337,23 +337,23 @@ class TestChaossScoreNone:
             "governance": {"effectiveness": {}},
             "chaoss_activity": {"overall_score": {
                 "score": None, "max_score": 100, "status": "not_collected", "category_scores": {}}}})
-        section = orchestrator._transform_for_dashboard("o/r", metrics)["ecosystem"]["4.2.1"]["data"]
+        section = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.1"]["data"]
         assert "<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>" in section
 
     def test_one_failing_package_does_not_drop_the_others(self, orchestrator, tmp_path, monkeypatch):
         orchestrator.output_path = tmp_path
         real = orchestrator._transform_for_dashboard
 
-        def transform(name, metrics):
-            if name == "bad/pkg":
+        def transform(metrics, overrides):
+            if "bad" in overrides.keys():
                 raise TypeError("boom")
-            return real(name, metrics)
+            return real(metrics, overrides)
         monkeypatch.setattr(orchestrator, "_transform_for_dashboard", transform)
         with pytest.raises(RuntimeError, match="bad/pkg"):
-            orchestrator._write_dashboard_output({"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
+            orchestrator._write_dashboard_output({"bad/pkg": {"overrides":{"bad": True}}, "good/pkg": {}}, {"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
         assert (tmp_path / "pkg-metrics" / "metrics.json").exists()
 
     def test_same_named_packages_are_reported(self, orchestrator, tmp_path, caplog):
         orchestrator.output_path = tmp_path
-        orchestrator._write_dashboard_output({"A/tool": _base_metrics(), "b/Tool": _base_metrics()})
-        assert "b/Tool and A/tool both write" in caplog.text
+        orchestrator._write_dashboard_output({"A/tool": {}, "a/Tool": {}}, {"A/tool": _base_metrics(), "a/Tool": _base_metrics()})
+        assert "both write tool-metrics/metrics.json" in caplog.text.lower()

@@ -5,7 +5,7 @@
 #   4.1 Impact, 4.2 Ecosystem, 4.3 Quality
 
 # Location of catalog
-catalog_url: "https://raw.githubusercontent.com/corsa-center/dashboard/refs/heads/main/explore/github-data/intReposInfo.json"
+catalog_url: "https://api.github.com/repos/corsa-center/metrics_data/contents/package_config"
 output_path: "./output"              # Local output directory (published to GitHub Pages)
 
 # Enable/disable CASS dimension collectors
@@ -32,14 +32,6 @@ ecosystem_collectors:
   welcomeness: true         # 4.2.6 Decision-making visibility
   collaboration: true       # 4.2.7 Ecosystem reach + 4.3.4 install paths
   funding: true             # 4.2.8 Financial + 4.2.9 Institutional Support
-
-# Per-project self-service metric control (docs/PROJECT_CONFIG.md). When
-# enabled, each package's own metrics.yaml is fetched from its repo and
-# may narrow (never widen) the toggles above for that package only. Disabling
-# this only stops the fetch -- package_config/ overrides still apply.
-project_config:
-  enabled: true
-  metrics_file: .metrics/metrics.yaml
 
 quality_collectors:
   test_coverage: true       # 4.3.1 Test Coverage Excellence (Codecov)

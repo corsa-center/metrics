@@ -44,7 +44,7 @@ pip install pyyaml  # For config handling
 
 ### 2. Configuration
 
-Edit `config/orchestrator.yaml`:
+Edit `../config/orchestrator.yaml`:
 
 ```yaml
 # Set repository paths
@@ -122,7 +122,7 @@ Format:
 ```
 
 ### 2. Summary Report
-**Location:** `./output/orchestrator_summary.json`
+**Location:** `../output/orchestrator_summary.json`
 
 Contains:
 - Total packages processed
@@ -131,7 +131,7 @@ Contains:
 - Top performing packages
 
 ### 3. Log File
-**Location:** `./orchestrator.log`
+**Location:** `../orchestrator.log`
 
 Detailed logs of the collection process
 
@@ -143,20 +143,20 @@ be linked from the package's dashboard page:
 
 - every dashboard row with its value, met / not met / not scored, and the
   evidence behind it (file links, counts, failing Scorecard checks)
-- under each row, the threshold from `config/thresholds.yaml` it was judged
+- under each row, the threshold from `../config/thresholds.yaml` it was judged
   against, with any `thresholds:` overrides applied
-- rows whose text was set by `overrides` in `package_config/` or the
+- rows whose text was set by `overrides` in `../package_config` or the
   project's own metrics file, flagged as configured rather than measured
 - how the dimension scores are computed (the average of each collector's
   percentage, listed per collector) and weighted into the overall score, and
   which collectors the project's config turned off
 
 It is rendered from the same per-section data as `metrics.json`, so it
-always matches the dashboard. See `project_report.py`.
+always matches the dashboard. See `../package_report.py`.
 
 ## Automation via GitHub Actions
 
-The workflow `.github/workflows/collect-and-sync.yml` automates the orchestrator:
+The workflow `../.github/workflows/collect-and-sync.yml` automates the orchestrator:
 
 ### Schedule
 - Runs every Sunday at 00:00 UTC
@@ -209,7 +209,7 @@ metric_weights:
 ### Configurable Pass/Fail Thresholds
 
 Every sub-metric's pass/fail decision (the ✓/✗ shown on the dashboard) is
-governed by a value in [`config/thresholds.yaml`](config/thresholds.yaml) --
+governed by a value in [`../config/thresholds.yaml`](../config/thresholds.yaml) --
 that file **is** the full, current list of every changeable threshold and
 its default, organized by CASS report section number and the exact
 sub-metric label, with an inline comment explaining each one.
@@ -218,7 +218,7 @@ shows the same values in prose, for cross-reference against the report's
 own language.)
 
 To change a default without editing collector code, copy the relevant
-section/label(/param) structure from `config/thresholds.yaml` into a
+section/label(/param) structure from `../config/thresholds.yaml` into a
 `thresholds:` block in `config/orchestrator.yaml`, e.g.:
 
 ```yaml
@@ -238,7 +238,7 @@ thresholds:
 A few things worth knowing before overriding one:
 
 - **Fail-fast, not silent.** An override for a section, label, or param that
-  `config/thresholds.yaml` doesn't already declare a default for raises an
+  `../config/thresholds.yaml` doesn't already declare a default for raises an
   error when the orchestrator starts, rather than being quietly ignored.
 - **Partial overrides merge.** For a sub-metric with several named params
   (like `CI/CD Effectiveness Assessment` above), overriding one param
@@ -246,7 +246,7 @@ A few things worth knowing before overriding one:
   not changing.
 - **Not every sub-metric is configurable.** A pure presence/structural
   check (e.g. "a license was identified at all") has no entry in
-  `config/thresholds.yaml` and can't be overridden here -- see that file's
+  `../config/thresholds.yaml` and can't be overridden here -- see that file's
   header comment for what's deliberately excluded and why.
 - **Thresholds never override a collection gap.** If a sub-metric's data
   couldn't be collected at all (rate limit, API error, etc.), it's excluded
@@ -272,18 +272,6 @@ filters:
   categories: ["Mathematical Libraries"]  # Only these categories
   exclude_repos: ["test/repo"]            # Skip these repos
   min_stars: 10                           # Minimum GitHub stars
-```
-
-### Project-specific configuration
-
-Per-project specification of metric collection (see [docs/PROJECT_CONFIG.md](docs/PROJECT_CONFIG.md)) is controlled
-by the `project_config` section. If this section is present in the configuration, per-project metrics
-will be enabled and each repository will be checked for the presence of a metrics file.
-
-```yaml
-project_config:
-  enabled: true                         # enable/disable project-specific configuration
-  metrics_file: ".metrics/metrics.yaml" # location of configuration file
 ```
 
 ## Workflow Examples

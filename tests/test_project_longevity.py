@@ -44,7 +44,7 @@ def _render(maintenance):
     metrics = {
         "dimensions": {"ecosystem": {"sub_results": {"maintenance": maintenance}}}
     }
-    out = orch._transform_for_dashboard("HDFGroup/hdf5", metrics)
+    out = orch._transform_for_dashboard(metrics, {})
     return out["ecosystem"]["4.2.10"]["data"]
 
 

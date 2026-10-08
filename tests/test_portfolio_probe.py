@@ -18,11 +18,11 @@ from tools.portfolio_probe import _report
 
 
 def _ok(repo, **extra):
-    return {"repo": repo, "exists": True, **extra}
+    return {"repo_url": repo, "exists": True, **extra}
 
 
 def _missing(repo):
-    return {"repo": repo, "exists": False}
+    return {"repo_url": repo, "exists": False}
 
 
 class TestReport:
@@ -58,7 +58,7 @@ class TestReport:
         assert "NO RECOGNIZED VERSION SCHEME" not in out
 
     def test_transient_gap_is_reported_not_a_failure(self, capsys):
-        code = _report([{"repo": "LLNL/RAJA", "exists": True, "tree_gap": True}])
+        code = _report([{"repo_url": "LLNL/RAJA", "exists": True, "tree_gap": True}])
         assert code == 0
         out = capsys.readouterr().out
         assert "COULD NOT FETCH" in out

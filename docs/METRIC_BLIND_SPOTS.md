@@ -14,7 +14,7 @@ code paths are already mis-scoring most of the portfolio.
 > literal path list can only match spellings somebody thought to write down, and
 > there are ~112 such literals across 14 collectors.
 >
-> One collector already does it right. [`maintainability.py`](collectors/quality/maintainability.py)
+> One collector already does it right. [`maintainability.py`](../collectors/quality/maintainability.py)
 > pulls the recursive git tree once and counts what it finds — it cannot suffer
 > F1, F2 or F3, at a cost of one API call. That is the fix, and it is
 > architectural, not a longer list of strings.
@@ -272,7 +272,7 @@ Phases 1–5 are mechanical; phase 6 needs a product decision.
 **Removes F1 and F3 outright, and F2 wherever a candidate is genuinely
 locatable by regex.**
 
-Added `RepoTree` to [`collectors/ecosystem/base.py`](collectors/ecosystem/base.py):
+Added `RepoTree` to [`../collectors/ecosystem/base.py`](../collectors/ecosystem/base.py):
 one `GET /repos/{owner}/{repo}/git/trees/HEAD?recursive=1` per repository,
 indexing both files and (inferred) directories case-insensitively.
 
@@ -404,7 +404,7 @@ this is speculative until a specific project trips one.
 
 ### Phase 4 — Audit every `== 0` fallback guard — landed
 
-**Removes latent F7.** Every `== 0` in `collectors/` (12 call sites) plus every
+**Removes latent F7.** Every `== 0` in `../collectors` (12 call sites) plus every
 comment mentioning "fallback" was checked against "is this enough to answer
 the question?" rather than "is this empty?".
 
@@ -536,7 +536,7 @@ attempt to make unilaterally.
 
 This analysis found more than the maintainers reported, because it tested the
 heuristics against reality instead of waiting for complaints. Made that
-permanent: `tools/portfolio_probe.py`, run weekly by
+permanent: `../tools/portfolio_probe.py`, run weekly by
 `.github/workflows/portfolio-probe.yml` over the live catalog.
 
 **Reuses the real collector code rather than re-deriving it** —

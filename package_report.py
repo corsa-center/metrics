@@ -1,4 +1,4 @@
-"""Per-project, human-readable report of how each metric was calculated.
+"""Per-package, human-readable report of how each metric was calculated.
 
 The dashboard shows each CASS section as a block of rows; this renders the
 same rows for one package as a single standalone HTML page (issue #80), and
@@ -212,6 +212,7 @@ def _collector_label(key: str) -> str:
 
 
 def build_report(
+    package: str,
     dashboard: Dict,
     metrics: Dict,
     weights: Dict[str, float],
@@ -255,7 +256,7 @@ def build_report(
 
     exclusions = dashboard.get("config_exclusions", {})
     return {
-        "package": dashboard.get("package", ""),
+        "package": package,
         "collected": _fmt_time(metrics.get("last_updated")),
         "overall": metrics.get("overall_score"),
         "dimensions": dimensions,
@@ -366,7 +367,7 @@ def render_html(report: Dict) -> str:
     )
     if report["excluded"]:
         out.append(
-            '<p class="override">Turned off by this project\'s configuration, so not '
+            '<p class="override">Turned off by this package\'s configuration, so not '
             "collected: " + esc(", ".join(report["excluded"])) + "</p>"
         )
 
@@ -420,8 +421,7 @@ def _render_row(row: Dict) -> str:
     parts = [f"<li>{badge}<div>{label}{_h(row['value'])}"]
     if row["overridden"]:
         parts.append(
-            '<div class="override">Text set by project configuration '
-            "(package_config/ or the project's own metrics file), not measured.</div>"
+            '<div class="override">Text set by package configuration, not measured.</div>'
         )
     for detail in row["details"]:
         parts.append(f'<div class="detail">{_h(detail)}</div>')
@@ -432,7 +432,8 @@ def _render_row(row: Dict) -> str:
     return "".join(parts)
 
 
-def render_project_report(
+def render_package_report(
+    package: str,
     dashboard: Dict,
     metrics: Dict,
     weights: Dict[str, float],
@@ -441,9 +442,10 @@ def render_project_report(
     """The full HTML report for one package.
 
     Args:
+        package: the name of the package
         dashboard: the package's _transform_for_dashboard output
         metrics: the package's collect_all_metrics output
         weights: dimension -> weight used for the overall score
         overrides: section -> {label: text} rows whose text came from config
     """
-    return render_html(build_report(dashboard, metrics, weights, overrides))
+    return render_html(build_report(package, dashboard, metrics, weights, overrides))

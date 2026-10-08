@@ -43,6 +43,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from integrations.github_api import GitHubClient  # noqa: E402
 from orchestrator import MetricsOrchestrator  # noqa: E402
 from collectors.ecosystem.base import RepoTree, COLLECTION_GAP  # noqa: E402
 from collectors.quality.reliability import _MAX_ANALYSIS_WORKFLOWS  # noqa: E402
@@ -53,17 +54,17 @@ _CONCURRENCY = 6
 
 async def _probe_one(
     client: httpx.AsyncClient, headers: Dict[str, str], sem: asyncio.Semaphore,
-    orchestrator: MetricsOrchestrator, repro: ReproducibilityCollector, repo_name: str,
+    orchestrator: MetricsOrchestrator, repro: ReproducibilityCollector, repo_url: str,
 ) -> Dict[str, Any]:
     async with sem:
-        result: Dict[str, Any] = {"repo": repo_name}
+        result: Dict[str, Any] = {"repo_url": repo_url}
 
-        exists = await orchestrator._confirm_repo_exists(repo_name)
+        exists = await orchestrator._confirm_repo_exists(repo_url)
         result["exists"] = exists
         if not exists:
             return result
 
-        owner, repo = repo_name.split("/", 1)
+        owner, repo = GitHubClient.extract_owner_repo(repo_url)
         tree = await RepoTree.fetch(client, headers, owner, repo)
         if tree is COLLECTION_GAP:
             result["tree_gap"] = True
@@ -85,11 +86,14 @@ async def _probe_one(
 
 async def main(config_path: str) -> int:
     orchestrator = MetricsOrchestrator(config_path=config_path)
-    catalog = orchestrator.load_software_catalog()
+    catalog = await orchestrator.load_software_catalog()
     repo_names = sorted(catalog.keys())
     if not repo_names:
         print("Catalog is empty or could not be fetched -- nothing to probe.")
         return 0
+    repo_urls = []
+    for repo_name in repo_names:
+        repo_urls.append(catalog.get(repo_name).get("repo_url"))
 
     token = orchestrator._get_github_token()
     headers = {"Accept": "application/vnd.github.v3+json"}
@@ -100,7 +104,7 @@ async def main(config_path: str) -> int:
     sem = asyncio.Semaphore(_CONCURRENCY)
     async with httpx.AsyncClient(timeout=30.0) as client:
         results = await asyncio.gather(
-            *[_probe_one(client, headers, sem, orchestrator, repro, r) for r in repo_names]
+            *[_probe_one(client, headers, sem, orchestrator, repro, r) for r in repo_urls]
         )
 
     return _report(results)
@@ -125,25 +129,25 @@ def _report(results: List[Dict[str, Any]]) -> int:
     if gapped:
         print(f"COULD NOT FETCH (transient -- rerun): {len(gapped)}")
         for r in gapped:
-            print(f"  {r['repo']}")
+            print(f"  {r['repo_url']}")
         print()
 
     if partial_scans:
         print(f"CI-WORKFLOW SCAN PARTIAL (more workflows than the read cap): {len(partial_scans)}")
         for r in sorted(partial_scans, key=lambda r: -r["workflow_count"]):
-            print(f"  {r['repo']:45s} {r['workflow_count']} workflows (cap {_MAX_ANALYSIS_WORKFLOWS})")
+            print(f"  {r['repo_url']:45s} {r['workflow_count']} workflows (cap {_MAX_ANALYSIS_WORKFLOWS})")
         print()
 
     if no_scheme:
         print(f"NO RECOGNIZED VERSION SCHEME in sampled tags: {len(no_scheme)}")
         for r in no_scheme:
-            print(f"  {r['repo']:45s} {r.get('tags_sampled')}")
+            print(f"  {r['repo_url']:45s} {r.get('tags_sampled')}")
         print()
 
     if missing:
         print(f"CATALOG ENTRIES THAT DO NOT RESOLVE ON GITHUB: {len(missing)}")
         for r in missing:
-            print(f"  {r['repo']}")
+            print(f"  {r['repo_url']}")
         print(
             "\nThese repositories 404 -- the catalog entry is stale (renamed, "
             "deleted, or mistranscribed). The pipeline already skips them "
