@@ -136,7 +136,7 @@ jobs:
           # A manual dispatch only splits if asked (group_count/group inputs);
           # left blank, it runs the whole catalog, same as before batching --
           # useful for validating a fix across everything at once.
-          GROUP_COUNT=10  # ~7 packages/run for a 71-package catalog (~700
+          GROUP_COUNT=1   # ~7 packages/run for a 71-package catalog (~700
                           # req/hour at ~80-100 req/package, ~30% margin
                           # under the 1,000/hour cap); grows gracefully
                           # (batch size creeps up, not coverage breaking)
