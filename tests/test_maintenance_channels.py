@@ -161,7 +161,7 @@ class TestRelatedRepositories:
         assert alone["departed"] == 1
         assert merged["departed"] == 0 and merged["previously_active"] == 1
 
-    def test_related_repositories_are_read_from_package_config(self, collector):
+    def test_related_repositories_are_read_from_catalog_entry(self, collector):
         import asyncio
         from unittest.mock import AsyncMock, patch
         calls = []
@@ -181,7 +181,7 @@ class TestRelatedRepositories:
              patch.object(collector, "_count_community_issues", new=AsyncMock(return_value=None)):
             asyncio.run(collector.collect({
                 "name": "spack", "repo_url": "https://github.com/spack/spack",
-                "package_config": {"related_repositories": ["spack/spack-packages"]}}))
+                "related_repositories": ["spack/spack-packages"]}))
         assert calls == ["spack/spack", "spack/spack-packages"]
 
 

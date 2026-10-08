@@ -65,9 +65,9 @@ class ActiveMaintenanceCollector:
 
         owner, repo = owner_repo
         # Companion repositories a project's work also lives in (declared in
-        # its package_config/ file), so moving part of a project to another
-        # repository isn't read as its contributors abandoning it.
-        related = [r for r in (package.get("package_config") or {}).get("related_repositories") or []
+        # its metrics_data catalog entry), so moving part of a project to
+        # another repository isn't read as its contributors abandoning it.
+        related = [r for r in package.get("related_repositories") or []
                    if isinstance(r, str) and r.count("/") == 1]
 
         # Collect all data concurrently

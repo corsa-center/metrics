@@ -1,6 +1,7 @@
 """Tests for the per-package metric report (package_report.py, issue #80)."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -119,6 +120,17 @@ class TestBuildReport:
 
 
 class TestHtmlOutput:
+    def test_metrics_json_keeps_the_dashboards_flat_layout(self, orchestrator, tmp_path):
+        # js/catalog.js and get_repos_info.py read these from the top level.
+        orchestrator.output_path = tmp_path
+        catalog = {"HDF5": {"name": "HDF5", "repo_url": "https://github.com/HDFGroup/hdf5"}}
+        orchestrator._write_dashboard_output(catalog, {"HDF5": _metrics()})
+        data = json.loads((tmp_path / "hdf5-metrics" / "metrics.json").read_text())
+        for key in ("stars", "forks", "config_exclusions", "impact", "ecosystem", "quality"):
+            assert key in data
+        assert data["package"] == "HDF5"
+        assert data["metadata"] == catalog["HDF5"]
+
     def test_report_written_beside_metrics_json(self, orchestrator, tmp_path):
         orchestrator.output_path = tmp_path
         metrics = _metrics(

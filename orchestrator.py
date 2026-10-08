@@ -2331,10 +2331,14 @@ class MetricsOrchestrator:
             # every later package's output; write the rest, then fail the run.
             try:
                 overrides = catalog[package_name].get("overrides", {})
+                section_data = self._transform_for_dashboard(metrics, overrides)
+                # The dashboard (js/catalog.js, get_repos_info.py) reads
+                # stars/forks/impact/ecosystem/quality from the top level, so
+                # keep those flat and add the catalog entry beside them.
                 dashboard_data = {
                     "package": package_name,
                     "metadata": catalog[package_name],
-                    "metrics": self._transform_for_dashboard(metrics, overrides)
+                    **section_data,
                 }
             except Exception as e:
                 logger.error(f"Could not render dashboard output for {package_name}: {e!r}", exc_info=True)
@@ -2363,7 +2367,7 @@ class MetricsOrchestrator:
             report_file.write_text(
                 render_package_report(
                     package_name,
-                    dashboard_data["metrics"],
+                    section_data,
                     metrics,
                     self._metric_weights(),
                     catalog[package_name].get("overrides", {})

@@ -67,6 +67,16 @@ overrides:
   a labeled "N/A — reason" instead, set it explicitly via `overrides`; you can
   do either independently of the other.
 
+A package whose work is split across repositories can list the companions in
+`related_repositories` (`owner/repo` entries). Contributor Abandonment
+Forecasting then merges contributor activity across all of them, so work moving
+to a companion repository isn't read as contributors leaving.
+
+```yaml
+related_repositories:
+  - spack/spack-packages
+```
+
 ## Provenance
 
 Every package's output includes `config_exclusions`, listing which toggle

@@ -581,21 +581,18 @@ rather than scoring it zero; the sections it feeds render "Not yet collected".
 Turning off `active_maintenance` also empties 4.2.10 and 4.3.6, which are
 derived from it.
 
-Per-package overrides for sub-metrics that are genuinely N/A live in
-`package_config/<owner>_<repo>.yaml`; keys are the exact sub-metric labels from
-this catalog. See [PLACEHOLDER_GUIDE.md](PLACEHOLDER_GUIDE.md).
+Each package's catalog entry in the
+[metrics_data](https://github.com/corsa-center/metrics_data) repository
+(`package_config/*.yaml`) can narrow these toggles with its own `collectors:`
+block -- it can turn a sub-collector off, never back on -- and can declare
+`overrides:` for sub-metrics that are genuinely N/A; override keys are the exact
+sub-metric labels from this catalog. See [PACKAGE_CONFIG.md](PACKAGE_CONFIG.md).
 
-The same file can list `related_repositories:` (`owner/repo` entries) for a
+The same entry can list `related_repositories:` (`owner/repo` entries) for a
 project whose work is split across repositories. Contributor Abandonment
 Forecasting then merges contributor activity across all of them, so work moving
 to a companion repository isn't read as contributors leaving (Spack moved its
 package recipes to `spack/spack-packages`).
-
-A project can also narrow its *own* collection by adding `.metrics/metrics.yaml`
-to its own repo -- same `collectors:` / `overrides:` shape, fetched at
-collection time, and unable to re-enable anything the global config or a
-`../package_config` file already turned off. See
-[docs/PROJECT_CONFIG.md](docs/PROJECT_CONFIG.md).
 
 ---
 
