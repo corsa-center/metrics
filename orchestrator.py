@@ -22,6 +22,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 import re
@@ -80,9 +81,6 @@ KNOWN_COLLECTOR_KEYS = {
         "dev_tooling", "static_analysis", "supply_chain",
     },
 }
-
-# Directory containing per-package config files (relative to this script)
-PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
 
 # Catalog package schema
 PACKAGE_CONFIG_SCHEMA_VERSION = 1
@@ -174,10 +172,6 @@ class MetricsOrchestrator:
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
         self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
         self.quality_collectors = self.config.get("quality_collectors", {})
-        # Whether to fetch each project's own metrics.yaml at all. Does
-        # not affect the maintainer-authored package_config/ files, which are
-        # operator-controlled regardless of this switch.
-        self.project_config = self.config.get("project_config", {}) or {}
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
@@ -233,13 +227,8 @@ class MetricsOrchestrator:
     async def _fetch_package_config(self, package_url) -> Dict:
         """Fetch a catalog package.
         """
-
-        token = self._get_github_token()
-
         try:
-            headers = {"Accept": "application/vnd.github.v3+json"}
-            if token:
-                headers["Authorization"] = f"token {token}"
+            headers = self._github_headers(package_url, "application/vnd.github.v3+json")
 
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(package_url, headers=headers)
@@ -261,6 +250,10 @@ class MetricsOrchestrator:
                 f"Ignoring {package_url}: "
                 f"unsupported schema {package.get('schema')!r}"
             )
+            return {}
+        missing = [k for k in ("name", "repo_type", "repo_url") if not package.get(k)]
+        if missing:
+            logger.warning(f"Ignoring {package_url}: missing required field(s) {missing}")
             return {}
         return _sanitize_package_config(package)
 
@@ -304,7 +297,18 @@ class MetricsOrchestrator:
         lines.append(f"<p><strong>Score:</strong> 0/{total}</p>")
         return "\n".join(lines)
 
-    def _fetch_catalog_files(self, url: str) -> Optional[Dict]:
+    def _github_headers(self, url: str, accept: str) -> Dict[str, str]:
+        """Request headers for a GitHub API call. The token is attached only
+        when `url` is on api.github.com, so a catalog_url pointed elsewhere
+        can't leak it.
+        """
+        headers = {"Accept": accept}
+        token = self._get_github_token()
+        if token and urlparse(url).hostname == "api.github.com":
+            headers["Authorization"] = f"token {token}"
+        return headers
+
+    def _fetch_catalog_files(self, url: str) -> Optional[List[Dict]]:
         """Fetch a list of configuration files for the catalog.
         Currently this is the contents of a directory from a GitHub URL.
 
@@ -317,19 +321,14 @@ class MetricsOrchestrator:
         """
         logger.info(f"Fetching {url}")
 
-        token = self._get_github_token()
-
         try:
-            headers = {"Accept": "application/vnd.github.object+json"}
-            if token:
-                headers["Authorization"] = f"token {token}"
-
+            headers = self._github_headers(url, "application/vnd.github.object+json")
             response = httpx.get(url, timeout=30.0, follow_redirects=True, headers=headers)
             response.raise_for_status()
             contents = response.json().get("entries")
-            if contents:
+            if contents is not None:
                 return contents
-            logger.error("{url} does not point to a GitHub directory")
+            logger.error(f"{url} does not point to a GitHub directory")
         except Exception as e:
             logger.error(f"Failed to fetch {url}: {e}")
         return None
@@ -347,13 +346,31 @@ class MetricsOrchestrator:
             raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
         catalog = {}
         for catalog_file in catalog_files:
-            if catalog_file["type"] != "file":
+            if catalog_file.get("type") != "file":
+                continue
+            file_name = catalog_file.get("name", "")
+            if not file_name.endswith((".yaml", ".yml")):
+                logger.warning(f"Skipping catalog file {file_name}: not a .yaml/.yml file")
                 continue
             git_url = catalog_file["git_url"]
             package = await self._fetch_package_config(git_url)
             if not package:
-                raise RuntimeError(f"Could not load the package from {git_url}")
-            catalog[package["name"]] = package
+                # One bad file shouldn't take every other package down with
+                # it; _fetch_package_config has already logged why.
+                logger.error(f"Skipping catalog file {file_name}: could not load a valid package")
+                continue
+            name = package["name"]
+            if name in catalog:
+                logger.error(
+                    f"Skipping catalog file {file_name}: package name '{name}' "
+                    f"is already used by another catalog file"
+                )
+                continue
+            catalog[name] = package
+        if not catalog:
+            # Fail loudly: an empty catalog would let the run report success
+            # having collected nothing.
+            raise RuntimeError(f"No valid packages found in the catalog at {self.catalog_url}")
         return catalog
 
     async def prepare_software_list(
@@ -510,11 +527,9 @@ class MetricsOrchestrator:
         """
         try:
             owner, repo = GitHubClient.extract_owner_repo(repo_url)
-
-            token = self._get_github_token()
-            headers = {"Accept": "application/vnd.github.v3+json"}
-            if token:
-                headers["Authorization"] = f"token {token}"
+            headers = self._github_headers(
+                "https://api.github.com/", "application/vnd.github.v3+json"
+            )
 
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
@@ -890,7 +905,7 @@ class MetricsOrchestrator:
             f"Starting metrics collection for {package['name']} ({package['repo_url']})"
         )
 
-        if package.get("repo_type", "") != "github":
+        if str(package.get("repo_type", "")).lower() != "github":
             # Every collector assumes GitHub
             # Leave all sub-metrics unset ("not yet collected" downstream)
             # rather than let each one silently 404 against the wrong host
@@ -2283,6 +2298,20 @@ class MetricsOrchestrator:
                 section["data"] = _rescore_section(section["data"])
         return result
 
+    @staticmethod
+    def _output_dir_name(package_name: str, package: Dict) -> str:
+        """Repository name the dashboard keys a package's files by, e.g.
+        "hdf5" for https://github.com/HDFGroup/hdf5. The catalog's `name:`
+        is free text ("HDF5", "CORSA Metrics Framework"), so it can't be used
+        as a path; fall back to it only when there is no repo_url.
+        """
+        path = urlparse(package.get("repo_url") or "").path.strip("/")
+        source = path or package_name
+        repo = source.split("/")[-1]
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+        return repo
+
     def _write_dashboard_output(self, catalog: Dict, all_metrics: Dict):
         """Write per-package metrics.json files for the dashboard.
 
@@ -2313,14 +2342,15 @@ class MetricsOrchestrator:
                 continue
 
             # The dashboard keys files by repository name alone, so two
-            # catalog entries with the same name overwrite each other.
-            if package_name.lower() in written:
+            # catalog entries for same-named repos overwrite each other.
+            dir_name = self._output_dir_name(package_name, catalog[package_name])
+            if dir_name.lower() in written:
                 logger.error(
-                    f"Two catalog entries use the same name '{package_name}', "
-                    f"only the first will be used"
+                    f"{package_name} and {written[dir_name.lower()]} both write "
+                    f"{dir_name}-metrics/metrics.json; the dashboard shows only {package_name}"
                 )
-            written[package_name.lower()] = package_name
-            metrics_dir = self.output_path / f"{package_name}-metrics"
+            written[dir_name.lower()] = package_name
+            metrics_dir = self.output_path / f"{dir_name}-metrics"
             metrics_dir.mkdir(parents=True, exist_ok=True)
 
             output_file = metrics_dir / "metrics.json"

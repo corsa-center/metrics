@@ -3,8 +3,11 @@ _package_excluded_keys provenance, and fetching/validating a packages own
 package configuration file.
 """
 
+import asyncio
 import base64
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from orchestrator import MetricsOrchestrator, _sanitize_package_config
 
@@ -14,7 +17,6 @@ def _orch(config=None):
     o.config = config or {}
     o.ecosystem_collectors = (config or {}).get("ecosystem_collectors", {})
     o.quality_collectors = (config or {}).get("quality_collectors", {})
-    o.project_config = (config or {}).get("project_config", {})
     return o
 
 
@@ -121,3 +123,96 @@ def _mock_response(status_code=200, content_b64=None):
 
 def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
+
+
+_HDF5_YAML = """
+schema: 1
+name: HDF5
+repo_type: github
+repo_url: https://github.com/HDFGroup/hdf5
+overrides:
+  "4.2.8":
+    NIH R50 Award Tracking: N/A
+"""
+
+
+class TestFetchPackageConfig:
+    def _fetch(self, resp):
+        o = _orch()
+        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
+            return asyncio.run(o._fetch_package_config("https://api.github.com/x"))
+
+    def test_valid_package_is_returned(self):
+        package = self._fetch(_mock_response(content_b64=_b64(_HDF5_YAML)))
+        assert package["name"] == "HDF5"
+        assert package["overrides"] == {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}
+
+    def test_http_error_returns_empty(self):
+        assert self._fetch(_mock_response(status_code=404)) == {}
+
+    def test_wrong_schema_returns_empty(self):
+        assert self._fetch(_mock_response(content_b64=_b64("schema: 2\nname: x\n"))) == {}
+
+    def test_missing_required_field_returns_empty(self):
+        yaml_text = "schema: 1\nname: x\nrepo_type: github\n"
+        assert self._fetch(_mock_response(content_b64=_b64(yaml_text))) == {}
+
+
+class TestLoadSoftwareCatalog:
+    def _load(self, entries, packages):
+        o = _orch()
+        o.catalog_url = "https://api.github.com/repos/o/r/contents/package_config"
+        o._fetch_catalog_files = MagicMock(return_value=entries)
+        o._fetch_package_config = AsyncMock(side_effect=lambda url: packages[url])
+        return asyncio.run(o.load_software_catalog())
+
+    @staticmethod
+    def _entry(name, type_="file"):
+        return {"name": name, "type": type_, "git_url": name}
+
+    def test_skips_non_files_and_non_yaml(self):
+        catalog = self._load(
+            [self._entry("a.yaml"), self._entry("sub", "dir"), self._entry("README.md")],
+            {"a.yaml": {"name": "A"}},
+        )
+        assert list(catalog) == ["A"]
+
+    def test_bad_file_is_skipped_not_fatal(self):
+        catalog = self._load(
+            [self._entry("bad.yaml"), self._entry("good.yml")],
+            {"bad.yaml": {}, "good.yml": {"name": "Good"}},
+        )
+        assert list(catalog) == ["Good"]
+
+    def test_duplicate_name_keeps_first_and_logs(self, caplog):
+        catalog = self._load(
+            [self._entry("a.yaml"), self._entry("b.yaml")],
+            {"a.yaml": {"name": "X", "repo_url": "a"}, "b.yaml": {"name": "X", "repo_url": "b"}},
+        )
+        assert catalog["X"]["repo_url"] == "a"
+        assert "already used by another catalog file" in caplog.text
+
+    def test_no_valid_packages_raises(self):
+        with pytest.raises(RuntimeError, match="No valid packages"):
+            self._load([self._entry("bad.yaml")], {"bad.yaml": {}})
+
+
+class TestGithubHeaders:
+    def test_token_only_sent_to_api_github_com(self):
+        o = _orch({"api_credentials": {"github": {"token": "t"}}})
+        assert o._github_headers("https://api.github.com/x", "a")["Authorization"] == "token t"
+        assert "Authorization" not in o._github_headers("https://example.com/x", "a")
+
+
+class TestOutputDirName:
+    def test_uses_repo_name_from_repo_url(self):
+        package = {"repo_url": "https://github.com/HDFGroup/hdf5"}
+        assert MetricsOrchestrator._output_dir_name("HDF5", package) == "hdf5"
+
+    def test_strips_git_suffix_and_trailing_slash(self):
+        package = {"repo_url": "https://github.com/o/tool.git/"}
+        assert MetricsOrchestrator._output_dir_name("Tool", package) == "tool"
+
+    def test_free_text_name_never_becomes_the_path(self):
+        package = {"repo_url": "https://github.com/corsa-center/metrics"}
+        assert MetricsOrchestrator._output_dir_name("CORSA Metrics Framework", package) == "metrics"

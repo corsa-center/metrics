@@ -367,7 +367,7 @@ def render_html(report: Dict) -> str:
     )
     if report["excluded"]:
         out.append(
-            '<p class="override">Turned off by this packages\'s configuration, so not '
+            '<p class="override">Turned off by this package\'s configuration, so not '
             "collected: " + esc(", ".join(report["excluded"])) + "</p>"
         )
 

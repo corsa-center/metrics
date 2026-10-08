@@ -351,9 +351,9 @@ class TestChaossScoreNone:
         monkeypatch.setattr(orchestrator, "_transform_for_dashboard", transform)
         with pytest.raises(RuntimeError, match="bad/pkg"):
             orchestrator._write_dashboard_output({"bad/pkg": {"overrides":{"bad": True}}, "good/pkg": {}}, {"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
-        assert (tmp_path / "good" / "pkg-metrics" / "metrics.json").exists()
+        assert (tmp_path / "pkg-metrics" / "metrics.json").exists()
 
     def test_same_named_packages_are_reported(self, orchestrator, tmp_path, caplog):
         orchestrator.output_path = tmp_path
         orchestrator._write_dashboard_output({"A/tool": {}, "a/Tool": {}}, {"A/tool": _base_metrics(), "a/Tool": _base_metrics()})
-        assert "Two catalog entries use the same name" in caplog.text
+        assert "both write tool-metrics/metrics.json" in caplog.text.lower()

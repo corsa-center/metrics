@@ -41,10 +41,9 @@ from typing import Any, Dict, List
 
 import httpx
 
-from integrations.github_api import GitHubClient
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from integrations.github_api import GitHubClient  # noqa: E402
 from orchestrator import MetricsOrchestrator  # noqa: E402
 from collectors.ecosystem.base import RepoTree, COLLECTION_GAP  # noqa: E402
 from collectors.quality.reliability import _MAX_ANALYSIS_WORKFLOWS  # noqa: E402
@@ -164,6 +163,6 @@ def _report(results: List[Dict[str, Any]]) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="../config/orchestrator.yaml")
+    parser.add_argument("--config", default="config/orchestrator.yaml")
     args = parser.parse_args()
     sys.exit(asyncio.run(main(args.config)))
