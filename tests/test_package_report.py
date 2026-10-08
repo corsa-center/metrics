@@ -1,4 +1,4 @@
-"""Tests for the per-project metric report (project_report.py, issue #80)."""
+"""Tests for the per-package metric report (package_report.py, issue #80)."""
 
 import asyncio
 
@@ -6,10 +6,10 @@ import pytest
 
 from collectors.ecosystem.base import configure_threshold_overrides
 from orchestrator import MetricsOrchestrator
-from project_report import (
+from package_report import (
     build_report,
     parse_section,
-    render_project_report,
+    render_package_report,
     section_thresholds,
     threshold_descriptions,
 )
@@ -97,7 +97,7 @@ class TestThresholds:
 class TestBuildReport:
     def test_thresholds_attach_to_their_rows(self, orchestrator):
         metrics = _metrics(sub_results={"governance": {"overall_score": {"max_score": 3}}})
-        dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
         report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         sec = report["dimensions"][1]["sections"][0]
         assert sec["number"] == "4.2.1"
@@ -110,9 +110,8 @@ class TestBuildReport:
 
     def test_config_overridden_rows_are_flagged(self, orchestrator):
         metrics = _metrics()
-        metrics["project_config"] = {"overrides": {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}}
-        dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        overrides = orchestrator._merged_overrides("owner/repo", metrics)
+        overrides = {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}
+        dashboard = orchestrator._transform_for_dashboard(metrics, overrides)
         report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights(), overrides)
         rows = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")["rows"]
         flagged = {r["label"] for r in rows if r["overridden"]}
@@ -126,11 +125,11 @@ class TestHtmlOutput:
             excluded_by_config=["funding"],
             score_components={"governance": 66.7, "licensing": 100},
         )
-        orchestrator._write_dashboard_output({"owner/repo": {}}, {"owner/repo": metrics})
+        orchestrator._write_dashboard_output({"repo": {}}, {"repo": metrics})
         page = (tmp_path / "repo-metrics" / "report.html").read_text()
 
         assert page.startswith("<!doctype html>")
-        assert "Sustainability metrics report: owner/repo" in page
+        assert "Sustainability metrics report: repo" in page
         assert "Collected 2026-09-30 02:25 UTC" in page
         assert "Governance documents (4.2.1) 67; Licensing (4.2.2) 100" in page
         assert "Not yet measured — counted as 0 in the overall score" in page
@@ -142,8 +141,8 @@ class TestHtmlOutput:
             "overall_score": {"max_score": 3},
             "keyword_analysis": {"groups_found": ["<script>alert(1)</script>"]},
         }})
-        dashboard = orchestrator._transform_for_dashboard("owner/repo", metrics)
-        page = render_project_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         # The dashboard HTML carries it raw; the report reduces it to text.
         assert "<script>" not in page
         assert "alert(1)" in page

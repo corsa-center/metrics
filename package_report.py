@@ -1,4 +1,4 @@
-"""Per-project, human-readable report of how each metric was calculated.
+"""Per-package, human-readable report of how each metric was calculated.
 
 The dashboard shows each CASS section as a block of rows; this renders the
 same rows for one package as a single standalone HTML page (issue #80), and
@@ -212,7 +212,7 @@ def _collector_label(key: str) -> str:
 
 
 def build_report(
-    package:str,
+    package: str,
     dashboard: Dict,
     metrics: Dict,
     weights: Dict[str, float],
@@ -367,7 +367,7 @@ def render_html(report: Dict) -> str:
     )
     if report["excluded"]:
         out.append(
-            '<p class="override">Turned off by this project\'s configuration, so not '
+            '<p class="override">Turned off by this packages\'s configuration, so not '
             "collected: " + esc(", ".join(report["excluded"])) + "</p>"
         )
 
@@ -421,8 +421,7 @@ def _render_row(row: Dict) -> str:
     parts = [f"<li>{badge}<div>{label}{_h(row['value'])}"]
     if row["overridden"]:
         parts.append(
-            '<div class="override">Text set by project configuration '
-            "(package_config/ or the project's own metrics file), not measured.</div>"
+            '<div class="override">Text set by package configuration, not measured.</div>'
         )
     for detail in row["details"]:
         parts.append(f'<div class="detail">{_h(detail)}</div>')
@@ -433,7 +432,7 @@ def _render_row(row: Dict) -> str:
     return "".join(parts)
 
 
-def render_project_report(
+def render_package_report(
     package: str,
     dashboard: Dict,
     metrics: Dict,

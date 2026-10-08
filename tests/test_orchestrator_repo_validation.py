@@ -73,7 +73,7 @@ class TestCollectAllMetricsSkipsMissingRepo:
 
     def test_confirmed_missing_repo_skips_the_three_dimensions(self, orchestrator):
         async def go():
-            with patch.object(orchestrator, "_load_package_config", return_value={}), \
+            with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
                  patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=False)), \
                  patch.object(orchestrator, "collect_impact_dimension") as impact, \
                  patch.object(orchestrator, "collect_ecosystem_dimension") as eco, \
@@ -90,7 +90,7 @@ class TestCollectAllMetricsSkipsMissingRepo:
         fake_dim = {"dimension": "x", "score": 42.0, "max_score": 100.0}
 
         async def go():
-            with patch.object(orchestrator, "_load_package_config", return_value={}), \
+            with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
                  patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)), \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
@@ -103,7 +103,7 @@ class TestCollectAllMetricsSkipsMissingRepo:
     def test_non_github_repo_check_takes_priority_over_existence_check(self, orchestrator):
         # A GitLab repo shouldn't trigger a GitHub existence lookup at all.
         async def go():
-            with patch.object(orchestrator, "_load_package_config", return_value={}), \
+            with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
                  patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)) as confirm:
                 pkg = {
                     "name": "GitLabThing",

@@ -133,14 +133,14 @@ Environment variables (all optional for better rate limits):
 | `OPENALEX_EMAIL` | Email for OpenAlex polite pool |
 | `ZENODO_TOKEN` | Zenodo access token |
 
-See [CONFIGURATION.md](CONFIGURATION.md) for detailed setup.
+See [CONFIGURATION.md](docs/CONFIGURATION.md) for detailed setup.
 
 ## Documentation
 
-- [CONFIGURATION.md](CONFIGURATION.md) - Configuration details
-- [ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md) - Orchestrator usage
-- [QUICK_START.md](QUICK_START.md) - Getting started guide
-- [QUICK_REFERENCE.md](QUICK_REFERENCE.md) - Command reference
+- [CONFIGURATION.md](docs/CONFIGURATION.md) - Configuration details
+- [ORCHESTRATOR_GUIDE.md](docs/ORCHESTRATOR_GUIDE.md) - Orchestrator usage
+- [QUICK_START.md](docs/QUICK_START.md) - Getting started guide
+- [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md) - Command reference
 - [CASS-Sustainability-Metrics-Report.pdf](CASS-Sustainability-Metrics-Report.pdf) - CASS framework specification
 
 ## API Integrations

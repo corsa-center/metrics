@@ -331,7 +331,7 @@ token = os.environ.get('GITHUB_TOKEN')
 
 ### Use .gitignore
 
-Add to `.gitignore`:
+Add to `../.gitignore`:
 ```
 config.yaml
 .env

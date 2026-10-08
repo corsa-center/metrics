@@ -29,7 +29,7 @@ import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
 from integrations.github_api import GitHubClient
-from project_report import render_project_report
+from package_report import render_package_report
 
 # Setup logging
 logging.basicConfig(
@@ -84,11 +84,7 @@ KNOWN_COLLECTOR_KEYS = {
 # Directory containing per-package config files (relative to this script)
 PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
 
-# Path, within a tracked project's own repo, of its self-declared metrics
-# config (see docs/PROJECT_CONFIG.md). Fetched fresh per collection run.
-PROJECT_CONFIG_SCHEMA_VERSION = 1
-
-# Catalog package schems
+# Catalog package schema
 PACKAGE_CONFIG_SCHEMA_VERSION = 1
 
 _MAIN_ROW = re.compile(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>')
@@ -116,13 +112,13 @@ def _rescore_section(html: Optional[str]) -> Optional[str]:
     return _SCORE_LINE.sub(lambda _: f'<p><strong>Score:</strong> {shown}</p>', html, count=1)
 
 
-def _sanitize_metric_config(data: Dict) -> Dict:
-    """Coerce a package_config/ or metric file's collectors:
-    and overrides: blocks into well-shaped dicts, dropping anything that
-    isn't -- so every downstream reader can assume this shape without
-    re-checking. Both files are hand-edited YAML (one by a maintainer, one
-    by an external project) and can leave a key present with no value
-    (parses to None) or the wrong type entirely; treating that the same as
+def _sanitize_package_config(data: Dict) -> Dict:
+    """Coerce a package_config collectors:
+    and overrides: blocks into well-formed dicts, dropping anything that
+    isn't -- so every downstream reader can assume this without
+    re-checking. This file is hand-edited YAML so can potentially
+    leave a key present with no value (parses to None) or the wrong type
+    entirely; treating that the same as
     the key being absent keeps this feature's "fails open" guarantee intact
     instead of raising deep in dict-chaining code that assumes it was
     already validated.
@@ -234,19 +230,6 @@ class MetricsOrchestrator:
             return [self._resolve_env_vars(v) for v in obj]
         return obj
 
-    def _load_package_config(self, repo_name: str) -> Dict:
-        """Load per-package config file from package_config/ if it exists.
-
-        Config files are named <owner>_<repo>.yaml, e.g. HDFGroup_hdf5.yaml.
-        Returns an empty dict if no config file is found.
-        """
-        safe_name = repo_name.replace("/", "_")
-        config_file = PACKAGE_CONFIG_DIR / f"{safe_name}.yaml"
-        if config_file.exists():
-            with open(config_file) as f:
-                return _sanitize_metric_config(yaml.safe_load(f) or {})
-        return {}
-
     async def _fetch_package_config(self, package_url) -> Dict:
         """Fetch a catalog package.
         """
@@ -279,7 +262,7 @@ class MetricsOrchestrator:
                 f"unsupported schema {package.get('schema')!r}"
             )
             return {}
-        return package
+        return _sanitize_package_config(package)
 
     @staticmethod
     def _apply_section_overrides(html: Optional[str], section_overrides: Dict[str, str]) -> Optional[str]:
@@ -321,30 +304,35 @@ class MetricsOrchestrator:
         lines.append(f"<p><strong>Score:</strong> 0/{total}</p>")
         return "\n".join(lines)
 
-    def _fetch_json(self, url: str) -> Optional[Dict]:
-        """Fetch a JSON file from a URL
+    def _fetch_catalog_files(self, url: str) -> Optional[Dict]:
+        """Fetch a list of configuration files for the catalog.
+        Currently this is the contents of a directory from a GitHub URL.
 
         Args:
             url: URL to fetch
 
         Returns:
-            Parsed JSON as dict, or None on failure
+            Returns the contents in a consistent object format regardless of the content type
+            or None if the url is not valid.
         """
         logger.info(f"Fetching {url}")
 
         token = self._get_github_token()
 
         try:
-            headers = {"Accept": "application/vnd.github.v3+json"}
+            headers = {"Accept": "application/vnd.github.object+json"}
             if token:
                 headers["Authorization"] = f"token {token}"
 
             response = httpx.get(url, timeout=30.0, follow_redirects=True, headers=headers)
             response.raise_for_status()
-            return response.json()
+            contents = response.json().get("entries")
+            if contents:
+                return contents
+            logger.error("{url} does not point to a GitHub directory")
         except Exception as e:
             logger.error(f"Failed to fetch {url}: {e}")
-            return None
+        return None
 
     async def load_software_catalog(self) -> Dict:
         """Load software catalog from the metrics_data directory
@@ -352,7 +340,7 @@ class MetricsOrchestrator:
         """
         if not self.catalog_url:
             raise RuntimeError(f"No catalog URL specified")
-        catalog_files = self._fetch_json(self.catalog_url)
+        catalog_files = self._fetch_catalog_files(self.catalog_url)
         if catalog_files is None:
             # Fail loudly: an empty catalog would let the run report success
             # having collected nothing.
@@ -361,7 +349,7 @@ class MetricsOrchestrator:
         for catalog_file in catalog_files:
             git_url = catalog_file["git_url"]
             package = await self._fetch_package_config(git_url)
-            if package is None:
+            if not package:
                 raise RuntimeError(f"Could not load the package from {git_url}")
             catalog[package["name"]] = package
         return catalog
@@ -458,46 +446,41 @@ class MetricsOrchestrator:
     def _sub_enabled(self, group: str, key: str, package: Optional[Dict] = None) -> bool:
         """Whether an individual sub-collector is enabled for this package.
 
-        Defaults to True when a toggle is absent at every layer. Three layers,
+        Defaults to True when a toggle is absent at every layer. Two layers,
         each only able to narrow the one before it -- none can re-enable a
         collector a higher layer turned off:
           1. Global config/orchestrator.yaml -- applies to every package.
-          2. The maintainer's central package_config/<owner>_<repo>.yaml.
-          3. The project's own metrics file, fetched from its repo.
-        `package` carries (2) and (3) once collect_all_metrics has attached
+          2. The maintainer's central package_config/<package>.yaml.
+        `package` carries (2) once collect_all_metrics has attached
         them; omit it (as the config-matching tests do) to check only (1).
         """
         toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
         if not toggles.get(key, True):
             return False
         if package is not None:
-            for cfg_key in ("package_config", "project_config"):
-                cfg = package.get(cfg_key) or {}
-                narrowed = cfg.get("collectors", {}).get(group, {}).get(key)
-                if narrowed is False:
-                    return False
+            narrowed = package.get("collectors", {}).get(group, {}).get(key)
+            if narrowed is False:
+                return False
         return True
 
     def _package_excluded_keys(self, group: str, package: Dict) -> List[str]:
         """Toggle keys this package's configs turned off that the global
         config would otherwise run -- i.e. exclusions attributable to
-        package_config/ or the project's own file, not to the operator.
+        package_config, not to the operator.
         Recorded on the dimension result so a deliberate exclusion is
         distinguishable from a collector that simply crashed.
         """
         toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
         known_keys = KNOWN_COLLECTOR_KEYS[group]
         candidate_keys = set(toggles) & known_keys
-        for cfg_key in ("package_config", "project_config"):
-            cfg = package.get(cfg_key) or {}
-            mentioned = set(cfg.get("collectors", {}).get(group, {}))
-            unrecognized = mentioned - known_keys
-            if unrecognized:
-                logger.warning(
-                    f"{package.get('repository')}: ignoring unrecognized "
-                    f"{group} collector key(s) in {cfg_key}: {sorted(unrecognized)}"
-                )
-            candidate_keys |= mentioned & known_keys
+        mentioned = set(package.get("collectors", {}).get(group, {}))
+        unrecognized = mentioned - known_keys
+        if unrecognized:
+            logger.warning(
+                f"{package.get('repository')}: ignoring unrecognized "
+                f"{group} collector key(s) in package_config: {sorted(unrecognized)}"
+            )
+        candidate_keys |= mentioned & known_keys
         return sorted(
             key
             for key in candidate_keys
@@ -508,28 +491,6 @@ class MetricsOrchestrator:
         """Extract GitHub token from resolved config"""
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
         return token if token else None
-
-    @staticmethod
-    def _is_known_non_github_repo(repo_url: str) -> bool:
-        """Whether repo_url is known to point somewhere other than github.com.
-
-        Every collector's actual network calls go through api.github.com /
-        raw.githubusercontent.com regardless of what host repo_url names --
-        integrations/github_api.py's own URL parser correctly rejects a
-        non-GitHub URL, but several sub-collectors (e.g.
-        CommunityHealthCollector._extract_owner_repo) parse owner/repo
-        generically without checking the host, so they don't raise and
-        silently query the wrong (GitHub) URL for a GitLab-hosted repo --
-        every "does this file exist" check 404s and reports as a genuine
-        "not found", not as a skipped/pending check. Until there's a real
-        GitLab client, gate collection on this instead of trusting each
-        collector to fail loudly.
-
-        A missing/empty repo_url is *not* treated as non-GitHub -- callers
-        that don't pass one (prepare_package_list's own fallback, some
-        tests) get the same "assume GitHub" behavior collection already had.
-        """
-        return bool(repo_url) and "github.com/" not in repo_url
 
     async def _confirm_repo_exists(self, repo_url: str) -> bool:
         """Whether repo_name ("owner/repo") resolves to a real, accessible
@@ -545,12 +506,14 @@ class MetricsOrchestrator:
         package from the run; per-collector gap handling is the right tool
         for that uncertainty.
         """
-        owner, repo = GitHubClient.extract_owner_repo(repo_url)
-        token = self._get_github_token()
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        if token:
-            headers["Authorization"] = f"token {token}"
         try:
+            owner, repo = GitHubClient.extract_owner_repo(repo_url)
+
+            token = self._get_github_token()
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            if token:
+                headers["Authorization"] = f"token {token}"
+
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
                     f"https://api.github.com/repos/{owner}/{repo}", headers=headers
@@ -932,7 +895,7 @@ class MetricsOrchestrator:
             # and report a false "not found"/"failing" result.
             logger.info(
                 f"Skipping collection for {package['name']}: "
-                f"{package["repo_url"]} is not a GitHub repo, not yet supported"
+                f"{package['repo_url']} is not a GitHub repo, not yet supported"
             )
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
@@ -940,7 +903,7 @@ class MetricsOrchestrator:
         elif not await self._confirm_repo_exists(package["repo_url"]):
             logger.error(
                 f"Skipping collection for {package['name']}: "
-                f"{package["repo_url"]} does not exist"
+                f"{package['repo_url']} does not exist"
             )
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
@@ -985,7 +948,6 @@ class MetricsOrchestrator:
                 "ecosystem": ecosystem_metrics,
                 "quality": quality_metrics,
             },
-            "project_config": package.get("project_config", {}),
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -1131,29 +1093,7 @@ class MetricsOrchestrator:
 
         logger.info(f"Summary report written to {output_file}")
 
-    def _merged_overrides(self, repo_name: str, metrics: Dict) -> Dict[str, Dict[str, str]]:
-        """Section -> {label: replacement text} from both config layers.
-
-        The project's own metrics file (fetched during collection, so it
-        travels on `metrics`) and the maintainer's central
-        package_config/<owner>_<repo>.yaml (re-read fresh here since it's a
-        cheap local file). On a conflicting label within the same section,
-        the maintainer's central file wins -- applied second, below.
-        """
-        project_overrides: Dict[str, Dict[str, str]] = (
-            metrics.get("project_config", {}).get("overrides", {})
-        )
-        pkg_config = self._load_package_config(repo_name)
-        central_overrides: Dict[str, Dict[str, str]] = pkg_config.get("overrides", {})
-
-        merged: Dict[str, Dict[str, str]] = {}
-        for section, labels in project_overrides.items():
-            merged.setdefault(section, {}).update(labels)
-        for section, labels in central_overrides.items():
-            merged.setdefault(section, {}).update(labels)
-        return merged
-
-    def _transform_for_dashboard(self, repo_name: str, metrics: Dict) -> Dict:
+    def _transform_for_dashboard(self, metrics: Dict, overrides: Dict[str, Dict[str, str]]) -> Dict:
         """Transform internal metrics into the per-package CASS v3 format.
 
         The dashboard expects per-package files at:
@@ -1163,12 +1103,11 @@ class MetricsOrchestrator:
         each with a ``title`` and ``data`` (HTML string or None).
         """
         dims = metrics.get("dimensions", {})
-        pkg_overrides = self._merged_overrides(repo_name, metrics)
 
         def _stub(section_num: str) -> Optional[str]:
             """Return a stub HTML block if the section has any overrides, else None."""
-            if section_num in pkg_overrides:
-                return self._build_stub_section(section_num, pkg_overrides[section_num])
+            if section_num in overrides:
+                return self._build_stub_section(section_num, overrides[section_num])
             return None
 
         def _sub_row(sub: Dict, key: str) -> str:
@@ -2264,7 +2203,7 @@ class MetricsOrchestrator:
         section_438_data = "\n".join(section_438_lines) if section_438_lines else None
 
         # Apply per-package overrides to all collected sections
-        ov = pkg_overrides
+        ov = overrides
         section_411_data = self._apply_section_overrides(section_411_data, ov.get("4.1.1", {}))
         section_421_data = self._apply_section_overrides(section_421_data, ov.get("4.2.1", {}))
         section_422_data = self._apply_section_overrides(section_422_data, ov.get("4.2.2", {}))
@@ -2348,39 +2287,38 @@ class MetricsOrchestrator:
         Creates: output/{repo-name}-metrics/metrics.json for each package,
         and beside it report.html -- the same results as one readable page
         with the thresholds each row was judged against (see
-        project_report.py). These are uploaded as workflow artifacts and
+        package_report.py). These are uploaded as workflow artifacts and
         downloaded by the dashboard's update workflow into
         explore/github-data/.
         """
         failed = []
         written: Dict[str, str] = {}
 
-        for repo_name, metrics in all_metrics.items():
+        for package_name, metrics in all_metrics.items():
 
             # One package's rendering error used to abort the loop and drop
             # every later package's output; write the rest, then fail the run.
             try:
+                overrides = catalog[package_name].get("overrides", {})
                 dashboard_data = {
-                    "package": repo_name,
-                    "metadata": catalog[repo_name],
-                    "metrics": self._transform_for_dashboard(repo_name, metrics)
+                    "package": package_name,
+                    "metadata": catalog[package_name],
+                    "metrics": self._transform_for_dashboard(metrics, overrides)
                 }
             except Exception as e:
-                logger.error(f"Could not render dashboard output for {repo_name}: {e!r}", exc_info=True)
-                failed.append(repo_name)
+                logger.error(f"Could not render dashboard output for {package_name}: {e!r}", exc_info=True)
+                failed.append(package_name)
                 continue
 
-            # Extract repo part from "Owner/repo" for directory name
-            repo_short = repo_name.split("/")[-1]
             # The dashboard keys files by repository name alone, so two
             # catalog entries with the same name overwrite each other.
-            if repo_short.lower() in written:
+            if package_name.lower() in written:
                 logger.error(
-                    f"{repo_name} and {written[repo_short.lower()]} both write "
-                    f"{repo_short}-metrics/metrics.json; the dashboard shows only {repo_name}"
+                    f"Two catalog entries use the same name '{package_name}', "
+                    f"only the first will be used"
                 )
-            written[repo_short.lower()] = repo_name
-            metrics_dir = self.output_path / f"{repo_short}-metrics"
+            written[package_name.lower()] = package_name
+            metrics_dir = self.output_path / f"{package_name}-metrics"
             metrics_dir.mkdir(parents=True, exist_ok=True)
 
             output_file = metrics_dir / "metrics.json"
@@ -2391,12 +2329,12 @@ class MetricsOrchestrator:
 
             report_file = metrics_dir / "report.html"
             report_file.write_text(
-                render_project_report(
-                    repo_name,
+                render_package_report(
+                    package_name,
                     dashboard_data["metrics"],
                     metrics,
                     self._metric_weights(),
-                    self._merged_overrides(repo_name, metrics),
+                    catalog[package_name].get("overrides", {})
                 )
             )
 

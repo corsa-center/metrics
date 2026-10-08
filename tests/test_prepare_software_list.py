@@ -81,6 +81,6 @@ class TestGrouping:
 class TestCatalogFetchFailure:
     def test_unreachable_catalog_raises_instead_of_returning_empty(self, orch):
         # An empty dict made a scheduled run report success with 0 packages.
-        with patch.object(orch, "_fetch_json", return_value=None):
+        with patch.object(orch, "_fetch_catalog_files", return_value=None):
             with pytest.raises(RuntimeError, match="software catalog"):
                 asyncio.run(orch.load_software_catalog())
