@@ -77,6 +77,18 @@ related_repositories:
   - spack/spack-packages
 ```
 
+A package that isn't ready to be shown publicly can set `published: false`. The
+dashboard then asks for a password before showing that package's page, checked
+against `password_sha256`, the hex SHA-256 of the password:
+
+```yaml
+published: false
+password_sha256: "<output of: printf %s 'the-password' | sha256sum>"
+```
+
+This is a courtesy gate, not access control: the dashboard is a static site, so
+the package's `metrics.json` (hash included) can still be fetched directly.
+
 ## Provenance
 
 Every package's output includes `config_exclusions`, listing which toggle
