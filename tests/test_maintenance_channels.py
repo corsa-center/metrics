@@ -3,13 +3,12 @@
 import pytest
 
 from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    # None: every test here exercises pure computation methods that never
-    # touch self.forge.
-    return ActiveMaintenanceCollector(None)
+    return ActiveMaintenanceCollector(FakeForge())
 
 
 def _weeks(prior, recent):
@@ -215,3 +214,12 @@ class TestVersionTagsAsReleases:
         rel = self._run([], self._tags(("compass-2026-03-21", "2026-03-21T00:00:00Z"),
                                        ("release-2022.05.15", "2022-05-15T00:00:00Z")))
         assert [r["tag_name"] for r in rel] == ["release-2022.05.15"]
+
+
+class TestPlatformLabels:
+    def test_gitlab_tracker_is_labelled_gitlab(self):
+        from tests.fakes import gitlab_fake
+        out = ActiveMaintenanceCollector(gitlab_fake())._analyze_channels(
+            {"has_issues": True}, "", community_issues=100)
+        assert "GitLab Issues" in out["found"]
+        assert not any("GitHub" in c for c in out["found"])

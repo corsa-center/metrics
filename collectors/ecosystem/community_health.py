@@ -261,12 +261,12 @@ class CommunityHealthCollector:
         if not present:
             return {"groups_found": [], "documents_read": 0}
         located = [
-            (d["repository"].split("/", 1)[0], d["repository"].split("/", 1)[1], d["file_path"])
+            (d["repository"], d["file_path"])
             for d in present if not d.get("section_text")
         ]
         # A README section is read on its own, not the whole README.
         texts = list(await asyncio.gather(
-            *[self._get_file_text(o, r, p) for o, r, p in located],
+            *[self._get_file_text(client, r, p) for r, p in located],
             return_exceptions=True,
         )) + [d["section_text"] for d in present if d.get("section_text")]
         corpus = " ".join(

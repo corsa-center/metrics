@@ -247,15 +247,16 @@ class ActiveMaintenanceCollector:
         when people outside the maintainer group actually use it -- every
         repository has one, so its mere presence says nothing."""
         found = []
+        platform = self.forge.display_name
         if repo_info.get("has_discussions"):
-            found.append("GitHub Discussions")
+            found.append(f"{platform} Discussions")
         if repo_info.get("has_wiki") and wiki_has_content:
             found.append("Wiki")
         min_issues = get_threshold(
             "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
         if (repo_info.get("has_issues", True) and community_issues is not None
                 and community_issues >= min_issues):
-            found.append("GitHub Issues")
+            found.append(f"{platform} Issues")
 
         for label, pattern in _CHANNEL_PATTERNS.items():
             if readme and pattern.search(readme):

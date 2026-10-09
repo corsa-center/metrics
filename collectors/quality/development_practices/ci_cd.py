@@ -26,7 +26,6 @@ from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
-_GITHUB_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
 class CICDMetricsCollector:
@@ -184,6 +183,9 @@ class CICDMetricsCollector:
     ) -> Dict[str, Any]:
         """Per-workflow and overall success percentage across the last 30 runs."""
         workflows = await self.forge.ci_workflows(client, ref)
+        if workflows == [] and self.forge.platform != "github":
+            # GitLab has no named workflows; its pipelines are the runs.
+            return await self._pipeline_success(client, ref)
         if not workflows:
             if workflows is COLLECTION_GAP:
                 logger.error(f"Error fetching workflows for {ref}: collection gap")
@@ -209,6 +211,21 @@ class CICDMetricsCollector:
         return {
             "workflow_success_percentage": workflow_success_pct,
             "total_workflow_success_percentage": total_successes / max(total_runs, 1) * 100,
+        }
+
+    async def _pipeline_success(self, client: httpx.AsyncClient, ref: str) -> Dict[str, Any]:
+        """Overall success rate of the last 30 finished CI runs, for forges
+        without per-workflow grouping. Only finished runs count: running,
+        pending, canceled, skipped and manual pipelines say nothing about
+        whether the build passes."""
+        runs = await self.forge.ci_runs(client, ref, per_page=30)
+        finished = [r for r in runs or [] if r.get("conclusion") in ("success", "failed", "failure")]
+        if not finished:
+            return {"workflow_success_percentage": {}}
+        successes = sum(1 for r in finished if r.get("conclusion") == "success")
+        return {
+            "workflow_success_percentage": {},
+            "total_workflow_success_percentage": successes / len(finished) * 100,
         }
 
     async def deployment_frequency(
@@ -366,5 +383,11 @@ class CICDMetricsCollector:
         return info.get("default_branch") or "main"
 
     def _parse_github_datetime_string(self, date: str) -> datetime:
-        """Parse a GitHub ISO 8601 timestamp into a timezone-aware datetime."""
-        return datetime.strptime(date, _GITHUB_DATETIME_FORMAT)
+        """Parse an ISO 8601 timestamp into a timezone-aware datetime.
+
+        GitHub sends "2026-01-01T00:00:00Z"; GitLab sends fractional seconds
+        and an offset ("2026-10-08T16:30:11.964-04:00"), which the old
+        fixed strptime format rejected, failing the whole CI/CD collection.
+        """
+        parsed = datetime.fromisoformat(date.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

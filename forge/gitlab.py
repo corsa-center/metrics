@@ -950,11 +950,17 @@ class GitLabForge(Forge):
         state: str = "all", per_page: int = 100, page: int = 1,
         sort: Optional[str] = None, direction: Optional[str] = None,
     ):
-        """List merge requests -- see GitHubForge.pull_requests."""
-        params: Dict[str, Any] = {
-            "state": {"open": "opened"}.get(state, state),
-            "per_page": per_page, "page": page,
-        }
+        """List merge requests -- see GitHubForge.pull_requests.
+
+        GitHub's "closed" includes merged pull requests; GitLab's "closed"
+        means closed without merging, and "merged" is a separate state. So
+        state="closed" asks for every state and keeps the finished ones
+        (merged, closed, locked) -- otherwise merge rate, review coverage
+        and cycle time would see no merged requests at all. A page can then
+        hold fewer than per_page items.
+        """
+        api_state = {"open": "opened", "closed": "all"}.get(state, state)
+        params: Dict[str, Any] = {"state": api_state, "per_page": per_page, "page": page}
         if sort:
             params["order_by"] = {"updated": "updated_at", "created": "created_at"}.get(sort, sort)
         if direction:
@@ -965,7 +971,10 @@ class GitLabForge(Forge):
         if data is COLLECTION_GAP or data is None:
             return data
         members = await self._project_members(client, ref)
-        return [self._normalize_issue_like(pr, members) for pr in data]
+        items = [self._normalize_issue_like(pr, members) for pr in data]
+        if state == "closed":
+            items = [pr for pr in items if pr["state"] == "closed"]
+        return items
 
     async def issue_comments(
         self, client: httpx.AsyncClient, ref: str, number: int, *, per_page: int = 10

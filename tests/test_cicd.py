@@ -128,3 +128,21 @@ class TestGetDefaultBranch:
         collector.forge = FakeForge(gaps={"repo_info"})
         assert asyncio.run(collector._get_default_branch(None, "o/r")) == "main"
 
+
+class TestTimestampParsing:
+    def test_github_and_gitlab_formats(self, collector):
+        gh = collector._parse_github_datetime_string("2026-01-01T00:00:00Z")
+        gl = collector._parse_github_datetime_string("2026-10-08T16:30:11.964-04:00")
+        assert gh.tzinfo is not None and gl.tzinfo is not None
+        assert (gl - gh).days == 280
+
+
+class TestPipelineSuccessWithoutWorkflows:
+    def test_gitlab_pipelines_give_the_success_rate(self):
+        from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
+        from tests.fakes import gitlab_fake
+        runs = ([{"conclusion": "success"}] * 6 + [{"conclusion": "failed"}] * 2
+                + [{"conclusion": "running"}, {"conclusion": "canceled"}])
+        c = CICDMetricsCollector(gitlab_fake(ci_run_list=runs))
+        out = asyncio.run(c.percentage_workflow_success(None, "g/p"))
+        assert out["total_workflow_success_percentage"] == 75.0

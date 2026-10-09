@@ -125,6 +125,14 @@ for bugs:
 - **Per-workflow CI breakdown** -- GitHub Actions has named workflows as a
   first-class concept; GitLab Pipelines don't have an equivalent grouping.
   `ci_workflows`/`ci_workflow_runs` always return empty for GitLab repos.
+- **Issues closed in a date window** -- GitLab's issues API can't filter
+  by close date, so the opened-versus-closed comparison in 4.2.4 is not
+  collected; the resolution cohort still is.
+- **Maintainer vs. outside contributor** -- GitLab has no author
+  association field, so membership comes from the project members API,
+  which needs a token on most instances. Without one, every author counts
+  as an outside contributor. Set the host's token under
+  `api_credentials.gitlab.<host>`.
 - **Community profile** (`/community/profile`) -- a GitHub-only aggregate
   endpoint. GitLab repos rely entirely on `community_health.py`'s own
   direct file checks (CODE_OF_CONDUCT, GOVERNANCE, CONTRIBUTING), which run

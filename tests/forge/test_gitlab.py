@@ -641,3 +641,17 @@ class TestPlatformPaths:
         assert forge.platform_paths("codeowners") == [".gitlab/CODEOWNERS"]
         assert forge.platform_paths("security_scan_workflows") == []
         assert forge.platform_paths("unknown") == []
+
+
+class TestClosedMergeRequestsIncludeMerged:
+    def test_closed_means_finished_like_github(self, forge):
+        client = _client_seq(
+            (200, [{"iid": 1, "state": "merged", "merged_at": "2026-01-02T00:00:00Z"},
+                   {"iid": 2, "state": "closed"},
+                   {"iid": 3, "state": "opened"}]),
+            (200, []),
+        )
+        prs = asyncio.run(forge.pull_requests(client, "g/p", state="closed"))
+        assert [p["number"] for p in prs] == [1, 2]
+        _, kwargs = client.get.call_args_list[0]
+        assert kwargs["params"]["state"] == "all"
