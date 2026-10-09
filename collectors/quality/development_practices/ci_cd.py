@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 
 
+_MAX_WORKFLOWS_SAMPLED = 30
+
+
 class CICDMetricsCollector:
     """Collects CI/CD development-practice metrics from GitHub (Section 4.3.2)."""
 
@@ -195,8 +198,12 @@ class CICDMetricsCollector:
         total_successes = 0
         total_runs = 0
 
-        for w in workflows:
-            runs = await self.forge.ci_workflow_runs(client, ref, w["id"])
+        # The first 30 workflows -- the size of GitHub's default page, which
+        # is what this always sampled before ci_workflows() started listing
+        # up to 100 (for CodeQL default-setup detection). HDF5 has 93; a run
+        # fetch per workflow, one at a time, tripled its collection time.
+        for w in workflows[:_MAX_WORKFLOWS_SAMPLED]:
+            runs = await self.forge.ci_workflow_runs(client, ref, w["id"], per_page=30)
             if not runs:
                 continue
             successes = sum(
