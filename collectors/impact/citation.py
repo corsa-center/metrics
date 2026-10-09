@@ -99,7 +99,7 @@ class CitationMetricCollector:
                 self._get_informal_mentions(package),
                 self._get_dependent_packages(client, package),
                 self._get_doi_resolutions(package),
-                self._get_github_stats(client, package),
+                self._get_repo_stats(client, package),
                 return_exceptions=True,
             )
 
@@ -108,7 +108,7 @@ class CitationMetricCollector:
         informal_mentions = results[1] if not isinstance(results[1], Exception) else 0
         dependent_packages = results[2] if not isinstance(results[2], Exception) else 0
         doi_resolutions = results[3] if not isinstance(results[3], Exception) else 0
-        github_stats = results[4] if not isinstance(results[4], Exception) else {"stars": 0, "forks": 0}
+        repo_stats = results[4] if not isinstance(results[4], Exception) else {"stars": 0, "forks": 0}
 
         # Log any exceptions
         for i, result in enumerate(results):
@@ -118,7 +118,7 @@ class CitationMetricCollector:
                     "informal_mentions",
                     "dependent_packages",
                     "doi_resolutions",
-                    "github_stats",
+                    "repo_stats",
                 ]
                 self.logger.error(f"Error collecting {metric_names[i]}: {result}")
 
@@ -161,11 +161,13 @@ class CitationMetricCollector:
                     "weight": self.sub_metric_weights["doi_resolutions"],
                 },
             },
-            # Unweighted evidence — GitHub stars/forks, shown in reports but not
-            # part of the weighted score above.
-            "github_stats": {
-                "stars": github_stats.get("stars", 0),
-                "forks": github_stats.get("forks", 0),
+            # Unweighted evidence — stars/forks on the project's forge, shown
+            # in reports but not part of the weighted score above. `platform`
+            # labels them ("GitHub Stars", "GitLab Stars").
+            "repo_stats": {
+                "stars": repo_stats.get("stars", 0),
+                "forks": repo_stats.get("forks", 0),
+                "platform": self.forge.display_name,
             },
             "metadata": {
                 "timestamp": asyncio.get_event_loop().time(),
@@ -314,7 +316,7 @@ class CitationMetricCollector:
             return 0
         return stats.get("forks", 0)
 
-    async def _get_github_stats(
+    async def _get_repo_stats(
         self, client: httpx.AsyncClient, package: Dict[str, Any]
     ) -> Dict[str, int]:
         """Get stars and forks counts (unweighted evidence, not scored)"""

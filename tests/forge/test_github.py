@@ -330,3 +330,79 @@ class TestGithubGet:
         client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
         result = asyncio.run(forge._github_get(client, "https://api.github.com/repos/o/r"))
         assert result is COLLECTION_GAP
+
+
+class TestNewSemanticMethods:
+    def test_urls(self, forge):
+        assert forge.web_url("o/r", "a.md") == "https://github.com/o/r/blob/HEAD/a.md"
+        assert forge.web_url("o/r", "docs", "tree") == "https://github.com/o/r/tree/HEAD/docs"
+        assert forge.raw_url("o/r", "a.md") == "https://raw.githubusercontent.com/o/r/HEAD/a.md"
+
+    def test_ci_config_files_lists_yaml_workflows(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, [
+            {"name": "ci.yml", "path": ".github/workflows/ci.yml", "html_url": "u", "type": "file"},
+            {"name": "README.md", "path": ".github/workflows/README.md", "html_url": "v", "type": "file"},
+        ]))
+        files = asyncio.run(forge.ci_config_files(client, "o/r"))
+        assert files == [{"name": "ci.yml", "path": ".github/workflows/ci.yml", "html_url": "u", "primary": False}]
+
+    def test_version_tags_need_a_token(self, forge):
+        assert asyncio.run(forge.version_tags(AsyncMock(), "o/r")) == []
+
+    def test_version_tags_filter_and_date(self):
+        forge = GitHubForge("tok")
+        client = AsyncMock()
+        client.post = AsyncMock(return_value=_resp(200, {"data": {"repository": {"refs": {"nodes": [
+            {"name": "v2.0", "target": {"__typename": "Commit", "committedDate": "2026-01-01T00:00:00Z"}},
+            {"name": "v2.0rc1", "target": {"__typename": "Commit", "committedDate": "2025-12-01T00:00:00Z"}},
+        ]}}}}))
+        tags = asyncio.run(forge.version_tags(client, "o/r"))
+        assert tags == [{"tag_name": "v2.0", "published_at": "2026-01-01T00:00:00Z", "from_tag": True}]
+
+    def test_recent_issues_searches_issues_only(self, forge, monkeypatch):
+        import forge.github as gh
+        seen = {}
+
+        async def fake_search_get(client, url, headers):
+            seen["url"] = url
+            return _resp(200, {"items": [{"number": 1, "author_association": "NONE"}]})
+        monkeypatch.setattr(gh, "search_get", fake_search_get)
+        items = asyncio.run(forge.recent_issues(AsyncMock(), "o/r", "2025-10-01", page=2))
+        assert items[0]["is_outsider"] is True
+        assert "is%3Aissue" in seen["url"] and "page=2" in seen["url"]
+
+    def test_issue_windows(self, forge, monkeypatch):
+        import forge.github as gh
+
+        async def fake_search_get(client, url, headers):
+            if "closed%3A" in url:
+                return _resp(200, {"total_count": 7, "items": []})
+            return _resp(200, {"total_count": 9, "items": [{"number": 3, "author_association": "MEMBER"}]})
+        monkeypatch.setattr(gh, "search_get", fake_search_get)
+        opened = asyncio.run(forge.issues_opened_between(AsyncMock(), "o/r", "2025-01-01", "2025-12-31"))
+        assert opened["total_count"] == 9 and opened["items"][0]["is_outsider"] is False
+        assert asyncio.run(forge.issues_closed_between(AsyncMock(), "o/r", "2025-01-01", "2025-12-31")) == 7
+
+    def test_search_failure_is_unknown(self, forge, monkeypatch):
+        import forge.github as gh
+
+        async def fake_search_get(client, url, headers):
+            return None
+        monkeypatch.setattr(gh, "search_get", fake_search_get)
+        assert asyncio.run(forge.recent_issues(AsyncMock(), "o/r", "2025-10-01")) is None
+        assert asyncio.run(forge.issues_closed_between(AsyncMock(), "o/r", "a", "b")) is None
+
+    def test_labels(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, [{"name": "bug", "color": "f00"}]))
+        assert asyncio.run(forge.labels(client, "o/r")) == [{"name": "bug"}]
+
+    def test_ci_workflows_carry_path_and_state(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, {"workflows": [
+            {"id": 1, "name": "CodeQL", "path": "dynamic/github-code-scanning/codeql",
+             "state": "active", "html_url": "h"}]}))
+        wf = asyncio.run(forge.ci_workflows(client, "o/r"))
+        assert wf == [{"id": 1, "name": "CodeQL", "path": "dynamic/github-code-scanning/codeql",
+                       "state": "active", "html_url": "h"}]

@@ -181,3 +181,55 @@ class TestRepoTreeOnGitLab:
         assert tree.url_for("README.md") == "https://gitlab.kitware.com/paraview/paraview/-/blob/HEAD/README.md"
         assert tree.match_url([".gitlab/issue_templates"]) == (
             "https://gitlab.kitware.com/paraview/paraview/-/tree/HEAD/.gitlab/issue_templates")
+
+
+class TestRepoTreeCache:
+    """About ten collectors ask for the same package's tree; on GitLab that
+    is up to hundreds of paged requests, so it is fetched once per package."""
+
+    def _counting_forge(self, result=None):
+        from tests.fakes import FakeForge
+        forge = FakeForge(files={"README.md": "x"})
+        calls = []
+        original = forge.repo_tree
+
+        async def repo_tree(client, ref):
+            calls.append(ref)
+            return result if result is not None else await original(client, ref)
+        forge.repo_tree = repo_tree
+        return forge, calls
+
+    def test_second_fetch_is_served_from_cache(self):
+        forge, calls = self._counting_forge()
+
+        async def go():
+            a = await RepoTree.fetch(None, forge, "o/r")
+            b = await RepoTree.fetch(None, forge, "o/r")
+            return a, b
+        a, b = asyncio.run(go())
+        assert a is b and calls == ["o/r"]
+
+    def test_concurrent_fetches_share_one_request(self):
+        forge, calls = self._counting_forge()
+
+        async def go():
+            return await asyncio.gather(*[RepoTree.fetch(None, forge, "o/r") for _ in range(5)])
+        trees = asyncio.run(go())
+        assert len(calls) == 1 and all(t is trees[0] for t in trees)
+
+    def test_gaps_are_not_cached(self):
+        forge, calls = self._counting_forge(result=COLLECTION_GAP)
+
+        async def go():
+            return [await RepoTree.fetch(None, forge, "o/r") for _ in range(2)]
+        assert asyncio.run(go()) == [COLLECTION_GAP, COLLECTION_GAP]
+        assert len(calls) == 2
+
+    def test_different_repositories_are_cached_separately(self):
+        forge, calls = self._counting_forge()
+
+        async def go():
+            await RepoTree.fetch(None, forge, "o/r")
+            await RepoTree.fetch(None, forge, "o/other")
+        asyncio.run(go())
+        assert calls == ["o/r", "o/other"]

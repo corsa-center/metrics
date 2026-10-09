@@ -55,6 +55,11 @@ logger = logging.getLogger(__name__)
 # the same order of magnitude as other bounded pagination in this codebase
 # (e.g. active_maintenance.py's own _MAX_CONTRIBUTOR_PAGES precedent).
 _MAX_STATS_PAGES = 10
+# The tree feeds RepoTree, which most file checks now go through, so a
+# truncated tree turns into false "absent" results. ParaView's tree is ~12k
+# entries (120 pages); this covers 30k. RepoTree.fetch caches the result
+# per package, so the cost is paid once, not once per collector.
+_MAX_TREE_PAGES = 300
 
 # GitLab issue/MR states that read as "closed" in GitHub's two-state model
 # (GitHub represents "merged" as state=closed + a populated merged_at,
@@ -717,14 +722,14 @@ class GitLabForge(Forge):
         """Whole file layout -- see GitHubForge.repo_tree.
 
         GitLab's tree API paginates rather than returning everything (with
-        a truncation flag) in one call -- paged up to _MAX_STATS_PAGES
+        a truncation flag) in one call -- paged up to _MAX_TREE_PAGES
         pages of 100 here; `truncated` is set when that cap is hit, same
         meaning as GitHub's own truncation flag (ratios computed from the
         result should be treated as approximate).
         """
         files: List[Dict[str, Any]] = []
         truncated = False
-        for page in range(1, _MAX_STATS_PAGES + 1):
+        for page in range(1, _MAX_TREE_PAGES + 1):
             data = await self._gitlab_get(
                 client, f"/projects/{self._project_path(ref)}/repository/tree",
                 params={"recursive": "true", "per_page": 100, "page": page},

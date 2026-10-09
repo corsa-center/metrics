@@ -39,3 +39,12 @@ def _no_real_network(monkeypatch):
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked)
     yield
     assert not attempts, f"test attempted real network access: {attempts}"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_tree_cache():
+    """RepoTree.fetch caches per (platform, host, ref); tests reuse "o/r"."""
+    from collectors.ecosystem.base import _clear_tree_cache
+    _clear_tree_cache()
+    yield
+    _clear_tree_cache()

@@ -8,8 +8,10 @@ and forge/interface.py. COLLECTION_GAP and RetryingTransport are re-exported
 here so existing imports keep working.
 """
 
+import asyncio
 import logging
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -71,6 +73,23 @@ PUBLIC_CHANNEL_PATTERNS = {
 }
 
 
+# Fetched trees, shared by every collector in a run: about ten collectors
+# each want the same package's tree, and on GitLab one tree is up to a few
+# hundred paginated requests. Bounded LRU, since a large repository's index
+# (llvm-project: ~150k paths) shouldn't be kept for the whole portfolio run;
+# packages are collected a few at a time, so recent entries are the ones
+# still being asked for. Gaps aren't cached -- a later collector retries.
+_TREE_CACHE_SIZE = 8
+_tree_cache: "OrderedDict[tuple, RepoTree]" = OrderedDict()
+_tree_inflight: Dict[tuple, "asyncio.Future"] = {}
+
+
+def _clear_tree_cache() -> None:
+    """Test-only: module-level cache state must not leak between tests."""
+    _tree_cache.clear()
+    _tree_inflight.clear()
+
+
 class RepoTree:
     """Case-insensitive index of every path in a repo's default-branch tree,
     fetched once and reused for every file/format check a collector needs.
@@ -118,7 +137,37 @@ class RepoTree:
     async def fetch(cls, client: httpx.AsyncClient, forge: Forge, ref: str):
         """A RepoTree for the default branch, or COLLECTION_GAP if the tree
         couldn't be fetched (including a confirmed-missing repository, which
-        _confirm_repo_exists screens out before collection anyway)."""
+        _confirm_repo_exists screens out before collection anyway).
+
+        Cached per (platform, host, ref) and de-duplicated while in flight;
+        see _tree_cache."""
+        key = (forge.platform, forge.host, ref)
+        if key in _tree_cache:
+            _tree_cache.move_to_end(key)
+            return _tree_cache[key]
+        loop_key = (id(asyncio.get_running_loop()),) + key
+        pending = _tree_inflight.get(loop_key)
+        if pending is not None:
+            return await asyncio.shield(pending)
+        future = asyncio.get_running_loop().create_future()
+        _tree_inflight[loop_key] = future
+        try:
+            tree = await cls._fetch_uncached(client, forge, ref)
+            if tree is not COLLECTION_GAP:
+                _tree_cache[key] = tree
+                while len(_tree_cache) > _TREE_CACHE_SIZE:
+                    _tree_cache.popitem(last=False)
+            future.set_result(tree)
+            return tree
+        except BaseException as e:
+            future.set_exception(e)
+            future.exception()  # mark retrieved when nobody else is waiting
+            raise
+        finally:
+            _tree_inflight.pop(loop_key, None)
+
+    @classmethod
+    async def _fetch_uncached(cls, client: httpx.AsyncClient, forge: Forge, ref: str):
         data = await forge.repo_tree(client, ref)
         if not data or data is COLLECTION_GAP:
             return COLLECTION_GAP

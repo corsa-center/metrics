@@ -524,3 +524,120 @@ class TestFileMetadataDownloadUrl:
         result = asyncio.run(forge.file_metadata(client, "g/p", "CODE_OF_CONDUCT.md"))
         assert result["html_url"] == "https://gitlab.example.com/g/p/-/blob/main/CODE_OF_CONDUCT.md"
         assert result["download_url"] == "https://gitlab.example.com/g/p/-/raw/main/CODE_OF_CONDUCT.md"
+
+
+def _client_seq(*responses):
+    """A client whose successive GETs return the given (status, body[, headers])."""
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=[_resp(*r) for r in responses])
+    return client
+
+
+class TestFileExistsDirectories:
+    """GitLab's Files API 404s for a directory; the tree API answers instead."""
+
+    def test_directory_found_via_tree(self, forge):
+        client = _client_seq((404, None), (200, [{"name": "Bug.md", "type": "blob"}]))
+        result = asyncio.run(forge.file_exists(client, "g/p", ".gitlab/issue_templates"))
+        assert result == "https://gitlab.example.com/g/p/-/tree/HEAD/.gitlab/issue_templates"
+
+    def test_missing_path_is_none(self, forge):
+        client = _client_seq((404, None), (404, None))
+        assert asyncio.run(forge.file_exists(client, "g/p", "nope")) is None
+
+    def test_tree_gap_is_a_gap(self, forge):
+        client = _client_seq((404, None), (503, None))
+        assert asyncio.run(forge.file_exists(client, "g/p", "tests")) is COLLECTION_GAP
+
+
+class TestCiConfigFiles:
+    def _run(self, forge, root_text, status=200):
+        import base64
+        body = {"content": base64.b64encode(root_text.encode()).decode()} if status == 200 else None
+        return asyncio.run(forge.ci_config_files(_client(body, status_code=status), "g/p"))
+
+    def test_root_file_and_local_includes(self, forge):
+        files = self._run(forge, (
+            "include:\n"
+            "  - local: .gitlab/os-linux.yml\n"
+            "  - local: '/.gitlab/os-macos.yml'\n"
+            "  - local: .gitlab/ci/*.yml\n"
+            "  - template: Jobs/SAST.gitlab-ci.yml\n"
+        ))
+        assert [f["path"] for f in files] == [".gitlab-ci.yml", ".gitlab/os-linux.yml", ".gitlab/os-macos.yml"]
+        assert files[0]["primary"] is True and files[1]["primary"] is False
+
+    def test_no_gitlab_ci_is_empty(self, forge):
+        assert self._run(forge, "", status=404) == []
+
+    def test_gap_passes_through(self, forge):
+        assert self._run(forge, "", status=503) is COLLECTION_GAP
+
+
+class TestUrls:
+    def test_web_and_raw_urls(self, forge):
+        assert forge.web_url("g/p", "a/b.md") == "https://gitlab.example.com/g/p/-/blob/HEAD/a/b.md"
+        assert forge.web_url("g/p", "docs", "tree") == "https://gitlab.example.com/g/p/-/tree/HEAD/docs"
+        assert forge.raw_url("g/p", "a/b.md") == "https://gitlab.example.com/g/p/-/raw/HEAD/a/b.md"
+
+
+class TestVersionTags:
+    def test_filters_and_dates(self, forge):
+        client = _client([
+            {"name": "v6.2.0", "created_at": "2026-09-29T17:25:01Z", "commit": {"committed_date": "x"}},
+            {"name": "v6.2.0-RC2", "created_at": None, "commit": {"committed_date": "2026-09-09T00:00:00Z"}},
+            {"name": "v6.1.0", "created_at": None, "commit": {"committed_date": "2026-03-01T00:00:00Z"}},
+            {"name": "nightly", "commit": {"committed_date": "2026-10-01T00:00:00Z"}},
+        ])
+        tags = asyncio.run(forge.version_tags(client, "g/p"))
+        assert tags == [
+            {"tag_name": "v6.2.0", "published_at": "2026-09-29T17:25:01Z", "from_tag": True},
+            {"tag_name": "v6.1.0", "published_at": "2026-03-01T00:00:00Z", "from_tag": True},
+        ]
+
+    def test_failure_is_empty(self, forge):
+        assert asyncio.run(forge.version_tags(_client(None, status_code=503), "g/p")) == []
+
+
+class TestWikiAndLabels:
+    def test_wiki_with_pages(self, forge):
+        assert asyncio.run(forge.wiki_has_content(_client([{"slug": "home"}]), "g/p")) is True
+
+    def test_wiki_disabled_or_empty(self, forge):
+        assert asyncio.run(forge.wiki_has_content(_client(None, status_code=403), "g/p")) is False
+        assert asyncio.run(forge.wiki_has_content(_client([]), "g/p")) is False
+
+    def test_labels_include_ancestor_groups(self, forge):
+        client = _client([{"name": "good first issue", "color": "#fff"}])
+        assert asyncio.run(forge.labels(client, "g/p")) == [{"name": "good first issue"}]
+        _, kwargs = client.get.call_args
+        assert kwargs["params"]["include_ancestor_groups"] == "true"
+
+
+class TestIssueWindows:
+    def test_recent_issues_are_filtered_by_creation_date(self, forge):
+        client = _client_seq((200, [{"iid": 1, "state": "opened", "author": {"username": "x"}}]), (200, []))
+        items = asyncio.run(forge.recent_issues(client, "g/p", "2025-10-01"))
+        assert items[0]["number"] == 1 and items[0]["is_outsider"] is True
+        _, kwargs = client.get.call_args_list[0]
+        assert kwargs["params"]["created_after"] == "2025-10-01T00:00:00Z"
+
+    def test_opened_between_uses_x_total(self, forge):
+        client = _client_seq((200, [{"iid": 1, "state": "closed"}], {"X-Total": "42"}), (200, []))
+        result = asyncio.run(forge.issues_opened_between(client, "g/p", "2025-01-01", "2025-12-31"))
+        assert result["total_count"] == 42 and len(result["items"]) == 1
+
+    def test_opened_between_without_total_is_unknown(self, forge):
+        client = _client_seq((200, [{"iid": 1}]))
+        assert asyncio.run(forge.issues_opened_between(client, "g/p", "2025-01-01", "2025-12-31")) is None
+
+    def test_closed_between_is_not_available(self, forge):
+        assert asyncio.run(forge.issues_closed_between(AsyncMock(), "g/p", "a", "b")) is None
+
+
+class TestPlatformPaths:
+    def test_gitlab_locations(self, forge):
+        assert forge.platform_paths("issue_templates") == [".gitlab/issue_templates"]
+        assert forge.platform_paths("codeowners") == [".gitlab/CODEOWNERS"]
+        assert forge.platform_paths("security_scan_workflows") == []
+        assert forge.platform_paths("unknown") == []

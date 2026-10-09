@@ -144,7 +144,7 @@ class UsabilityCollector:
     async def _find_documentation_site(
         self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
-        """A published documentation site, from GitHub Pages or the homepage."""
+        """A published documentation site, from the forge's Pages or the homepage."""
         data = await self.forge.repo_info(client, ref)
         if data is COLLECTION_GAP:
             return None, True

@@ -358,3 +358,36 @@ class TestChaossScoreNone:
         orchestrator.output_path = tmp_path
         orchestrator._write_dashboard_output({"A/tool": {}, "a/Tool": {}}, {"A/tool": _base_metrics(), "a/Tool": _base_metrics()})
         assert "both write tool-metrics/metrics.json" in caplog.text.lower()
+
+
+class TestPlatformLabels:
+    """Stars, forks and code scanning are labelled by the package's forge,
+    so a GitLab project isn't reported as having "GitHub Stars"."""
+
+    def _impact(self, orchestrator, impact_sub):
+        metrics = _base_metrics()
+        metrics["dimensions"]["impact"]["sub_results"] = {
+            "sub_metrics": {"formal_citations": {"raw_value": 0}}, **impact_sub}
+        return orchestrator._transform_for_dashboard(metrics, {})
+
+    def test_gitlab_stars_and_forks(self, orchestrator):
+        result = self._impact(orchestrator, {"repo_stats": {"stars": 12, "forks": 3, "platform": "GitLab"}})
+        section = result["impact"]["4.1.1"]["data"]
+        assert "GitLab Stars:</strong> 12" in section and "GitLab Forks:</strong> 3" in section
+        assert "GitHub" not in section
+        assert (result["stars"], result["forks"]) == (12, 3)
+
+    def test_results_stored_before_the_rename_still_render(self, orchestrator):
+        result = self._impact(orchestrator, {"github_stats": {"stars": 5, "forks": 1}})
+        assert "GitHub Stars:</strong> 5" in result["impact"]["4.1.1"]["data"]
+        assert result["stars"] == 5
+
+    def test_gitlab_sast_rendering(self, orchestrator):
+        found = _base_metrics(quality_sub={"reliability": {}, "static_analysis": {
+            "has_codeql": True, "scanner": "GitLab SAST", "workflow_file": ".gitlab-ci.yml",
+            "workflow_url": "https://gitlab.example.com/g/p/-/blob/HEAD/.gitlab-ci.yml"}})
+        assert "GitLab SAST enabled" in orchestrator._transform_for_dashboard(found, {})["quality"]["4.3.1"]["data"]
+        missing = _base_metrics(quality_sub={"reliability": {}, "static_analysis": {
+            "has_codeql": False, "scanners_checked": "CodeQL or GitLab SAST"}})
+        assert ("No CodeQL or GitLab SAST workflow found"
+                in orchestrator._transform_for_dashboard(missing, {})["quality"]["4.3.1"]["data"])

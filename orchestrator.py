@@ -113,6 +113,12 @@ def _rescore_section(html: Optional[str]) -> Optional[str]:
     return _SCORE_LINE.sub(lambda _: f'<p><strong>Score:</strong> {shown}</p>', html, count=1)
 
 
+def _repo_stats(impact_sub: Dict) -> Dict:
+    """Stars/forks from the citation collector. Results stored before the
+    forge refactor carry them as "github_stats" with no platform."""
+    return impact_sub.get("repo_stats") or impact_sub.get("github_stats") or {}
+
+
 def _sanitize_package_config(data: Dict) -> Dict:
     """Coerce a package_config collectors:
     and overrides: blocks into well-formed dicts, dropping anything that
@@ -1251,20 +1257,21 @@ class MetricsOrchestrator:
             # The citation collector's "dependent_packages" is the fork
             # count (GitHub exposes no used-by count); the real reverse
             # dependencies are the Reverse-Dependency Analysis row below.
-            # It is already listed as GitHub Forks, so it isn't repeated
+            # It is already listed as Forks below, so it isn't repeated
             # under a name that claims more than it measures.
             dois = sub_metrics.get("doi_resolutions", {})
             if dois.get("raw_value", 0) > 0:
                 citation_lines.append(
                     f'<p><strong>DOI Resolutions:</strong> {dois["raw_value"]:,}</p>'
                 )
-            github_stats = impact_sub.get("github_stats", {})
-            if github_stats.get("stars", 0) > 0 or github_stats.get("forks", 0) > 0:
+            repo_stats = _repo_stats(impact_sub)
+            if repo_stats.get("stars", 0) > 0 or repo_stats.get("forks", 0) > 0:
+                platform = repo_stats.get("platform") or "GitHub"
                 citation_lines.append(
-                    f'<p><strong>GitHub Stars:</strong> {github_stats.get("stars", 0):,}</p>'
+                    f'<p><strong>{platform} Stars:</strong> {repo_stats.get("stars", 0):,}</p>'
                 )
                 citation_lines.append(
-                    f'<p><strong>GitHub Forks:</strong> {github_stats.get("forks", 0):,}</p>'
+                    f'<p><strong>{platform} Forks:</strong> {repo_stats.get("forks", 0):,}</p>'
                 )
             # Reverse-Dependency Analysis and Package-Manager Download Telemetry
             # (new measurement methods, PDF §4.1.1) — sourced from the same
@@ -1917,9 +1924,10 @@ class MetricsOrchestrator:
                 if static_analysis.get("has_codeql"):
                     rel_pts += 1
                     url = static_analysis.get("workflow_url", "")
-                    text = ("CodeQL enabled (default setup)"
+                    scanner = static_analysis.get("scanner") or "CodeQL"
+                    text = (f"{scanner} enabled (default setup)"
                             if static_analysis.get("workflow_file") == "CodeQL default setup"
-                            else "CodeQL enabled")
+                            else f"{scanner} enabled")
                     link = f'<a href="{url}">{text}</a>' if url else text
                     section_431_lines.append(f'<p><strong>Enhanced Security Analysis:</strong> {link} ✓</p>')
                 elif static_analysis.get("not_collected"):
@@ -1930,7 +1938,8 @@ class MetricsOrchestrator:
                     )
                 else:
                     section_431_lines.append(
-                        '<p><strong>Enhanced Security Analysis:</strong> No CodeQL workflow found ✗</p>'
+                        '<p><strong>Enhanced Security Analysis:</strong> No '
+                        f'{static_analysis.get("scanners_checked") or "CodeQL"} workflow found ✗</p>'
                     )
             else:
                 section_431_lines.append('<p><strong>Enhanced Security Analysis:</strong> Not yet collected</p>')
@@ -2313,7 +2322,7 @@ class MetricsOrchestrator:
         section_436_data = self._apply_section_overrides(section_436_data, ov.get("4.3.6", {}))
         section_438_data = self._apply_section_overrides(section_438_data, ov.get("4.3.8", {}))
 
-        github_stats = impact_sub.get("github_stats", {})
+        repo_stats = _repo_stats(impact_sub)
 
         # Sub-collector keys turned off by package_config/ or the project's
         # own file (not by the operator's global config) -- lets the
@@ -2325,8 +2334,8 @@ class MetricsOrchestrator:
         }
 
         result = {
-            "stars": github_stats.get("stars", 0),
-            "forks": github_stats.get("forks", 0),
+            "stars": repo_stats.get("stars", 0),
+            "forks": repo_stats.get("forks", 0),
             "config_exclusions": config_exclusions,
             "impact": {
                 "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},

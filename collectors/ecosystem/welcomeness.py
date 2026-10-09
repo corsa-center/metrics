@@ -49,10 +49,11 @@ _DECISION_PATTERNS = {
 }
 
 # Repository features that expose discussion and documentation publicly.
+# "{forge}" is the platform's name (GitHub, GitLab).
 _PUBLIC_CHANNELS = {
-    "has_discussions": "GitHub Discussions",
+    "has_discussions": "{forge} Discussions",
     "has_wiki": "Wiki",
-    "has_pages": "GitHub Pages",
+    "has_pages": "{forge} Pages",
 }
 
 # README-linked venues where a community can see decisions being made --
@@ -124,7 +125,8 @@ class WelcomenessCollector:
         flags = dict(data)
         if flags.get("has_wiki"):
             flags["has_wiki"] = await self.forge.wiki_has_content(client, ref)
-        channels = [label for flag, label in _PUBLIC_CHANNELS.items() if flags.get(flag)]
+        channels = [label.format(forge=self.forge.display_name)
+                    for flag, label in _PUBLIC_CHANNELS.items() if flags.get(flag)]
 
         text = await self.forge.readme(client, ref)
         if text:
