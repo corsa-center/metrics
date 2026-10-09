@@ -24,10 +24,10 @@ import httpx
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from collectors.rate_limit import search_get
-from forge.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP, is_release_tag
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -553,12 +553,21 @@ class GitHubForge(Forge):
         ]
 
     async def ci_workflows(self, client: httpx.AsyncClient, ref: str):
-        """List of {id, name} GitHub Actions workflow definitions, or
-        None/COLLECTION_GAP. GitHub-Actions-specific -- see ci_runs' docstring."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{ref}/actions/workflows")
+        """List of {id, name, path, state, html_url} GitHub Actions workflow
+        definitions, or None/COLLECTION_GAP. GitHub-Actions-specific -- see
+        ci_runs' docstring. Includes workflows with no file in the tree, such
+        as CodeQL "default setup" (path dynamic/github-code-scanning/...)."""
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/actions/workflows",
+            params={"per_page": 100},
+        )
         if data is COLLECTION_GAP or data is None:
             return data
-        return [{"id": w.get("id"), "name": w.get("name")} for w in data.get("workflows", [])]
+        return [
+            {"id": w.get("id"), "name": w.get("name"), "path": w.get("path", ""),
+             "state": w.get("state"), "html_url": w.get("html_url")}
+            for w in data.get("workflows", [])
+        ]
 
     async def ci_workflow_runs(
         self, client: httpx.AsyncClient, ref: str, workflow_id: Any, *, per_page: int = 100
@@ -649,6 +658,65 @@ class GitHubForge(Forge):
             return None
         return resp.json().get("total_count", 0)
 
+    async def _search_issues_page(self, client: httpx.AsyncClient, q: str, per_page: int):
+        query = urlencode({"q": q, "sort": "created", "order": "desc", "per_page": per_page})
+        resp = await search_get(
+            client, f"https://api.github.com/search/issues?{query}", self.github_headers
+        )
+        if resp is None or resp.status_code != 200:
+            return None
+        return resp.json()
+
+    async def issues_opened_between(
+        self, client: httpx.AsyncClient, ref: str, start: str, end: str, *, per_page: int = 100
+    ) -> Optional[Dict[str, Any]]:
+        """See Forge.issues_opened_between (one search)."""
+        data = await self._search_issues_page(
+            client, f"repo:{ref} is:issue created:{start}..{end}", per_page)
+        if data is None:
+            return None
+        return {
+            "total_count": data.get("total_count", 0),
+            "items": [self._normalize_issue_like(i) for i in data.get("items", [])],
+        }
+
+    async def issues_closed_between(
+        self, client: httpx.AsyncClient, ref: str, start: str, end: str
+    ) -> Optional[int]:
+        """See Forge.issues_closed_between (one search)."""
+        data = await self._search_issues_page(
+            client, f"repo:{ref} is:issue closed:{start}..{end}", 1)
+        return None if data is None else data.get("total_count", 0)
+
+    async def labels(
+        self, client: httpx.AsyncClient, ref: str, *, page: int = 1, per_page: int = 100
+    ):
+        """See Forge.labels."""
+        data = await self._github_get(
+            client, f"https://api.github.com/repos/{ref}/labels",
+            params={"per_page": per_page, "page": page},
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [{"name": l.get("name", "")} for l in data if isinstance(l, dict)]
+
+    async def recent_issues(
+        self, client: httpx.AsyncClient, ref: str, since: str, *, page: int = 1, per_page: int = 100
+    ):
+        """See Forge.recent_issues. Uses search, since the issues endpoint
+        also returns pull requests and can't exclude them server-side.
+        Shares the process-wide search rate limiter."""
+        query = urlencode({
+            "q": f"repo:{ref} is:issue created:>={since}",
+            "sort": "created", "order": "desc", "per_page": per_page, "page": page,
+        })
+        resp = await search_get(
+            client, f"https://api.github.com/search/issues?{query}", self.github_headers
+        )
+        if resp is None or resp.status_code != 200:
+            return None
+        return [self._normalize_issue_like(i) for i in resp.json().get("items", [])]
+
     async def user(self, client: httpx.AsyncClient, login: str):
         """GitHub user/org profile, or None (confirmed absent) / COLLECTION_GAP.
 
@@ -703,6 +771,58 @@ class GitHubForge(Forge):
         platforms.
         """
         return await self._github_get(client, f"https://api.github.com/repos/{ref}/languages")
+
+    def raw_url(self, ref: str, path: str) -> str:
+        return f"https://raw.githubusercontent.com/{ref}/HEAD/{path}"
+
+    def web_url(self, ref: str, path: str, kind: str = "blob") -> str:
+        return f"https://github.com/{ref}/{kind}/HEAD/{path}"
+
+    async def version_tags(self, client: httpx.AsyncClient, ref: str) -> List[Dict[str, Any]]:
+        """See Forge.version_tags. One GraphQL query, dated by the annotated
+        tag or else its commit; needs a token, so returns [] without one."""
+        if "Authorization" not in self.github_headers:
+            return []
+        owner, repo = ref.split("/", 1)
+        query = """query($o:String!,$n:String!){repository(owner:$o,name:$n){
+          refs(refPrefix:"refs/tags/",first:50,orderBy:{field:TAG_COMMIT_DATE,direction:DESC}){
+            nodes{name target{__typename ... on Commit{committedDate}
+              ... on Tag{tagger{date} target{... on Commit{committedDate}}}}}}}}"""
+        try:
+            resp = await client.post(
+                "https://api.github.com/graphql", headers=self.github_headers,
+                json={"query": query, "variables": {"o": owner, "n": repo}},
+            )
+        except Exception as e:
+            logger.warning(f"version_tags query failed for {ref}: {e!r}")
+            return []
+        if resp.status_code != 200:
+            return []
+        repo_data = (resp.json().get("data") or {}).get("repository") or {}
+        tags = []
+        for node in (repo_data.get("refs") or {}).get("nodes") or []:
+            name, target = node.get("name", ""), node.get("target") or {}
+            if not is_release_tag(name):
+                continue
+            date = ((target.get("tagger") or {}).get("date")
+                    or target.get("committedDate")
+                    or (target.get("target") or {}).get("committedDate"))
+            if date:
+                tags.append({"tag_name": name, "published_at": date, "from_tag": True})
+        return tags
+
+    async def wiki_has_content(self, client: httpx.AsyncClient, ref: str) -> bool:
+        """See Forge.wiki_has_content. GitHub's has_wiki flag is on by
+        default for every repository, so it says nothing on its own; the
+        wiki's git endpoint only answers 200 once a page exists. Not a REST
+        API call, so it costs no rate-limit quota."""
+        url = f"https://github.com/{ref}.wiki.git/info/refs?service=git-upload-pack"
+        try:
+            resp = await client.get(url)
+            return resp.status_code == 200
+        except Exception as e:
+            logger.debug(f"Could not check wiki for {ref}: {e}")
+            return False
 
     def pages_url(self, ref: str) -> str:
         """Predictable Pages URL for `ref`, regardless of whether Pages is

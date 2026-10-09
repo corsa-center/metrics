@@ -13,34 +13,39 @@ about maintainers, and stay uncollected.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import httpx
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import (
+    COLLECTION_GAP, PUBLIC_CHANNEL_PATTERNS, RepoTree, RetryingTransport, get_threshold,
+)
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
 # Places a project can conduct decision-making in the open. Grouped so any
 # variant counts once.
 _DECISION_PATHS = {
-    "Roadmap": [
-        "ROADMAP.md", "ROADMAP", "docs/roadmap.md", "doc/roadmap.md",
-        ".github/ROADMAP.md",
-    ],
-    "Meeting notes": [
-        "meetings", "docs/meetings", "MEETINGS.md", "doc/meetings",
-        "docs/meeting-notes", "notes/meetings",
-    ],
     "Decision records": [
         "docs/adr", "adr", "docs/decisions", "doc/adr", "DECISIONS.md",
         "docs/architecture-decisions",
     ],
     "Governance document": [
-        "GOVERNANCE.md", "docs/GOVERNANCE.md", ".github/GOVERNANCE.md",
+        "GOVERNANCE.md", "GOVERNANCE.rst", "docs/GOVERNANCE.md", ".github/GOVERNANCE.md",
     ],
+}
+
+# Roadmap and meeting-notes documents are matched by regex rather than a
+# literal candidate list -- a project's roadmap doesn't have to be named
+# exactly "roadmap.md" (CHIP-SPV: docs/Devicelib_roadmap.md, petsc:
+# doc/community/roadmap.md and doc/overview/gpu_roadmap.md), and meeting
+# notes don't have to live in a directory named exactly "meetings" (llvm's
+# flang subproject keeps them at flang/docs/MeetingNotes/). All four
+# portfolio repos the probe flagged use a name a fixed list never enumerated.
+_DECISION_PATTERNS = {
+    "Roadmap": r"(^|/)[\w.-]*roadmap[\w.-]*\.(md|rst|txt)$",
+    "Meeting notes": r"(^|/)meeting[-_]?notes?(/|$)|(^|/)[\w.-]*meeting[-_]?notes[\w.-]*\.(md|rst|txt)$",
 }
 
 # Repository features that expose discussion and documentation publicly.
@@ -49,6 +54,11 @@ _PUBLIC_CHANNELS = {
     "has_wiki": "Wiki",
     "has_pages": "GitHub Pages",
 }
+
+# README-linked venues where a community can see decisions being made --
+# the same definitions 4.2.3 counts. Help desks are support, not
+# deliberation, so they're left out.
+_README_CHANNELS = ("Mailing list", "Forum", "Chat (Slack/Discord/Matrix)")
 
 
 class WelcomenessCollector:
@@ -69,7 +79,7 @@ class WelcomenessCollector:
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
                 self._get_public_channels(client, ref),
-                self._find_decision_documents(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
                 return_exceptions=True,
             )
 
@@ -79,11 +89,10 @@ class WelcomenessCollector:
         else:
             channels, channels_gap = results[0]
 
+        tree = COLLECTION_GAP if isinstance(results[1], Exception) else results[1]
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=decision_documents reason=exception:{results[1]!r}")
-            documents = {"found": [], "not_collected": [], "details": {}}
-        else:
-            documents = results[1]
+        documents = self._find_decision_documents(tree)
 
         return {
             "package_name": repo_name,
@@ -97,7 +106,13 @@ class WelcomenessCollector:
     async def _get_public_channels(
         self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
-        """Discussions / wiki / pages flags, straight off the repository object.
+        """Discussions / wiki / pages flags off the repository object, plus
+        channels the README links to.
+
+        The wiki counts only if it has pages: has_wiki is on by default, so
+        an empty wiki was credited as a decision-making channel (AMReX),
+        the same false positive #68 removed from 4.2.3. A public mailing
+        list (SUNDIALS) wasn't counted at all.
 
         Returns (channels, saw_gap).
         """
@@ -106,37 +121,49 @@ class WelcomenessCollector:
             return [], True
         if data is None:
             return [], False
-        return [label for flag, label in _PUBLIC_CHANNELS.items() if data.get(flag)], False
+        flags = dict(data)
+        if flags.get("has_wiki"):
+            flags["has_wiki"] = await self.forge.wiki_has_content(client, ref)
+        channels = [label for flag, label in _PUBLIC_CHANNELS.items() if flags.get(flag)]
 
-    async def _find_decision_documents(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> Dict[str, Any]:
-        """Roadmaps, meeting notes, decision records and governance docs."""
+        text = await self.forge.readme(client, ref)
+        if text:
+            channels += [label for label in _README_CHANNELS
+                         if PUBLIC_CHANNEL_PATTERNS[label].search(text)]
+        return channels, False
 
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
-            saw_gap = False
-            for path in paths:
-                url = await self.forge.file_exists(client, ref, path)
-                if url is COLLECTION_GAP:
-                    saw_gap = True
-                    continue
-                if url:
-                    return label, url, saw_gap
-            return label, None, saw_gap
-
-        results = await asyncio.gather(
-            *[check(label, paths) for label, paths in _DECISION_PATHS.items()]
-        )
+    def _find_decision_documents(self, tree) -> Dict[str, Any]:
+        """Roadmaps, meeting notes, decision records and governance docs,
+        matched against a RepoTree (case-insensitive, files or directories)
+        rather than probed one literal path at a time -- see
+        METRIC_BLIND_SPOTS.md class F1/F2.
+        """
         found, not_collected, details = [], [], {}
-        for label, url, saw_gap in results:
+
+        for label, paths in _DECISION_PATHS.items():
+            if tree is COLLECTION_GAP:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+                continue
+            url = tree.match_url(paths)
             if url:
                 found.append(label)
                 details[label] = {"exists": True, "url": url}
-            elif saw_gap:
-                not_collected.append(label)
-                details[label] = {"not_collected": True}
             else:
                 details[label] = {"exists": False}
+
+        for label, pattern in _DECISION_PATTERNS.items():
+            if tree is COLLECTION_GAP:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+                continue
+            url = tree.find_url(pattern)
+            if url:
+                found.append(label)
+                details[label] = {"exists": True, "url": url}
+            else:
+                details[label] = {"exists": False}
+
         return {"found": found, "not_collected": not_collected, "details": details}
 
     def _calculate_score(

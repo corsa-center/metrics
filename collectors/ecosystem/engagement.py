@@ -2,7 +2,7 @@
 Engagement Collector (CASS Report Section 4.2.4)
 
 Measures how responsive and interactive a project is with its community by
-computing statistics from the GitHub issues and pull requests APIs:
+computing statistics from the forge's issues and pull/merge requests:
 
   - Median time to first non-bot response on issues
   - Median issue close time (open → closed)
@@ -21,9 +21,8 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import RetryingTransport, get_threshold
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,14 @@ _SAMPLE = 30
 # Pages of 100 to pull while filtering out pull requests. Four is enough to
 # reach 30 issues even when ~87% of recent activity is PRs, as on HDF5.
 _MAX_ISSUE_PAGES = 4
-_MAINTAINER_ROLES = {"COLLABORATOR", "MEMBER", "OWNER"}
+# Below this many discussion-shaped issues (see _is_internal_triage), a
+# median comment count or an answered-within-a-week share is one or two
+# issues' worth of noise, so those rows are reported but not scored.
+_MIN_DISCUSSION_SAMPLE = 5
+
+
+def _is_bot(login: str) -> bool:
+    return login.endswith("[bot]") or login.endswith("-bot")
 
 
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
@@ -41,6 +47,13 @@ def _parse_dt(s: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _is_internal_triage(issue: Dict) -> bool:
+    """Maintainer-filed, zero-comment issues are self-contained triage
+    records -- a defect ticket immediately closed by the PR that fixes it --
+    not a conversation anyone was waiting on an answer to."""
+    return not issue.get("is_outsider", True) and issue.get("comments", 0) == 0
 
 
 def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
@@ -56,8 +69,12 @@ def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
 # arithmetic than about the project. The absolute question — does everyone
 # get an answer, or only some people — is what the report is actually asking.
 
+# Share of issues and PRs opened by people outside the maintainer group is
+# read from each item's forge-normalized `is_outsider` flag.
+
+
 class EngagementCollector:
-    """Collects engagement metrics from GitHub issues and PRs (§4.2.4)."""
+    """Collects engagement metrics from issues and pull/merge requests (§4.2.4)."""
 
     def __init__(self, forge: Forge):
         self.forge = forge
@@ -81,14 +98,15 @@ class EngagementCollector:
             )
 
             # Fetch first comments for each issue concurrently (bot-filtered).
-            first_responses = await asyncio.gather(
-                *[self._first_response_hours(client, ref, i) for i in issues_raw]
+            first_responses, flow = await asyncio.gather(
+                asyncio.gather(*[self._first_response_hours(client, ref, i) for i in issues_raw]),
+                self._issue_flow(client, ref),
             )
 
         issue_stats = self._compute_issue_stats(issues_raw, list(first_responses))
         pr_stats = self._compute_pr_stats(prs_raw)
         backlog = self._compute_backlog(repo_info, issues_raw)
-        score = self._score(issue_stats, pr_stats, backlog)
+        score = self._score(issue_stats, pr_stats, backlog, flow)
 
         return {
             "package_name": repo_name,
@@ -97,6 +115,7 @@ class EngagementCollector:
             "issue_stats": issue_stats,
             "pr_stats": pr_stats,
             "backlog": backlog,
+            "issue_flow": flow,
             "overall_score": score,
         }
 
@@ -107,41 +126,94 @@ class EngagementCollector:
     async def _fetch_issues(
         self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict]:
-        """Fetch a real sample of issues.
+        """Fetch a real sample of issues, paging past pull requests.
 
-        A single page of _SAMPLE items yields almost no issues on a
+        The issues endpoint returns PRs as well and offers no way to exclude
+        them, so a single page of _SAMPLE items yields almost no issues on a
         PR-heavy repository — HDF5's most recent 30 entries are 26 PRs and 4
-        issues, which is far too small a sample for a median to mean
-        anything. Pages of 100 are pulled until _SAMPLE issues are in hand.
-        (forge.issues() already excludes pull requests on every forge.)
+        issues, which is far too small a sample for a median to mean anything.
+        Pages of 100 are pulled until _SAMPLE discussion-shaped issues are in
+        hand: on a repository whose maintainers file their own triage tickets
+        (AMReX: 25 of its newest 30 issues), a flat 30-issue cut leaves the
+        discussion metrics judging a handful of real conversations.
         """
         issues: List[Dict] = []
+        discussable = 0
         for page in range(1, _MAX_ISSUE_PAGES + 1):
+            # forge.issues() already excludes pull requests on every forge.
             batch = await self.forge.issues(
                 client, ref, state="all", per_page=100, page=page,
                 sort="updated", direction="desc",
             )
-            if batch is COLLECTION_GAP or not batch:
+            if not batch:
+                if batch is not None and not isinstance(batch, list):
+                    logger.warning("Issues fetch failed: collection gap")
                 break
-            issues.extend(batch)
-            if len(issues) >= _SAMPLE:
-                break
-        return issues[:_SAMPLE]
+            for item in batch:
+                issues.append(item)
+                discussable += not _is_internal_triage(item)
+                if discussable >= _SAMPLE:
+                    return issues
+        return issues
+
+    async def _issue_flow(
+        self, client: httpx.AsyncClient, ref: str
+    ) -> Dict[str, Any]:
+        """Issue resolution and closure over fixed time windows.
+
+        The recently-updated issue sample suits the discussion metrics, but
+        as a basis for close time it only sees issues closed in the last few
+        days, whatever their age -- clearing an old backlog made a project
+        look slower -- and its open/closed split over-weights open issues,
+        which get commented on more. Instead:
+
+          - resolution: up to 100 of the newest issues opened between a year
+            ago and one resolution-threshold ago (so each has had the full
+            window to close), still-open ones counted as unresolved;
+          - closure: issues opened vs. closed over that same window, the
+            report's "closed versus opened ... over time".
+
+        Two searches, issued one after the other rather than together.
+        """
+        now = datetime.now(timezone.utc)
+        threshold_h = get_threshold("4.2.4", "Issue Resolution Analysis")
+        year_ago = (now - timedelta(days=365)).strftime("%Y-%m-%d")
+        youngest = (now - timedelta(hours=threshold_h)).strftime("%Y-%m-%d")
+        cohort = await self.forge.issues_opened_between(client, ref, year_ago, youngest)
+        closed = await self.forge.issues_closed_between(client, ref, year_ago, youngest)
+        flow: Dict[str, Any] = {"window": f"{year_ago}..{youngest}"}
+        if cohort is not None:
+            hours = []
+            for item in cohort.get("items", []):
+                h = _hours(_parse_dt(item.get("created_at")), _parse_dt(item.get("closed_at")))
+                hours.append(h if h is not None else float("inf"))
+            flow["cohort_size"] = len(hours)
+            flow["cohort_still_open"] = sum(1 for h in hours if h == float("inf"))
+            flow["median_close_hours"] = statistics.median(hours) if hours else None
+        if cohort is not None and closed is not None:
+            flow["opened"] = cohort.get("total_count", 0)
+            flow["closed"] = closed
+        return flow
 
     async def _fetch_prs(
         self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict]:
-        data = await self.forge.pull_requests(
-            client, ref, state="closed", per_page=_SAMPLE,
-            sort="updated", direction="desc",
+        prs = await self.forge.pull_requests(
+            client, ref, state="closed", per_page=_SAMPLE, sort="updated", direction="desc",
         )
-        return [] if data is COLLECTION_GAP or data is None else data
+        if not isinstance(prs, list):
+            logger.warning("PRs fetch failed")
+            return []
+        return prs
 
     async def _fetch_repo_info(
         self, client: httpx.AsyncClient, ref: str
     ) -> Dict:
-        data = await self.forge.repo_info(client, ref)
-        return {} if data is COLLECTION_GAP or data is None else data
+        info = await self.forge.repo_info(client, ref)
+        if not info:
+            logger.warning("Repo info fetch failed")
+            return {}
+        return info
 
     async def _first_response_hours(
         self, client: httpx.AsyncClient, ref: str, issue: Dict
@@ -149,14 +221,20 @@ class EngagementCollector:
         """Return hours from issue creation to first non-bot comment, or None."""
         if issue.get("comments", 0) == 0:
             return None
+        number = issue["number"]
         created = _parse_dt(issue.get("created_at"))
         if not created:
             return None
-        comments = await self.forge.issue_comments(client, ref, issue["number"], per_page=10)
-        first_human = next((c for c in comments if not c["is_bot"]), None)
-        if not first_human:
-            return None
-        return _hours(created, _parse_dt(first_human["created_at"]))
+        try:
+            comments = await self.forge.issue_comments(client, ref, number, per_page=10)
+            for comment in comments or []:
+                if comment.get("is_bot") or _is_bot(comment.get("author") or ""):
+                    continue
+                first_comment_dt = _parse_dt(comment.get("created_at"))
+                return _hours(created, first_comment_dt)
+        except Exception as e:
+            logger.debug(f"Comment fetch failed for issue {number}: {e}")
+        return None
 
     # ------------------------------------------------------------------ #
     # Statistics                                                           #
@@ -178,24 +256,47 @@ class EngagementCollector:
 
         valid_responses = [t for t in response_times if t is not None]
 
+        # Internal triage tickets (_is_internal_triage) counted the same as
+        # an unanswered community question misread a deliberate, effective
+        # triage workflow as disengagement. Excluded only from the
+        # discussion-shaped metrics below (comment depth, timely-answer
+        # share, outside-participation share); close time and first-response
+        # time aren't affected -- a fast, silent close doesn't misrepresent
+        # those the same way.
+        discussable_idx = [n for n, i in enumerate(issues) if not _is_internal_triage(i)]
+        discussable = [issues[n] for n in discussable_idx]
+
         # Interaction depth and how evenly responses are distributed.
-        comment_counts = [i.get("comments", 0) for i in issues]
+        comment_counts = [i.get("comments", 0) for i in discussable]
         median_comments = (
             round(statistics.median(comment_counts), 1) if comment_counts else None
         )
-        # Share of the whole sample answered inside the window. Issues with no
-        # response at all count against it — they are the clearest case of
-        # inconsistent engagement.
+        # Share of the discussion-shaped sample answered inside the window.
+        # A community issue with no response at all counts against it -- the
+        # clearest case of inconsistent engagement. Computed over the same
+        # issues as comment depth: dividing by the whole sample scored AMReX
+        # at 10% although every outside issue had been answered.
         timely_share = None
-        if issues:
+        if discussable:
             response_window_hours = get_threshold("4.2.4", "Communication Pattern Analysis", "response_window_hours")
-            timely = sum(1 for t in valid_responses if t <= response_window_hours)
-            timely_share = round(timely / len(issues), 3)
+            timely = sum(
+                1 for n in discussable_idx
+                if n < len(response_times) and response_times[n] is not None
+                and response_times[n] <= response_window_hours
+            )
+            timely_share = round(timely / len(discussable), 3)
 
-        outside = sum(1 for i in issues if i.get("is_outsider"))
+        outside = sum(
+            1 for i in discussable
+            if i.get("is_outsider")
+        )
 
         return {
             "sample_size": len(issues),
+            # Denominator for Community Participation Assessment -- see
+            # `discussable` above.
+            "discussion_sample_size": len(discussable),
+            "internal_triage_excluded": len(issues) - len(discussable),
             "median_first_response_hours": round(statistics.median(valid_responses), 1) if valid_responses else None,
             "median_close_time_hours": round(statistics.median(close_times), 1) if close_times else None,
             "pct_with_response": round(len(valid_responses) / len(issues) * 100, 1) if issues else 0.0,
@@ -218,7 +319,10 @@ class EngagementCollector:
             else:
                 closed_no_merge += 1
 
-        outside = sum(1 for pr in prs if pr.get("is_outsider"))
+        outside = sum(
+            1 for pr in prs
+            if pr.get("is_outsider")
+        )
 
         total = merged + closed_no_merge
         return {
@@ -231,7 +335,7 @@ class EngagementCollector:
         }
 
     def _compute_backlog(self, repo_info: Dict, issues: List[Dict]) -> Dict[str, Any]:
-        open_count = repo_info.get("open_issues")  # includes open PRs on GitHub
+        open_count = repo_info.get("open_issues")  # includes open PRs
         closed_in_sample = sum(1 for i in issues if i.get("state") == "closed")
         open_in_sample = sum(1 for i in issues if i.get("state") == "open")
         sample_ratio = (
@@ -253,6 +357,7 @@ class EngagementCollector:
         issue_stats: Dict[str, Any],
         pr_stats: Dict[str, Any],
         backlog: Dict[str, Any],
+        flow: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Score each of the 7 measurement methods defined in CASS Report §4.2.4.
@@ -261,28 +366,51 @@ class EngagementCollector:
         """
         sub = {}
         pts = 0
+        unscored = 0
+        flow = flow or {}
 
         # 1. Response Time Tracking — passing if median first response is under the cap
         frt = issue_stats.get("median_first_response_hours")
+        sampled = issue_stats.get("sample_size", 0)
         passing = frt is not None and frt < get_threshold("4.2.4", "Response Time Tracking")
         sub["response_time_tracking"] = {
             "label": "Response Time Tracking",
-            "value": f"{frt:.0f} hours" if frt is not None else None,
+            "value": (f"{frt:.0f} hours" if frt is not None
+                      else f"no response to any of {sampled} sampled issue(s)" if sampled else None),
             "passing": passing,
             "pts": 1 if passing else 0,
         }
+        if 0 < sampled < _MIN_DISCUSSION_SAMPLE:
+            self._mark_thin_sample(sub["response_time_tracking"], sampled, "issue(s) sampled")
+            unscored += 1
+        elif not sampled and frt is None:
+            self._mark_no_sample(sub["response_time_tracking"], "No issues to assess")
+            unscored += 1
         pts += sub["response_time_tracking"]["pts"]
 
-        # 2. Issue Resolution Analysis — passing if median close time is under the cap
-        mct = issue_stats.get("median_close_time_hours")
-        passing = mct is not None and mct < get_threshold("4.2.4", "Issue Resolution Analysis")
-        sub["issue_resolution"] = {
-            "label": "Issue Resolution Analysis",
-            "value": f"{mct:.0f} hours" if mct is not None else None,
-            "passing": passing,
-            "pts": 1 if passing else 0,
-        }
-        pts += sub["issue_resolution"]["pts"]
+        # 2. Issue Resolution Analysis — median time to close, over a cohort of
+        #    issues opened in a fixed window (see _issue_flow)
+        n = flow.get("cohort_size")
+        mct = flow.get("median_close_hours")
+        if not n:
+            sub["issue_resolution"] = {"label": "Issue Resolution Analysis", "value": None,
+                                       "passing": False, "pts": 0, "not_collected": True}
+            unscored += 1
+        else:
+            passing = mct < get_threshold("4.2.4", "Issue Resolution Analysis")
+            value = (f"{mct:.0f} hours median to close" if mct != float("inf")
+                     else "over half still open")
+            sub["issue_resolution"] = {
+                "label": "Issue Resolution Analysis",
+                "value": f"{value}, for {n} issues opened 30-365 days ago "
+                         f"({flow.get('cohort_still_open', 0)} still open)",
+                "passing": passing,
+                "pts": 1 if passing else 0,
+            }
+            if n < _MIN_DISCUSSION_SAMPLE:
+                self._mark_thin_sample(sub["issue_resolution"], n, "issue(s) in the window")
+                unscored += 1
+            pts += sub["issue_resolution"]["pts"]
 
         # 3. Pull Request Flow Assessment — passing if merge rate is above the floor
         mrp = pr_stats.get("merge_rate_pct")
@@ -295,16 +423,30 @@ class EngagementCollector:
         }
         pts += sub["pr_flow"]["pts"]
 
-        # 4. Support Request Closure Analysis — passing if open/closed ratio is under the cap
-        ratio = backlog.get("sample_open_to_closed_ratio")
-        passing = ratio is not None and ratio < get_threshold("4.2.4", "Support Request Closure Analysis")
-        sub["support_closure"] = {
-            "label": "Support Request Closure Analysis",
-            "value": f"{ratio:.2f}" if ratio is not None else None,
-            "passing": passing,
-            "pts": 1 if passing else 0,
-        }
-        pts += sub["support_closure"]["pts"]
+        # 4. Support Request Closure Analysis — issues opened per issue closed
+        #    over the same window as Issue Resolution; passing while under the cap
+        opened, closed = flow.get("opened"), flow.get("closed")
+        if opened is None or closed is None or (opened == 0 and closed == 0):
+            sub["support_closure"] = {"label": "Support Request Closure Analysis", "value": None,
+                                      "passing": False, "pts": 0, "not_collected": True}
+            unscored += 1
+        else:
+            ratio = opened / closed if closed else float("inf")
+            passing = ratio < get_threshold("4.2.4", "Support Request Closure Analysis")
+            sub["support_closure"] = {
+                "label": "Support Request Closure Analysis",
+                "value": f"{opened} opened, {closed} closed 30-365 days ago"
+                         + (f" ({ratio:.2f} opened per closed)" if closed else ""),
+                "passing": passing,
+                "pts": 1 if passing else 0,
+            }
+            if opened + closed < _MIN_DISCUSSION_SAMPLE:
+                self._mark_thin_sample(sub["support_closure"], opened + closed, "issue(s) in the window")
+                unscored += 1
+            pts += sub["support_closure"]["pts"]
+
+        discussion_n = issue_stats.get("discussion_sample_size", 0)
+        thin_sample = 0 < discussion_n < _MIN_DISCUSSION_SAMPLE
 
         # 5. Engagement Quality Metrics — depth of discussion per issue
         mc = issue_stats.get("median_comments")
@@ -315,6 +457,12 @@ class EngagementCollector:
             "passing": passing,
             "pts": 1 if passing else 0,
         }
+        if thin_sample:
+            self._mark_thin_sample(sub["engagement_quality"], discussion_n)
+            unscored += 1
+        elif not discussion_n and mc is None:
+            self._mark_no_sample(sub["engagement_quality"], "No community issues to assess")
+            unscored += 1
         pts += sub["engagement_quality"]["pts"]
 
         # 6. Communication Pattern Analysis — whether everyone gets an answer,
@@ -323,16 +471,25 @@ class EngagementCollector:
         passing = timely is not None and timely >= get_threshold("4.2.4", "Communication Pattern Analysis", "min_timely_response_share")
         sub["communication_patterns"] = {
             "label": "Communication Pattern Analysis",
-            "value": f"{timely * 100:.0f}% of issues answered within a week"
+            "value": f"{timely * 100:.0f}% of community issues answered within a week"
                      if timely is not None else "No issues to assess",
             "passing": passing,
             "pts": 1 if passing else 0,
         }
+        if thin_sample:
+            self._mark_thin_sample(sub["communication_patterns"], discussion_n)
+            unscored += 1
+        elif not discussion_n and timely is None:
+            self._mark_no_sample(sub["communication_patterns"], "No community issues to assess")
+            unscored += 1
         pts += sub["communication_patterns"]["pts"]
 
         # 7. Community Participation Assessment — work arriving from outside the
-        # maintainer group, across both issues and pull requests.
-        issue_n = issue_stats.get("sample_size", 0)
+        # maintainer group, across both issues and pull requests. Uses the
+        # discussion-shaped issue count (excludes maintainer-filed,
+        # zero-comment triage tickets), same reasoning as Engagement Quality
+        # above -- see _compute_issue_stats.
+        issue_n = issue_stats.get("discussion_sample_size", 0)
         pr_n = pr_stats.get("sample_size", 0)
         total_n = issue_n + pr_n
         outside_n = (
@@ -351,9 +508,22 @@ class EngagementCollector:
 
         return {
             "score": pts,
-            "max_score": 7,
+            "max_score": 7 - unscored,
             "sub_scores": sub,
         }
+
+    @staticmethod
+    def _mark_thin_sample(entry: Dict[str, Any], n: int, noun: str = "community issue(s) sampled") -> None:
+        """Keep the measured value visible but take the row out of the score."""
+        entry["value"] = f"{entry['value']} -- only {n} {noun}, too few to judge"
+        entry["insufficient_sample"] = True
+        entry["passing"] = False
+        entry["pts"] = 0
+
+    @staticmethod
+    def _mark_no_sample(entry: Dict[str, Any], value: str) -> None:
+        """Nothing to measure is neither a pass nor a fail."""
+        entry.update(value=value, insufficient_sample=True, passing=False, pts=0)
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {

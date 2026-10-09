@@ -19,11 +19,14 @@ Shared conventions for every method below:
   GitLabForge maps its native responses onto the same shapes.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class Forge(ABC):
@@ -67,6 +70,29 @@ class Forge(ABC):
     def pages_url(self, ref: str) -> str:
         """Predictable static-site (Pages) URL for ref."""
 
+    @abstractmethod
+    def web_url(self, ref: str, path: str, kind: str = "blob") -> str:
+        """Browsable URL for a path on the default branch. kind is "blob"
+        (a file) or "tree" (a directory)."""
+
+    @abstractmethod
+    def raw_url(self, ref: str, path: str) -> str:
+        """URL serving a file's raw bytes from the default branch, outside
+        the REST API (so it doesn't spend API rate-limit quota)."""
+
+    async def raw_text(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
+        """A file's text via raw_url(), or None if it couldn't be read.
+        Best-effort: unlike file_content() it doesn't separate "absent" from
+        "couldn't tell", so use it where a missing read just means less
+        evidence, not a negative result."""
+        url = self.raw_url(ref, path)
+        try:
+            resp = await client.get(url)
+        except Exception as e:
+            logger.debug(f"Could not read {url}: {e!r}")
+            return None
+        return resp.text if resp.status_code == 200 else None
+
     def get_timestamp(self) -> str:
         """Current UTC timestamp in ISO format."""
         return datetime.now(timezone.utc).isoformat()
@@ -108,6 +134,18 @@ class Forge(ABC):
     # ------------------------------------------------------------------ #
     # History, releases, contributors
     # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    async def version_tags(self, client: httpx.AsyncClient, ref: str) -> List[Dict[str, Any]]:
+        """Up to 50 most recent release tags (see forge.base.is_release_tag),
+        newest first, as release-shaped dicts {tag_name, published_at,
+        from_tag: True}. [] when they can't be listed -- callers treat tags
+        as supplementary evidence alongside releases()."""
+
+    @abstractmethod
+    async def wiki_has_content(self, client: httpx.AsyncClient, ref: str) -> bool:
+        """Whether the project wiki has at least one page. False when it
+        can't be determined."""
 
     @abstractmethod
     async def releases(
@@ -166,6 +204,38 @@ class Forge(ABC):
     async def issue_comments(
         self, client: httpx.AsyncClient, ref: str, number: int, *, per_page: int = 10
     ) -> List[Dict[str, Any]]: ...
+
+    @abstractmethod
+    async def issues_opened_between(
+        self, client: httpx.AsyncClient, ref: str, start: str, end: str, *, per_page: int = 100
+    ) -> Optional[Dict[str, Any]]:
+        """Issues created between two dates (YYYY-MM-DD, inclusive), as
+        {"total_count": int, "items": [up to per_page newest, normalized
+        like issues()]}, or None if it couldn't be determined."""
+
+    @abstractmethod
+    async def issues_closed_between(
+        self, client: httpx.AsyncClient, ref: str, start: str, end: str
+    ) -> Optional[int]:
+        """How many issues were closed between two dates (YYYY-MM-DD,
+        inclusive), or None if it couldn't be determined."""
+
+    @abstractmethod
+    async def labels(
+        self, client: httpx.AsyncClient, ref: str, *, page: int = 1, per_page: int = 100
+    ):
+        """One page of the repository's issue labels as [{name}], or
+        None/COLLECTION_GAP."""
+
+    @abstractmethod
+    async def recent_issues(
+        self, client: httpx.AsyncClient, ref: str, since: str, *, page: int = 1, per_page: int = 100
+    ):
+        """Issues (never pull/merge requests) created on or after `since`
+        (YYYY-MM-DD), newest first, normalized like issues() (including
+        `is_outsider`), or None if the page couldn't be fetched. Unlike
+        issues(), a page is full of real issues even on a repository whose
+        recent activity is mostly pull requests."""
 
     @abstractmethod
     async def pr_reviews(

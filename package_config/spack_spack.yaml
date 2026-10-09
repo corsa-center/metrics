@@ -1,0 +1,6 @@
+package: spack/spack
+
+# Package recipes moved to spack/spack-packages in June 2025; contributors
+# who now work there are still Spack contributors.
+related_repositories:
+  - spack/spack-packages

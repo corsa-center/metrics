@@ -48,11 +48,11 @@ class CICDMetricsCollector:
             # _empty_result convention here, orchestrator.py's generic
             # except-and-log around collector.collect() handles it.
             raise ValueError(f"Invalid GitHub URL format: {repo_url}")
-        branch = package.get("repo_branch", "main")
 
         logger.info(f"Beginning CI/CD metric collection for {package.get('name')}")
 
         async with httpx.AsyncClient(transport=RetryingTransport()) as client:
+            branch = package.get("repo_branch") or await self._get_default_branch(client, ref)
             (
                 exec_time,
                 workflow_success,
@@ -348,6 +348,22 @@ class CICDMetricsCollector:
             remaining -= len(batch)
             page += 1
         return results
+
+    async def _get_default_branch(self, client: httpx.AsyncClient, ref: str) -> str:
+        """The repo's actual default branch, falling back to "main" only if
+        it can't be determined.
+
+        Workflow-run queries scoped to a hardcoded "main" silently return
+        zero runs for any repo whose default branch is named something else
+        -- AMReX-Codes/amrex, for one, works on "development" and has zero
+        runs on a branch literally named "main", which read as "no CI data"
+        instead of the ~64k real runs it actually has.
+        """
+        info = await self.forge.repo_info(client, ref)
+        if not info:
+            logger.error(f"Could not fetch default branch for {ref}; assuming main")
+            return "main"
+        return info.get("default_branch") or "main"
 
     def _parse_github_datetime_string(self, date: str) -> datetime:
         """Parse a GitHub ISO 8601 timestamp into a timezone-aware datetime."""

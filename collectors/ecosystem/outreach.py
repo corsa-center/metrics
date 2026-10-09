@@ -18,40 +18,56 @@ programmes, course syllabi, non-code contribution records — and stay uncollect
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
+from collectors.ecosystem.community_health import _DEEP_DOC_PATTERNS, readme_contributing_section
+from collectors.quality.usability import readme_mentions
 
 logger = logging.getLogger(__name__)
 
 # Labels projects conventionally use to flag newcomer-friendly work.
 _NEWCOMER_LABELS = ["good first issue", "help wanted", "good-first-issue", "newcomer"]
+# Projects name these labels their own way ("is:good-first-issue",
+# "difficulty: easy", "beginner-friendly"), so the repository's labels are
+# read and every one matching this is queried.
+_NEWCOMER_LABEL_PATTERN = re.compile(
+    r"good[\s:_-]*first|help[\s:_-]*wanted|newcomer|beginner|first[\s_-]*timer"
+    r"|starter|up[\s_-]*for[\s_-]*grabs"
+    r"|^(?:[\w ]+[:/]\s*)?easy(?:[\s_-]*(?:fix|pick|issue|task))?$",
+    re.I,
+)
+_MAX_LABEL_PAGES = 3
 
-# Onboarding resources, grouped so a project gets credit for any variant.
-# These are the platform-neutral paths; _PLATFORM_PATH_KINDS adds each
-# forge's own locations (.github/ISSUE_TEMPLATE vs .gitlab/issue_templates).
-_ONBOARDING_PATHS = {
-    "Contributing guide": [
-        "CONTRIBUTING.md", "CONTRIBUTING.rst", "CONTRIBUTING",
-        ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md",
-    ],
-    "Issue templates": [],
-    "Pull request template": ["PULL_REQUEST_TEMPLATE.md"],
-    "Getting-started guide": [
-        "docs/getting-started.md", "docs/getting_started.md", "docs/quickstart.md",
-        "doc/getting-started.md", "GETTING_STARTED.md", "docs/source/getting_started.rst",
-    ],
-}
-
-_PLATFORM_PATH_KINDS = {
-    "Issue templates": "issue_templates",
-    "Pull request template": "change_request_templates",
-}
+# Onboarding resources matched against a RepoTree (case-insensitive, whole
+# tree) rather than probed one literal path at a time.
+_ONBOARDING_LABELS = [
+    "Contributing guide", "Issue templates", "Pull request template",
+    "Getting-started guide",
+]
+_CONTRIBUTING_PATHS = [
+    "CONTRIBUTING.md", "CONTRIBUTING.rst", "CONTRIBUTING",
+    ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md",
+]
+# Platform-neutral template locations; each forge adds its own
+# (.github/ISSUE_TEMPLATE vs .gitlab/issue_templates) via platform_paths().
+_PR_TEMPLATE_PATHS = ["PULL_REQUEST_TEMPLATE.md"]
+# A getting-started guide, under whatever name and location it actually has --
+# six enumerated spellings missed 16 of 65 portfolio repos, AMReX's
+# Docs/sphinx_documentation/source/GettingStarted.rst among them
+# (corsa-center/metrics#49). Matched anywhere under a doc-shaped directory
+# rather than at a handful of exact paths.
+_GETTING_STARTED_PATTERN = (
+    r"(^|/)(docs?|documentation)/.*(getting[-_]?started|quick[-_ ]?start|tutorial)"
+    r"|^(getting[-_]?started|quick[-_]?start|tutorials?)(/|\.|$)"
+)
+# README sections that stand in for a separate getting-started document.
+_README_GETTING_STARTED = r"(?:getting started|quick ?start|tutorial)"
 
 # Window for "new" contributors and recent commit activity.
 _RECENT_DAYS = 365
@@ -59,6 +75,13 @@ _RECENT_DAYS = 365
 # Pagination caps, mirroring active_maintenance.py's bounded approach.
 _MAX_CONTRIBUTOR_PAGES = 5
 _MAX_COMMIT_PAGES = 10
+
+
+def _label_query(labels: List[str]) -> str:
+    """Labels for one label: qualifier. Comma-separated values are ORed, so
+    all labels take one search per state; a label with a space or colon must
+    be quoted or the parser splits it."""
+    return ",".join(f'"{l}"' if re.search(r"[\s:]", l) else l for l in labels)
 
 
 class OutreachCollector:
@@ -81,7 +104,7 @@ class OutreachCollector:
                 self._get_contributors(client, ref),
                 self._get_recent_commit_authors(client, ref),
                 self._get_newcomer_issues(client, ref),
-                self._check_onboarding(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
                 return_exceptions=True,
             )
 
@@ -93,9 +116,9 @@ class OutreachCollector:
 
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=recent_commits reason=exception:{results[1]!r}")
-            recent_commits, commits_gap = {}, True
+            recent_commits, commits_gap, commits_truncated = {}, True, False
         else:
-            recent_commits, commits_gap = results[1]
+            recent_commits, commits_gap, commits_truncated = results[1]
 
         if isinstance(results[2], Exception):
             logger.warning(f"COLLECTION-GAP category=newcomer_issues reason=exception:{results[2]!r}")
@@ -104,14 +127,17 @@ class OutreachCollector:
         else:
             newcomer_issues = results[2]
 
+        tree = COLLECTION_GAP if isinstance(results[3], Exception) else results[3]
         if isinstance(results[3], Exception):
             logger.warning(f"COLLECTION-GAP category=onboarding reason=exception:{results[3]!r}")
-            onboarding = {"found": [], "missing": [],
-                          "not_collected": list(_ONBOARDING_PATHS), "details": {}}
-        else:
-            onboarding = results[3]
+        onboarding = self._check_onboarding(tree)
+        if onboarding["missing"]:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                readme = await self.forge.readme(client, ref)
+            if readme:
+                self._credit_readme(onboarding, readme)
 
-        growth = self._analyze_contributor_growth(contributors, recent_commits)
+        growth = self._analyze_contributor_growth(contributors, recent_commits, commits_truncated)
 
         return {
             "package_name": repo_name,
@@ -127,9 +153,7 @@ class OutreachCollector:
 
     # ------------------------------------------------------------------ fetch
 
-    async def _get_contributors(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> tuple:
+    async def _get_contributors(self, client: httpx.AsyncClient, ref: str) -> tuple:
         """All-time contributors with their total contribution counts.
 
         Returns (contributors, saw_gap). A gap partway through pagination
@@ -146,18 +170,19 @@ class OutreachCollector:
             if not batch:
                 break
             contributors.extend(batch)
+            if len(batch) < 100:
+                break
         return contributors, saw_gap
 
-    async def _get_recent_commit_authors(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> tuple:
+    async def _get_recent_commit_authors(self, client: httpx.AsyncClient, ref: str) -> tuple:
         """Commit counts per author over the recent window.
 
-        Returns (counts, saw_gap).
+        Returns (counts, saw_gap, truncated); truncated means the page cap
+        ended the walk before the window did.
         """
         since = (datetime.now(timezone.utc) - timedelta(days=_RECENT_DAYS)).isoformat()
         counts: Dict[str, int] = {}
-        saw_gap = False
+        saw_gap = truncated = False
         for page in range(1, _MAX_COMMIT_PAGES + 1):
             batch = await self.forge.commits(client, ref, since=since, per_page=100, page=page)
             if batch is COLLECTION_GAP:
@@ -169,23 +194,20 @@ class OutreachCollector:
                 identity = commit.get("author_identity")
                 if identity:
                     counts[identity] = counts.get(identity, 0) + 1
-        return counts, saw_gap
+            if len(batch) < 100:
+                break
+            if page == _MAX_COMMIT_PAGES:
+                truncated = True
+        return counts, saw_gap, truncated
 
-    async def _get_newcomer_issues(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> Dict[str, Any]:
+    async def _get_newcomer_issues(self, client: httpx.AsyncClient, ref: str) -> Dict[str, Any]:
         """Open and closed counts for each newcomer-friendly label.
 
-        Uses the search API rather than paginating /issues, so each label costs
-        two requests and returns an exact total instead of a page count.
+        Uses issue search rather than paginating issues, so all labels cost
+        two requests and return an exact total instead of a page count.
         """
-        # All labels in one query per state. Comma-separated values in a
-        # label: qualifier are ORed, so this is two searches rather than one
-        # per label per state — eight became two. Labels containing a space
-        # must be quoted or the parser splits them and drops the remainder.
-        labels = ",".join(
-            f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS
-        )
+        queried = await self._newcomer_labels(client, ref)
+        labels = _label_query(queried)
 
         async def count(state: str) -> tuple:
             q = f'repo:{ref} is:issue state:{state} label:{labels}'
@@ -198,7 +220,7 @@ class OutreachCollector:
             count("open"), count("closed"),
         )
         result = {
-            "labels_queried": _NEWCOMER_LABELS,
+            "labels_queried": queried,
             "open": open_count,
             "closed": closed_count,
             "total": open_count + closed_count,
@@ -210,45 +232,72 @@ class OutreachCollector:
             result["not_collected"] = True
         return result
 
-    async def _check_onboarding(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> Dict[str, Any]:
-        """Which onboarding resources the repository provides."""
+    async def _newcomer_labels(self, client: httpx.AsyncClient, ref: str) -> List[str]:
+        """The repository's own newcomer-style labels, or the common names
+        when its labels can't be read."""
+        names: List[str] = []
+        for page in range(1, _MAX_LABEL_PAGES + 1):
+            batch = await self.forge.labels(client, ref, page=page, per_page=100)
+            if batch is COLLECTION_GAP:
+                return list(_NEWCOMER_LABELS)
+            names += [l.get("name", "") for l in batch or []]
+            if not batch or len(batch) < 100:
+                break
+        own = [n for n in names if _NEWCOMER_LABEL_PATTERN.search(n) and "," not in n]
+        return own or list(_NEWCOMER_LABELS)
 
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
-            saw_gap = False
-            for path in paths:
-                url = await self.forge.file_exists(client, ref, path)
-                if url is COLLECTION_GAP:
-                    saw_gap = True
-                    continue
-                if url:
-                    return label, url, saw_gap
-            return label, None, saw_gap
+    def _check_onboarding(self, tree) -> Dict[str, Any]:
+        """Which onboarding resources the repository provides, resolved
+        against a RepoTree instead of probed one literal path at a time --
+        see corsa-center/metrics#49 and METRIC_BLIND_SPOTS.md class F2.
+        """
+        if tree is COLLECTION_GAP:
+            return {
+                "found": [], "missing": [], "not_collected": list(_ONBOARDING_LABELS),
+                "details": {label: {"not_collected": True} for label in _ONBOARDING_LABELS},
+            }
 
-        results = await asyncio.gather(
-            *[
-                check(label, paths + self.forge.platform_paths(_PLATFORM_PATH_KINDS.get(label, "")))
-                for label, paths in _ONBOARDING_PATHS.items()
-            ]
-        )
-        found, missing, not_collected, details = [], [], [], {}
-        for label, url, saw_gap in results:
-            if url:
-                found.append(label)
-                details[label] = {"exists": True, "url": url}
-            elif saw_gap:
-                not_collected.append(label)
-                details[label] = {"not_collected": True}
-            else:
-                missing.append(label)
-                details[label] = {"exists": False}
-        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+        # match_url() matches files and directories alike, so a template
+        # directory (.github/ISSUE_TEMPLATE, .gitlab/issue_templates) counts.
+        issue_templates_url = tree.match_url(self.forge.platform_paths("issue_templates"))
+
+        deep_contributing = tree.find_owned(_DEEP_DOC_PATTERNS["contributing_guidelines"])
+        urls = {
+            "Contributing guide": tree.match_url(_CONTRIBUTING_PATHS) or (
+                tree.url_for(deep_contributing) if deep_contributing else None),
+            "Issue templates": issue_templates_url,
+            "Pull request template": tree.match_url(
+                _PR_TEMPLATE_PATHS + self.forge.platform_paths("change_request_templates")),
+            "Getting-started guide": tree.find_url(_GETTING_STARTED_PATTERN),
+        }
+        found = [label for label in _ONBOARDING_LABELS if urls[label]]
+        missing = [label for label in _ONBOARDING_LABELS if not urls[label]]
+        details = {
+            label: ({"exists": True, "url": urls[label]} if urls[label] else {"exists": False})
+            for label in _ONBOARDING_LABELS
+        }
+        return {"found": found, "missing": missing, "not_collected": [], "details": details}
+
+    @staticmethod
+    def _credit_readme(onboarding: Dict[str, Any], text: str) -> None:
+        """Count README sections that do the job of a missing contributing
+        or getting-started document."""
+        covered = {
+            "Contributing guide": readme_contributing_section(text) is not None,
+            "Getting-started guide": readme_mentions(text, _README_GETTING_STARTED),
+        }
+        for label, ok in covered.items():
+            if ok and label in onboarding["missing"]:
+                onboarding["details"][label] = {"exists": True, "source": "README section"}
+        onboarding["found"] = [l for l in _ONBOARDING_LABELS if onboarding["details"][l].get("exists")]
+        onboarding["missing"] = [l for l in _ONBOARDING_LABELS
+                                 if l not in onboarding["found"] and l not in onboarding["not_collected"]]
 
     # ---------------------------------------------------------------- analyze
 
     def _analyze_contributor_growth(
-        self, contributors: List[Dict], recent_counts: Dict[str, int]
+        self, contributors: List[Dict], recent_counts: Dict[str, int],
+        window_truncated: bool = False,
     ) -> Dict[str, Any]:
         """Derive newcomer, retention and lifecycle figures.
 
@@ -257,6 +306,13 @@ class OutreachCollector:
         have no history before it. This avoids a second pass over the whole
         commit log to find each author's first commit, at the cost of missing
         anyone whose recent commits exceed the pagination cap.
+
+        That only works when both lists are whole. GitHub's contributor list
+        links just the first 500 author emails to accounts, so in a large
+        project the newest contributors are simply absent from it; and a
+        recent-commit walk cut off by the page cap covers only part of the
+        year. Either way the figures would read as "no newcomers", so they
+        are flagged as not measurable instead.
         """
         if not contributors:
             return {
@@ -265,6 +321,9 @@ class OutreachCollector:
                 "retained_new_contributors": 0,
                 "retention_rate": None,
                 "lifecycle": {"one_time": 0, "casual": 0, "repeat": 0},
+                "contributor_list_truncated": False,
+                "unlisted_recent_authors": 0,
+                "commit_window_truncated": window_truncated,
             }
 
         totals = {
@@ -272,6 +331,9 @@ class OutreachCollector:
             for c in contributors
             if c.get("identity")
         }
+
+        unlisted = [login for login in recent_counts if login not in totals]
+        list_truncated = len(unlisted) > max(2, len(recent_counts) // 10)
 
         new_contributors = [
             login
@@ -305,6 +367,9 @@ class OutreachCollector:
             "retained_new_contributors": len(retained),
             "retention_rate": retention_rate,
             "lifecycle": lifecycle,
+            "contributor_list_truncated": list_truncated,
+            "unlisted_recent_authors": len(unlisted),
+            "commit_window_truncated": window_truncated,
         }
 
     def _calculate_score(
@@ -322,8 +387,18 @@ class OutreachCollector:
                      + ("s" if _RECENT_DAYS // 365 != 1 else ""),
             "passing": new_passing,
         }
+        list_truncated = growth.get("contributor_list_truncated", False)
+        incomplete = list_truncated or growth.get("commit_window_truncated", False)
+        if list_truncated:
+            why = (f"not measurable: {growth.get('unlisted_recent_authors', 0)} recent authors "
+                   "are beyond the forge's contributor list")
+        else:
+            why = (f"not measurable: the last {_MAX_COMMIT_PAGES * 100} commits "
+                   f"don't reach back {_RECENT_DAYS} days")
         if not new_passing and (contributors_gap or commits_gap):
             new_entry["not_collected"] = True
+        elif not new_passing and incomplete:
+            new_entry.update(value=why[0].upper() + why[1:], unmeasured=True)
         sub["new_contributor_tracking"] = new_entry
 
         rate = growth.get("retention_rate")
@@ -334,8 +409,17 @@ class OutreachCollector:
                      else "No new contributors to measure",
             "passing": retention_passing,
         }
+        min_new = get_threshold("4.2.5", "Contributor Retention Analysis", "min_new_contributors")
         if not retention_passing and (contributors_gap or commits_gap):
             retention_entry["not_collected"] = True
+        elif incomplete:
+            retention_entry.update(value=why[0].upper() + why[1:], unmeasured=True, passing=False)
+        elif new_count < min_new:
+            # Retention of one or two newcomers says nothing either way.
+            retention_entry.update(
+                value=f"{new_count} new contributor(s) in the last year; too few to judge retention"
+                      if new_count else "No new contributors to measure",
+                insufficient_sample=True, passing=False)
         sub["contributor_retention"] = retention_entry
 
         lifecycle = growth.get("lifecycle", {})
@@ -349,6 +433,13 @@ class OutreachCollector:
         }
         if not lifecycle_passing and contributors_gap:
             lifecycle_entry["not_collected"] = True
+        elif list_truncated:
+            # The missing tail of the list is exactly the one-time and casual
+            # contributors, so the split can't be read from what's there.
+            lifecycle_entry.update(
+                value=f"Not measurable: {growth.get('unlisted_recent_authors', 0)} recent authors "
+                      "are beyond the forge's contributor list",
+                unmeasured=True, passing=False)
         sub["contributor_lifecycle"] = lifecycle_entry
 
         gfi_total = newcomer_issues.get("total", 0)
@@ -368,7 +459,7 @@ class OutreachCollector:
         onboarding_passing = len(found) >= get_threshold("4.2.5", "Onboarding Infrastructure Assessment")
         onboarding_entry: Dict[str, Any] = {
             "label": "Onboarding Infrastructure Assessment",
-            "value": f"{len(found)}/{len(_ONBOARDING_PATHS)} resources",
+            "value": f"{len(found)}/{len(_ONBOARDING_LABELS)} resources",
             "detail": ", ".join(found) if found else None,
             "passing": onboarding_passing,
         }
@@ -383,7 +474,8 @@ class OutreachCollector:
         ]:
             sub[key] = {"label": label, "value": None, "passing": False, "not_collected": True}
 
-        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        scorable = {k: v for k, v in sub.items()
+                    if not (v.get("not_collected") or v.get("unmeasured") or v.get("insufficient_sample"))}
         score = sum(1 for s in scorable.values() if s.get("passing"))
         max_score = len(scorable)
         if not max_score:

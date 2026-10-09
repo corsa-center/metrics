@@ -6,8 +6,14 @@ reading the CI definitions once (GitHub workflows, or .gitlab-ci.yml and
 its local includes):
 
   - Deployment Environment Testing    : which OS families CI builds on
-  - Architecture Compatibility Analysis : which CPU architectures CI covers
+  - Architecture Compatibility Analysis : which non-x86 CPU architectures and
+                                          GPU accelerator targets CI covers
   - Platform Documentation Evaluation : whether the docs say what is supported
+
+Architecture and accelerator coverage also reads GitLab CI configuration kept
+in the repository (.gitlab-ci.yml, .gitlab/), since HPC projects often run
+their GPU and non-x86 testing on facility GitLab instances rather than on
+GitHub-hosted runners.
 
 Portable Build System Detection and Container Availability are collected by
 accessibility.py.
@@ -27,9 +33,10 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from forge.base import RetryingTransport
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, RepoTree, RetryingTransport, get_threshold,
+)
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -56,17 +63,87 @@ _RUNNER_FAMILIES = {
     "macOS": re.compile(rf"\bmacos-(?:{_RUNNER_SUFFIX}|{_ARCH_SUFFIX})\b", re.I),
 }
 
+# CI whose runner OS the configuration doesn't state: self-hosted GitHub
+# runners (labelled by hardware -- cpu_intel, gpu_amd -- or chosen through a
+# matrix variable) and other CI services.
+_SELF_HOSTED = re.compile(r"runs-on:\s*(?:\[[^\]]*|-\s*)?\bself-hosted\b[^\n\]]*\]?", re.I)
+_MATRIX_RUNNER = re.compile(r"runs-on:\s*\$\{\{", re.I)
+# GitHub's default self-hosted labels include the OS.
+_SELF_HOSTED_OS = {"Linux": re.compile(r"\blinux\b", re.I),
+                   "Windows": re.compile(r"\bwindows\b", re.I),
+                   "macOS": re.compile(r"\bmacos\b", re.I)}
+_OTHER_CI = r"^(?:Jenkinsfile|\.travis\.ya?ml|azure-pipelines\.ya?ml|\.circleci/config\.ya?ml|\.buildkite/[^/]+\.ya?ml)$"
+
 # Explicit CPU architecture tokens. x86-64 is not listed: it is the implicit
 # default for every standard runner, so naming it proves nothing. What this
 # detects is a project that went out of its way to test something else.
 _ARCH_PATTERNS = {
     # The `-arm` runner suffix follows a version, not letters
     # (`ubuntu-24.04-arm`), so the prefix must not be constrained to [a-z].
-    "ARM64": re.compile(r"\barm64\b|\baarch64\b|-arm\b|\barm-", re.I),
+    # GitHub-hosted macos-14 and later (and macos-latest) run on Apple
+    # Silicon, as does any `-xlarge` macOS runner; `-large` and `-intel`
+    # are x86-64.
+    "ARM64": re.compile(
+        r"\barm64\b|\baarch64\b|-arm\b|\barm-"
+        r"|\bmacos-(?:latest|1[4-9]|[2-9]\d)(?![\w.-])"
+        r"|\bmacos-(?:latest|\d+)-xlarge\b",
+        re.I,
+    ),
     "POWER": re.compile(r"\b(?:ppc64le|ppc64|power[89])\b", re.I),
     "RISC-V": re.compile(r"\briscv(?:64)?\b", re.I),
     "s390x": re.compile(r"\bs390x\b", re.I),
 }
+
+# GPU build targets in CI configuration. Build-option tokens only (Spack
+# variants, CMake options, GPU arch targets, vendor images) -- a bare "cuda"
+# also appears in comments, job names and environment variables.
+_ACCELERATOR_PATTERNS = {
+    # GPU model names in self-hosted runner labels (gpu:A100) and Kokkos
+    # architecture names (Ampere80, Kokkos_ARCH_VOLTA70) are build
+    # configuration too, for CI that targets a GPU without any of the flag
+    # spellings above.
+    "NVIDIA GPU (CUDA)": re.compile(
+        r"\+cuda\b|\bcuda_arch=|CMAKE_CUDA_ARCHITECTURES\b|-D\w*_CUDA=ON\b"
+        r"|GPU_BACKEND=CUDA\b|\bnvidia/cuda:"
+        r"|\b(?:[AHV]100|P100|GH200|H200|B200)\b"
+        r"|(?:\b|_)(?:Kepler|Maxwell|Pascal|Volta|Turing|Ampere|Ada|Hopper|Blackwell)\d{2}(?![a-z0-9])",
+        re.I,
+    ),
+    "AMD GPU (ROCm/HIP)": re.compile(
+        r"\+rocm\b|\bamdgpu_target=|CMAKE_HIP_ARCHITECTURES\b|-D\w*_HIP=ON\b"
+        r"|GPU_BACKEND=HIP\b|(?:\b|_)gfx9[0-4][0-9a-f](?![a-z0-9])"
+        r"|\bMI(?:50|60|100|210|250X?|300[AX]?)\b",
+        re.I,
+    ),
+    "Intel GPU (SYCL)": re.compile(
+        r"\+sycl\b|-D\w*_SYCL=ON\b|GPU_BACKEND=SYCL\b|(?:\b|_)INTEL_(?:PVC|XEHP|DG[12])\b",
+        re.I,
+    ),
+}
+
+# Installation guides, read with the README for Platform Documentation:
+# SUNDIALS's README names no platforms, while its install guide
+# (doc/shared/sundials/Install.rst) has "Linux/Unix systems" and "Windows
+# Systems" sections.
+# "build" only as the whole name or "building_*": build_settings.rst,
+# build_requirements.txt and build_and_release.rst aren't install guides.
+_INSTALL_DOC = (
+    r"(?:^|/)INSTALL(?:\.(?:md|rst|txt))?$"
+    r"|(?:^|/)install(?:ation|ing)?(?:[-_][\w-]*)?\.(?:md|rst|txt)$"
+    r"|(?:^|/)build(?:ing)?\.(?:md|rst|txt)$"
+    r"|(?:^|/)building[-_][\w-]*\.(?:md|rst|txt)$"
+)
+_MAX_INSTALL_DOCS = 2
+# Getting-started and platform-requirements pages, which is where many
+# projects list what they run on when their INSTALL files don't.
+# requirements.txt is a pip file.
+_PLATFORM_GUIDE = (
+    r"(?:^|/)(?:getting[-_]?started|quick[-_]?start|system[-_]requirements"
+    r"|supported[-_]platforms|platforms)\.(?:md|rst|txt)$"
+)
+
+_GITLAB_CI_RE = re.compile(r"^(?:\.gitlab-ci\.ya?ml|\.gitlab/.*\.ya?ml)$", re.I)
+_MAX_GITLAB_FILES = 10
 
 # Platform names a project might document support for.
 _PLATFORM_DOC_TERMS = {
@@ -97,9 +174,10 @@ class DeploymentEnvironmentCollector:
         logger.info(f"Collecting deployment environment metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            files, doc_text = await asyncio.gather(
+            files, doc_text, tree = await asyncio.gather(
                 self._list_workflows(client, ref),
                 self._read_platform_docs(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
                 return_exceptions=True,
             )
             if isinstance(files, Exception):
@@ -108,24 +186,80 @@ class DeploymentEnvironmentCollector:
             if isinstance(doc_text, Exception):
                 logger.warning(f"Platform doc read failed: {doc_text}")
                 doc_text = ""
+            # GitLab CI files the forge's CI listing didn't already return.
+            # In a GitHub repository these are facility CI (often GPU and
+            # non-x86), read for architecture coverage only; in a GitLab
+            # repository they are more of the project's own CI.
+            listed = {f["path"] for f in files}
+            gitlab_paths = (
+                [p for p in tree.find(_GITLAB_CI_RE.pattern) if p not in listed][:_MAX_GITLAB_FILES]
+                if isinstance(tree, RepoTree) else []
+            )
+            own_gitlab_ci = self.forge.platform == "gitlab"
 
             contents = await asyncio.gather(
                 *[self._read_workflow(client, ref, f["path"]) for f in files[:_MAX_WORKFLOW_FILES]],
                 return_exceptions=True,
             ) if files else []
+            install_docs = []
+            if isinstance(tree, RepoTree):
+                def owned(pattern):
+                    return sorted((p for p in tree.find(pattern) if not _VENDORED_DIR.search(p)),
+                                  key=lambda p: (p.count("/"), p))[:_MAX_INSTALL_DOCS]
+                install_docs = owned(_INSTALL_DOC) + owned(_PLATFORM_GUIDE)
+            install_texts = await asyncio.gather(
+                *[self._read_workflow(client, ref, p) for p in install_docs],
+                return_exceptions=True,
+            ) if install_docs else []
+            doc_text = "\n".join(
+                [doc_text] + [t for t in install_texts if isinstance(t, str)]
+            )
+            gitlab_contents = await asyncio.gather(
+                *[self._read_workflow(client, ref, p) for p in gitlab_paths],
+                return_exceptions=True,
+            ) if gitlab_paths else []
+            if own_gitlab_ci:
+                contents = list(contents) + list(gitlab_contents)
+                gitlab_contents = []
 
         families: Dict[str, set] = {name: set() for name in _RUNNER_FAMILIES}
-        architectures: set = set()
         for text in contents:
             if isinstance(text, Exception) or not text:
                 continue
             for family, pattern in _RUNNER_FAMILIES.items():
                 for label in pattern.findall(text):
                     families[family].add(label.lower())
+
+        architectures: set = set()
+        accelerators: set = set()
+        for text in list(contents) + list(gitlab_contents):
+            if isinstance(text, Exception) or not text:
+                continue
             for arch, pattern in _ARCH_PATTERNS.items():
                 if pattern.search(text):
                     architectures.add(arch)
+            for accel, pattern in _ACCELERATOR_PATTERNS.items():
+                if pattern.search(text):
+                    accelerators.add(accel)
 
+        if own_gitlab_ci:
+            # GitLab runners are often named only by site-specific tags, so
+            # CI that exists but names no OS family is "unstated", not absent.
+            unstated_ci = bool(contents) and not any(families.values())
+        else:
+            unstated_ci = bool(gitlab_paths)
+        unstated_ci = unstated_ci or (isinstance(tree, RepoTree) and bool(tree.find(_OTHER_CI)))
+        for text in contents:
+            if isinstance(text, Exception) or not text:
+                continue
+            for m in _SELF_HOSTED.finditer(text):
+                named = [f for f, p in _SELF_HOSTED_OS.items() if p.search(m.group(0))]
+                for family in named:
+                    families[family].add("self-hosted")
+                unstated_ci = unstated_ci or not named
+            # A matrix-chosen runner is stated when the file lists standard ones.
+            if _MATRIX_RUNNER.search(text) and not any(p.search(text) for p in _RUNNER_FAMILIES.values()):
+                unstated_ci = True
         detected = {f: sorted(labels) for f, labels in families.items() if labels}
         documented = sorted(
             name for name, pattern in _PLATFORM_DOC_TERMS.items()
@@ -137,10 +271,13 @@ class DeploymentEnvironmentCollector:
             "timestamp": self.forge.get_timestamp(),
             "workflow_count": len(files),
             "workflows_scanned": min(len(files), _MAX_WORKFLOW_FILES),
+            "gitlab_ci_files_scanned": len(gitlab_paths),
             "os_families": detected,
             "architectures": sorted(architectures),
+            "accelerators": sorted(accelerators),
             "documented_platforms": documented,
-            "overall_score": self._calculate_score(detected, sorted(architectures), documented),
+            "overall_score": self._calculate_score(
+                detected, sorted(architectures), documented, sorted(accelerators), unstated_ci),
         }
 
     async def _read_platform_docs(
@@ -160,15 +297,17 @@ class DeploymentEnvironmentCollector:
         return [{"name": e["name"], "path": e["path"]} for e in entries]
 
     async def _read_workflow(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
-        """Fetch a workflow file's raw text."""
-        text = await self.forge.file_content(client, ref, path)
-        return text or None
+        """Fetch a CI or doc file's raw text (outside the REST API, so no
+        rate-limit quota is spent)."""
+        return await self.forge.raw_text(client, ref, path) or None
 
     def _calculate_score(
         self,
         detected: Dict[str, List[str]],
         architectures: Optional[List[str]] = None,
         documented: Optional[List[str]] = None,
+        accelerators: Optional[List[str]] = None,
+        unstated_ci: bool = False,
     ) -> Dict[str, Any]:
         """Summarise coverage by OS family.
 
@@ -185,18 +324,23 @@ class DeploymentEnvironmentCollector:
             value = "No CI runner environments detected"
         architectures = architectures or []
         documented = documented or []
+        accelerators = accelerators or []
 
-        arch_ok = len(architectures) >= get_threshold("4.3.5", "Architecture Compatibility Analysis")
-        arch_value = (
-            "x86-64 plus " + ", ".join(architectures) if architectures
-            else "x86-64 only"
-        ) if detected else "No CI architectures detected"
+        arch_ok = (len(architectures) + len(accelerators)
+                   >= get_threshold("4.3.5", "Architecture Compatibility Analysis"))
+        if detected or architectures or accelerators:
+            arch_value = ("x86-64 plus " + ", ".join(architectures) if architectures
+                          else "x86-64 only")
+            if accelerators:
+                arch_value += "; GPU targets: " + ", ".join(accelerators)
+        else:
+            arch_value = "No CI architectures detected"
 
         docs_ok = len(documented) >= get_threshold("4.3.5", "Platform Documentation Evaluation")
         docs_value = (
             f"{len(documented)} platform{'s' if len(documented) != 1 else ''} named: "
             + ", ".join(documented)
-        ) if documented else "No supported platforms named in the README"
+        ) if documented else "No supported platforms named in the README, install or getting-started guide"
 
         sub = {
             "deployment_environment_testing": {
@@ -218,11 +362,18 @@ class DeploymentEnvironmentCollector:
                 "passing": docs_ok,
             },
         }
-        score = sum(1 for v in sub.values() if v["passing"])
+        if not passing and unstated_ci:
+            # Runners the configuration doesn't name an OS for may cover more.
+            sub["deployment_environment_testing"].update(
+                value=(value + "; other CI runs" if names else "CI runs")
+                      + " on self-hosted or non-GitHub runners whose OS isn't stated",
+                unmeasured=True)
+        scored = [v for v in sub.values() if not v.get("unmeasured")]
+        score = sum(1 for v in scored if v["passing"])
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": len(scored),
+            "percentage": round(score / len(scored) * 100, 2) if scored else None,
             "sub_scores": sub,
         }
 

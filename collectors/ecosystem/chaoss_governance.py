@@ -22,7 +22,9 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import (
+    COLLECTION_GAP, RepoTree, RetryingTransport,
+)
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -75,9 +77,10 @@ class CHAOSSGovernanceCollector:
             return self._empty_result(repo_name)
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            tree = await RepoTree.fetch(client, self.forge, ref)
             results = await asyncio.gather(
                 self._get_project_popularity(client, ref),
-                self._get_documentation_usability(client, ref),
+                self._get_documentation_usability(client, ref, tree),
                 self._get_issue_metrics(client, ref),
                 self._get_change_request_metrics(client, ref),
                 self._get_release_frequency(client, ref),
@@ -188,7 +191,7 @@ class CHAOSSGovernanceCollector:
             return {}
 
     async def _get_documentation_usability(
-        self, client: httpx.AsyncClient, ref: str
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> Dict[str, Any]:
         """CHAOSS: Documentation Usability — README quality and docs presence.
 
@@ -200,6 +203,12 @@ class CHAOSSGovernanceCollector:
         the "don't report something collected that wasn't" rule -- a
         partially-known composite isn't a confident score, it's a gap with
         extra steps.
+
+        Contributing guide and docs folder are resolved against a RepoTree
+        (case-insensitive) rather than probed one literal path at a time --
+        AMReX's "Docs" and superlu's "DOC" directories, and ADIOS2's
+        "Contributing.md", all missed the old case-sensitive check (see
+        METRIC_BLIND_SPOTS.md class F1).
         """
         found_docs = []
         doc_details: Dict[str, Any] = {}
@@ -217,29 +226,24 @@ class CHAOSSGovernanceCollector:
         else:
             doc_details["readme"] = {"exists": False, "quality_score": 0}
 
-        for pattern in ["CONTRIBUTING.md", ".github/CONTRIBUTING.md"]:
-            result = await self.forge.file_exists(client, ref, pattern)
-            if result is COLLECTION_GAP:
-                has_gap = True
-                continue
-            if result:
+        if tree is COLLECTION_GAP:
+            has_gap = True
+            doc_details["contributing"] = {"exists": False}
+            doc_details["docs_folder"] = {"exists": False}
+        else:
+            contributing_path = tree.match(["CONTRIBUTING.md", ".github/CONTRIBUTING.md"])
+            if contributing_path:
                 found_docs.append("contributing")
-                doc_details["contributing"] = {"exists": True, "file": pattern}
-                break
-        else:
-            doc_details.setdefault("contributing", {"exists": False})
+                doc_details["contributing"] = {"exists": True, "file": contributing_path}
+            else:
+                doc_details["contributing"] = {"exists": False}
 
-        for pattern in ["docs/", "documentation/", "doc/"]:
-            result = await self.forge.file_exists(client, ref, pattern)
-            if result is COLLECTION_GAP:
-                has_gap = True
-                continue
-            if result:
+            docs_dir = next((d for d in ("docs", "documentation", "doc") if tree.has_dir(d)), None)
+            if docs_dir:
                 found_docs.append("docs_folder")
-                doc_details["docs_folder"] = {"exists": True, "path": pattern}
-                break
-        else:
-            doc_details.setdefault("docs_folder", {"exists": False})
+                doc_details["docs_folder"] = {"exists": True, "path": docs_dir}
+            else:
+                doc_details["docs_folder"] = {"exists": False}
 
         has_wiki = await self._check_wiki_enabled(client, ref)
         if has_wiki is COLLECTION_GAP:
@@ -271,9 +275,12 @@ class CHAOSSGovernanceCollector:
         """CHAOSS: Time to Close and Issue Age."""
         closed_issues = await self._get_closed_issues(client, ref, limit=30)
         open_issues = await self._get_open_issues(client, ref, limit=50)
+        issue_age = self._calculate_issue_age(open_issues)
+        if not open_issues and not closed_issues and open_issues is not COLLECTION_GAP:
+            issue_age = {"count": 0, "not_collected": True, "reason": "no issues"}
         return {
             "time_to_close": self._calculate_time_to_close(closed_issues),
-            "issue_age": self._calculate_issue_age(open_issues),
+            "issue_age": issue_age,
         }
 
     async def _get_change_request_metrics(
@@ -284,10 +291,9 @@ class CHAOSSGovernanceCollector:
         if closed_prs is COLLECTION_GAP:
             return {"closure_ratio": {"not_collected": True}}
         if not closed_prs:
-            # A genuinely empty list -- a real repo with zero closed PRs --
-            # is a legitimate, confirmed result, not a gap. Contrast with
-            # the COLLECTION_GAP branch above.
-            return {"closure_ratio": {"total": 0, "merged": 0, "closed_without_merge": 0, "ratio": 0, "score": 0}}
+            # No closed pull requests: there is no ratio to take, and changes
+            # may be reviewed somewhere other than GitHub.
+            return {"closure_ratio": {"total": 0, "not_collected": True, "reason": "no closed pull requests"}}
 
         merged = sum(1 for pr in closed_prs if pr.get("merged_at"))
         closed_without_merge = len(closed_prs) - merged
@@ -312,6 +318,12 @@ class CHAOSSGovernanceCollector:
             releases = await self.forge.releases(client, ref, per_page=30)
             if releases is COLLECTION_GAP:
                 return {"not_collected": True}
+            # Version tags without a Release object are releases too.
+            named = {r.get("tag_name") for r in releases}
+            releases = sorted(
+                list(releases) + [t for t in await self.forge.version_tags(client, ref)
+                                  if t["tag_name"] not in named],
+                key=lambda r: r.get("published_at") or "", reverse=True)
             if not releases:
                 return {"total_releases": 0, "recent_releases": 0, "avg_days_between_releases": 0, "latest_release": None, "score": 0}
 
@@ -356,7 +368,7 @@ class CHAOSSGovernanceCollector:
         if issues is COLLECTION_GAP:
             return {"not_collected": True}
         if not issues:
-            return {"total_issues": 0, "unique_participants": 0, "avg_participants_per_issue": 0, "score": 0}
+            return {"total_issues": 0, "not_collected": True, "reason": "no issues"}
 
         all_participants: set = set()
         participants_per_issue = []
@@ -470,7 +482,9 @@ class CHAOSSGovernanceCollector:
         if closed_issues is COLLECTION_GAP:
             return {"not_collected": True}
         if not closed_issues:
-            return {"count": 0, "avg_days": 0, "median_days": 0, "min_days": 0, "max_days": 0, "score": 0}
+            # Nothing closed yet: time to close can't be measured, and scoring
+            # it 0 would count it as the slowest possible.
+            return {"count": 0, "not_collected": True, "reason": "no closed issues"}
 
         days_to_close = []
         for issue in closed_issues:
@@ -498,7 +512,9 @@ class CHAOSSGovernanceCollector:
         if open_issues is COLLECTION_GAP:
             return {"not_collected": True}
         if not open_issues:
-            return {"count": 0, "avg_days": 0, "median_days": 0, "max_days": 0, "stale_issues": 0, "score": 0}
+            # No open backlog is the best case, not the worst; _get_issue_metrics
+            # drops it instead when the project has no issues at all.
+            return {"count": 0, "avg_days": 0, "median_days": 0, "max_days": 0, "stale_issues": 0, "score": 100}
 
         now = datetime.now(timezone.utc)
         ages = []

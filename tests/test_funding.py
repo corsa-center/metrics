@@ -2,51 +2,17 @@
 
 import asyncio
 import pytest
+from unittest.mock import AsyncMock, patch
 
-from forge.base import COLLECTION_GAP
-from collectors.ecosystem.funding import FundingCollector, _FUNDING_FILES
-
-
-class FakeForge:
-    """Minimal stand-in for GitHubForge/GitLabForge."""
-
-    def __init__(self):
-        self.file_results = {}
-        self.file_content_results = {}
-        self.readme_result = None
-        self.contributors_result = []
-        self.user_results = {}
-
-    def extract_ref(self, repo_url):
-        return None if repo_url == "not-a-url" else "o/r"
-
-    async def file_exists(self, client, ref, path):
-        return self.file_results.get(path)
-
-    async def file_content(self, client, ref, path):
-        return self.file_content_results.get(path)
-
-    async def readme(self, client, ref):
-        return self.readme_result
-
-    async def contributors(self, client, ref, *, per_page=100, page=1):
-        return self.contributors_result
-
-    async def user(self, client, login):
-        return self.user_results.get(login)
-
-    def get_timestamp(self):
-        return "2026-01-01T00:00:00+00:00"
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.ecosystem.funding import FundingCollector
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
-def forge():
-    return FakeForge()
-
-
-@pytest.fixture
-def collector(forge):
-    return FundingCollector(forge)
+def collector():
+    return FundingCollector(GitHubForge())
 
 
 class TestCompanyNormalization:
@@ -100,6 +66,27 @@ class TestScoring:
                         files={"found": [], "platforms": ["github"]},
                         grants=[{"value": "OAC-1234567", "kind": "NSF"}])
         assert "2 distinct" in s["sub_scores"]["funding_portfolio"]["value"]
+        assert s["sub_scores"]["funding_portfolio"]["passing"]
+
+    def test_acknowledgment_alone_documents_funding(self, collector):
+        s = self._score(collector, grants=[{"value": "DOE", "kind": "acknowledgment"}])
+        row = s["sub_scores"]["funding_documentation"]
+        assert row["passing"]
+        assert row["value"] == "funding acknowledged: DOE"
+        assert row["detail"] is None
+
+    def test_acknowledged_agency_already_covered_by_an_award_counts_once(self, collector):
+        s = self._score(collector, grants=[
+            {"value": "DE-SC0021354", "kind": "DOE award"},
+            {"value": "DOE", "kind": "acknowledgment"},
+        ])
+        assert "1 distinct" in s["sub_scores"]["funding_portfolio"]["value"]
+
+    def test_distinct_acknowledged_agencies_count_separately(self, collector):
+        s = self._score(collector, grants=[
+            {"value": "DE-SC0021354", "kind": "DOE award"},
+            {"value": "NSF", "kind": "acknowledgment"},
+        ])
         assert s["sub_scores"]["funding_portfolio"]["passing"]
 
     def test_single_source_fails_portfolio(self, collector):
@@ -207,56 +194,84 @@ class TestScoringGapHandling:
         assert s["status"] == "not_collected"
 
 
-class TestFindFundingFilesGapHandling:
-    def _run(self, collector, forge, responses):
-        forge.file_results = responses
-        return asyncio.run(collector._find_funding_files(None, "o/r"))
+class TestFindFundingFiles:
+    """_find_funding_files now takes a RepoTree (or COLLECTION_GAP) directly
+    -- see METRIC_BLIND_SPOTS.md class F1.
+    """
 
-    def test_gap_with_no_find_is_not_collected(self, collector, forge):
-        responses = {p: COLLECTION_GAP for p in _FUNDING_FILES}
-        result = self._run(collector, forge, responses)
+    def test_gapped_tree_is_not_collected(self, collector):
+        result = asyncio.run(collector._find_funding_files(None, "o/r", COLLECTION_GAP))
         assert result["found"] == []
         assert result["not_collected"] is True
 
-    def test_found_file_is_not_marked_not_collected_despite_gaps_elsewhere(self, collector, forge):
-        responses = {p: COLLECTION_GAP for p in _FUNDING_FILES}
-        responses[".github/FUNDING.yml"] = "http://x"
-        forge.file_results = responses
-        # No FUNDING.yml content configured on the fake -> file_content()
-        # returns None, so _read_funding_platforms reports ([], False).
-        result = asyncio.run(collector._find_funding_files(None, "o/r"))
+    def test_found_file_is_not_marked_not_collected(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", [".github/FUNDING.yml"], truncated=False)
+
+        async def fake_platforms(client, ref, path):
+            return [], False
+
+        async def go():
+            with patch.object(collector, "_read_funding_platforms", side_effect=fake_platforms):
+                return await collector._find_funding_files(None, "o/r", tree)
+
+        result = asyncio.run(go())
         assert len(result["found"]) == 1
+        assert "not_collected" not in result
+
+    def test_confirmed_absence_is_not_collected_free(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        result = asyncio.run(collector._find_funding_files(None, "o/r", tree))
+        assert result["found"] == []
         assert "not_collected" not in result
 
 
 class TestGetOwnerTypeGapHandling:
-    def test_gap_is_tracked(self, collector, forge):
-        forge.user_results = {"o": COLLECTION_GAP}
-        owner_type, saw_gap = asyncio.run(collector._get_owner_type(None, "o"))
+    def test_gap_is_tracked(self, collector):
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_owner_type(None, "o")
+
+        owner_type, saw_gap = asyncio.run(go())
         assert owner_type is None
         assert saw_gap is True
 
-    def test_confirmed_user_type_is_not_a_gap(self, collector, forge):
-        forge.user_results = {"o": {"type": "User"}}
-        owner_type, saw_gap = asyncio.run(collector._get_owner_type(None, "o"))
+    def test_confirmed_user_type_is_not_a_gap(self, collector):
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value={"type": "User"})):
+                return await collector._get_owner_type(None, "o")
+
+        owner_type, saw_gap = asyncio.run(go())
         assert owner_type == "User"
         assert saw_gap is False
 
 
 class TestGetAffiliationsGapHandling:
-    def test_contributors_listing_gap_is_tracked(self, collector, forge):
-        forge.contributors_result = COLLECTION_GAP
-        result = asyncio.run(collector._get_affiliations(None, "o/r"))
+    def test_contributors_listing_gap_is_tracked(self, collector):
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_affiliations(None, "o/r")
+
+        result = asyncio.run(go())
         assert result["gap"] is True
         assert result["sampled"] == 0
 
-    def test_per_contributor_gap_excludes_from_sample(self, collector, forge):
-        forge.contributors_result = [{"identity": "alice"}, {"identity": "bob"}]
-        forge.user_results = {
-            "alice": {"company": "HDF Group"},
-            "bob": COLLECTION_GAP,
-        }
-        result = asyncio.run(collector._get_affiliations(None, "o/r"))
+    def test_per_contributor_gap_excludes_from_sample(self, collector):
+        contributors = [{"login": "alice"}, {"login": "bob"}]
+
+        async def fake_github_get(client, url, params=None):
+            if url.endswith("/contributors"):
+                return contributors
+            if url.endswith("/users/alice"):
+                return {"company": "HDF Group"}
+            if url.endswith("/users/bob"):
+                return COLLECTION_GAP
+            return None
+
+        async def go():
+            with patch.object(collector.forge, "_github_get", side_effect=fake_github_get):
+                return await collector._get_affiliations(None, "o/r")
+
+        result = asyncio.run(go())
         assert result["sampled"] == 1
         assert result["with_affiliation"] == 1
         assert result["gap"] is True
@@ -267,6 +282,8 @@ class TestGrantPatterns:
         ("Supported by DE-AC02-06CH11357", True),
         ("under NSF OAC-1836650", True),
         ("award R01GM123456 funded", True),
+        ("DOE award DE-SC0021354", True),
+        ("DOE awards DE-AC52-07NA27344 and DE-SC-0021354.", True),
         ("see version 1.14.3 and issue 12345", False),
         ("no funding here", False),
     ])
@@ -275,3 +292,156 @@ class TestGrantPatterns:
         from collectors.ecosystem.funding import _GRANT_PATTERNS
         hit = any(re.search(p, text, re.IGNORECASE) for p, _ in _GRANT_PATTERNS)
         assert hit is expected
+
+
+class TestFindGrantReferences:
+    def _grants(self, collector, readme):
+        import base64
+        from unittest.mock import AsyncMock, MagicMock, patch
+        data = {"content": base64.b64encode(readme.encode()).decode()}
+
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._find_grant_references(MagicMock(), "o/r")
+        grants, gap = asyncio.run(go())
+        return [g["value"] for g in grants]
+
+    def test_hyphenated_doe_award_counted_separately_from_contract(self, collector):
+        readme = "under DOE awards DE-AC52-07NA27344 and DE-SC-0021354."
+        assert self._grants(collector, readme) == ["DE-AC52-07NA27344", "DE-SC-0021354"]
+
+    def test_same_award_written_two_ways_counts_once(self, collector):
+        readme = "Supported by DE-SC0021354. See also award DE-SC-0021354."
+        assert len(self._grants(collector, readme)) == 1
+
+
+class TestAcknowledgedAgencies:
+    @pytest.mark.parametrize("text,expected", [
+        # AMReX's NOTICE: "U.S." must not end the sentence early.
+        ("This Software was developed under funding from the U.S. Department\nof Energy.", ["DOE"]),
+        ("This work was supported by the National Science Foundation and NASA.", ["NSF", "NASA"]),
+        ("Funded in part by the Exascale Computing Project (17-SC-20-SC).", ["DOE"]),
+        # Named, but not as a funder.
+        ("AMReX is deployed on DOE HPC systems.", []),
+        ("AMReX supports several Exascale Computing Project applications.", []),
+        ("Funding for travel is available. Later, unrelated: see the NSF site.", []),
+    ])
+    def test_agencies(self, collector, text, expected):
+        assert collector._acknowledged_agencies(text) == expected
+
+
+class TestAcknowledgmentFiles:
+    def test_notice_file_is_read_alongside_the_readme(self, collector):
+        import base64
+        from unittest.mock import MagicMock
+        from collectors.ecosystem.base import RepoTree
+
+        def enc(t):
+            return {"content": base64.b64encode(t.encode()).decode()}
+
+        responses = {
+            "/readme": enc("AMReX is deployed on DOE HPC systems."),
+            "/contents/NOTICE": enc("developed under funding from the U.S. Department of Energy"),
+        }
+
+        async def fake_get(client, url, params=None):
+            for key, value in responses.items():
+                if url.endswith(key):
+                    return value
+            return None
+
+        collector.forge._github_get = fake_get
+        tree = RepoTree(FakeForge(), "o/r", ["NOTICE", "docs/NOTICE"], truncated=False)
+        grants, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
+        assert grants == [{"value": "DOE", "kind": "acknowledgment"}]
+        assert gap is False
+
+    def test_docs_landing_and_acknowledgment_pages_are_read(self, collector):
+        import base64
+        from unittest.mock import MagicMock
+        from collectors.ecosystem.base import RepoTree
+
+        def enc(t):
+            return {"content": base64.b64encode(t.encode()).decode()}
+
+        read = []
+
+        async def fake_get(client, url, params=None):
+            read.append(url.rsplit("/contents/", 1)[-1])
+            if url.endswith("docs/source/index.rst"):
+                return enc("Funded by the Exascale Computing Project, U.S. Department of Energy")
+            if url.endswith("docs/acknowledgements.rst"):
+                return enc("Acknowledgements\n================\n\nNational Science Foundation\n")
+            return None
+
+        collector.forge._github_get = fake_get
+        tree = RepoTree(FakeForge(), "o/r", [
+            "docs/source/index.rst", "docs/acknowledgements.rst",
+            "docs/_build/html/_sources/index.rst", "third_party/lib/docs/index.rst",
+        ], truncated=False)
+        grants, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
+        assert {g["value"] for g in grants} == {"DOE", "NSF"}
+        assert not any("_build" in p or "third_party" in p for p in read)
+
+    def test_gapped_tree_is_a_gap(self, collector):
+        from unittest.mock import MagicMock
+        from collectors.ecosystem.base import COLLECTION_GAP
+
+        async def fake_get(client, url, params=None):
+            return None
+
+        collector.forge._github_get = fake_get
+        _, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", COLLECTION_GAP))
+        assert gap is True
+
+
+class TestInternationalAwards:
+    """Formats taken from real project READMEs (see #76)."""
+
+    def _kinds(self, text):
+        import re
+        from collectors.ecosystem.funding import _GRANT_PATTERNS
+        return [k for p, k in _GRANT_PATTERNS if re.findall(p, text, flags=re.IGNORECASE)]
+
+    @pytest.mark.parametrize("text,kind", [
+        ("under grant agreement No 101095998", "EU grant"),
+        ("Grant Agreement n° 732287", "EU grant"),
+        ("EPSRC grant EP/Y022904/1", "UKRI award"),
+        ("JSPS KAKENHI Grant Number JP18H04091", "JSPS KAKENHI grant"),
+        ("KAKENHI Grant Numbers 16H06302 and 17H04687", "JSPS KAKENHI grant"),
+        ("JST CREST Grant Number JPMJCR18A6", "JST grant"),
+        ("Australian Research Council (DP130100364)", "ARC grant"),
+        ("ANR project ANR-21-CE38-0017", "ANR award"),
+        ("NSERC Discovery Grant RGPIN-2018-06153", "NSERC award"),
+        ("DFG under Germany's Excellence Strategy - EXC 2064/1", "DFG grant"),
+        ("funded by the DFG - project number 390727645", "DFG grant"),
+        ("Wellcome Trust grant 206298/Z/17/Z", "Wellcome grant"),
+        ("National Natural Science Foundation of China (No. 62272231)", "NSFC grant"),
+        ("Swiss National Science Foundation grant 200021_172763", "SNSF grant"),
+        ("NSF grant DMR-1847172", "NSF award"),
+        ("NIH grants R01-HG006139 and U19-AI135995", "NIH award"),
+        ("AFRL contract FA8650-18-C-7809", "DoD contract"),
+        ("contract DE-NA0003525", "NNSA contract"),
+    ])
+    def test_award_formats(self, text, kind):
+        assert kind in self._kinds(text)
+
+    @pytest.mark.parametrize("text", [
+        "Tested for 2020 and 2021 releases", "See issue 12345 and version 1.14.3",
+        "SPP 1234 words", "Contributions are wellcome!", "exc 2064 in lower case",
+    ])
+    def test_non_awards(self, text):
+        assert self._kinds(text) == []
+
+    def test_funders_listed_under_an_acknowledgments_heading(self):
+        from collectors.ecosystem.funding import FundingCollector
+        md = "## Acknowledgements\n- [NSERC](https://nserc.ca)\n- Agence Nationale de la Recherche\n## License\nNSF\n"
+        assert set(FundingCollector._acknowledged_agencies(md)) == {"NSERC", "ANR"}
+
+    def test_funder_name_outside_funding_context_is_not_counted(self):
+        from collectors.ecosystem.funding import FundingCollector
+        assert FundingCollector._acknowledged_agencies("Runs on EuroHPC's LUMI machine.") == []
+
+    def test_underlined_acknowledgments_heading_is_a_section(self):
+        rst = "Acknowledgments\n---------------\n\n* Department of Defense\n* NASA\n\nLicense\n-------\n\nNSF\n"
+        assert set(FundingCollector._acknowledged_agencies(rst)) == {"NASA", "DoD"}

@@ -2,34 +2,19 @@
 
 import asyncio
 import pytest
-from forge.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.accessibility import AccessibilityCollector
-
-
-class FakeForge:
-    """Minimal stand-in for GitHubForge/GitLabForge."""
-
-    def __init__(self):
-        self.file_results = {}
-
-    def extract_ref(self, repo_url):
-        return None if repo_url == "not-a-url" else "o/r"
-
-    async def file_exists(self, client, ref, path):
-        return self.file_results.get(path)
-
-    def get_timestamp(self):
-        return "2026-01-01T00:00:00+00:00"
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
-def forge():
-    return FakeForge()
+def collector():
+    return AccessibilityCollector(GitHubForge())
 
 
-@pytest.fixture
-def collector(forge):
-    return AccessibilityCollector(forge)
+def _tree(paths):
+    return RepoTree(FakeForge(), "owner/repo", list(paths), truncated=False)
 
 
 class TestEmptyResult:
@@ -51,80 +36,171 @@ class TestCollectInvalidUrl:
 
 
 class TestScan:
-    def _run_scan(self, collector, forge, found_paths):
-        forge.file_results = {p: "http://x" for p in found_paths}
-        return asyncio.run(collector._scan(None, "MyPkg", "o/r"))
+    """_scan now takes a RepoTree (or COLLECTION_GAP) directly, rather than
+    probing paths one at a time -- see METRIC_BLIND_SPOTS.md class F1/F2.
+    """
 
-    def test_dockerfile_only(self, collector, forge):
-        result = self._run_scan(collector, forge, {"Dockerfile"})
+    def test_dockerfile_only(self, collector):
+        result = collector._scan(_tree({"Dockerfile"}), "MyPkg", "owner/repo")
         assert result["has_container"] is True
         assert result["categories"]["containers"]["found"] == ["Docker"]
         assert result["categories"]["containers"]["count_found"] == 1
 
-    def test_cmake_and_dockerfile(self, collector, forge):
-        result = self._run_scan(collector, forge, {"Dockerfile", "CMakeLists.txt"})
+    def test_cmake_and_dockerfile(self, collector):
+        result = collector._scan(_tree({"Dockerfile", "CMakeLists.txt"}), "MyPkg", "owner/repo")
         assert result["has_container"] is True
         assert result["has_portable_build_system"] is True
         assert "CMake" in result["categories"]["build_systems"]["found"]
 
-    def test_nothing_found(self, collector, forge):
-        result = self._run_scan(collector, forge, set())
+    def test_nothing_found(self, collector):
+        result = collector._scan(_tree(set()), "MyPkg", "owner/repo")
         assert result["has_container"] is False
         assert result["has_portable_build_system"] is False
         assert result["overall_score"]["percentage"] == 0.0
 
-    def test_overall_score_increases_with_matches(self, collector, forge):
-        none = self._run_scan(collector, forge, set())
-        some = self._run_scan(collector, forge, {"Dockerfile", "CMakeLists.txt", "pyproject.toml"})
+    def test_overall_score_increases_with_matches(self, collector):
+        none = collector._scan(_tree(set()), "MyPkg", "owner/repo")
+        some = collector._scan(
+            _tree({"Dockerfile", "CMakeLists.txt", "pyproject.toml"}), "MyPkg", "owner/repo"
+        )
         assert some["overall_score"]["percentage"] > none["overall_score"]["percentage"]
 
-    def test_singularity_detected(self, collector, forge):
-        result = self._run_scan(collector, forge, {"Singularity"})
+    def test_singularity_detected(self, collector):
+        result = collector._scan(_tree({"Singularity"}), "MyPkg", "owner/repo")
         assert result["has_container"] is True
         assert "Singularity / Apptainer" in result["categories"]["containers"]["found"]
 
-    def test_spack_detected(self, collector, forge):
-        result = self._run_scan(collector, forge, {"package.py"})
+    def test_spack_detected(self, collector):
+        result = collector._scan(_tree({"package.py"}), "MyPkg", "owner/repo")
         assert result["has_portable_build_system"] is True
         assert "Spack" in result["categories"]["build_systems"]["found"]
 
+    def test_gnumakefile_in_template_detected(self, collector):
+        # AMReX-Codes/amrex ships GNUmakefile.in (a template for its custom
+        # GNU Make build) rather than a literal GNUmakefile/Makefile.
+        result = collector._scan(_tree({"GNUmakefile.in"}), "MyPkg", "owner/repo")
+        assert result["has_portable_build_system"] is True
+        assert "Makefile" in result["categories"]["build_systems"]["found"]
 
-class TestScanGapHandling:
-    def _run_scan(self, collector, forge, responses):
-        forge.file_results = responses
-        return asyncio.run(collector._scan(None, "MyPkg", "o/r"))
+    def test_makefile_am_detected(self, collector):
+        # open-mpi/ompi, pmodels/mpich and four other portfolio repos build
+        # with GNU Autotools and ship Makefile.am, not Makefile/GNUmakefile.
+        result = collector._scan(_tree({"Makefile.am"}), "MyPkg", "owner/repo")
+        assert "Makefile" in result["categories"]["build_systems"]["found"]
 
-    def test_gapped_item_is_not_collected_not_a_confirmed_missing(self, collector, forge):
-        result = self._run_scan(collector, forge, {"Dockerfile": COLLECTION_GAP})
-        containers = result["categories"]["containers"]
-        assert "Docker" not in containers["missing"]
-        assert "Docker" in containers["not_collected"]
-
-    def test_found_item_survives_a_gap_on_a_sibling_candidate(self, collector, forge):
-        result = self._run_scan(collector, forge, {"CMakeLists.txt": "http://x"})
+    def test_match_is_case_insensitive(self, collector):
+        # superlu ships DOC/CMakeLists.txt-style capitalization elsewhere in
+        # the portfolio; confirm a differently-cased CMakeLists.txt matches.
+        result = collector._scan(_tree({"cmakelists.txt"}), "MyPkg", "owner/repo")
         assert "CMake" in result["categories"]["build_systems"]["found"]
 
-    def test_category_fully_gapped_reports_no_percentage(self, collector, forge):
-        responses = {"INSTALL": COLLECTION_GAP, "INSTALL.md": COLLECTION_GAP,
-                     "INSTALL.rst": COLLECTION_GAP, "INSTALL.txt": COLLECTION_GAP}
-        result = self._run_scan(collector, forge, responses)
+
+class TestScanGapHandling:
+    def test_gapped_tree_is_not_collected_not_a_confirmed_missing(self, collector):
+        result = collector._scan(COLLECTION_GAP, "MyPkg", "owner/repo")
+        containers = result["categories"]["containers"]
+        assert containers["missing"] == []
+        assert "Docker" in containers["not_collected"]
+
+    def test_confirmed_missing_is_not_the_same_as_gapped(self, collector):
+        result = collector._scan(_tree({"README.md"}), "MyPkg", "owner/repo")
+        containers = result["categories"]["containers"]
+        assert containers["not_collected"] == []
+        assert "Docker" in containers["missing"]
+
+    def test_found_item_survives_confirmed_misses_on_siblings(self, collector):
+        result = collector._scan(_tree({"CMakeLists.txt"}), "MyPkg", "owner/repo")
+        assert "CMake" in result["categories"]["build_systems"]["found"]
+
+    def test_category_fully_gapped_reports_no_percentage(self, collector):
+        result = collector._scan(COLLECTION_GAP, "MyPkg", "owner/repo")
         install_docs = result["categories"]["install_docs"]
         assert install_docs["percentage"] is None
         assert install_docs["count_total"] == 0
 
-    def test_everything_gapped_reports_not_collected_overall(self, collector, forge):
-        all_paths = {p for items in [
-            "Dockerfile", "docker/Dockerfile", ".docker/Dockerfile",
-            "Singularity", "singularity/Singularity", "Apptainer", "apptainer/Apptainer", "*.def",
-            "CMakeLists.txt", "package.py", "spack/package.py",
-            "meta.yaml", "conda/meta.yaml", "recipe/meta.yaml", "environment.yml", "environment.yaml",
-            "configure.ac", "configure.in", "Makefile", "makefile", "GNUmakefile",
-            "pyproject.toml", "setup.py", "setup.cfg",
-            "INSTALL", "INSTALL.md", "INSTALL.rst", "INSTALL.txt",
-        ] for p in [items]}
-        responses = {p: COLLECTION_GAP for p in all_paths}
-        result = self._run_scan(collector, forge, responses)
+    def test_everything_gapped_reports_not_collected_overall(self, collector):
+        result = collector._scan(COLLECTION_GAP, "MyPkg", "owner/repo")
         assert result["overall_score"]["score"] is None
         assert result["overall_score"]["max_score"] == 0
         assert result["overall_score"]["percentage"] is None
         assert result["overall_score"]["status"] == "not_collected"
+
+
+class TestContainersAnywhereInTree:
+    def test_dockerfile_in_a_subdirectory_counts(self):
+        tree = RepoTree(FakeForge(), "o/r", ["scripts/docker/Dockerfile", "CMakeLists.txt"], truncated=False)
+        out = AccessibilityCollector(GitHubForge())._scan(tree, "r", "o/r")
+        assert out["has_container"] is True
+
+    def test_vendored_dockerfile_does_not_count(self):
+        tree = RepoTree(FakeForge(), "o/r", ["extern/tool/Dockerfile", "CMakeLists.txt"], truncated=False)
+        assert AccessibilityCollector(GitHubForge())._scan(tree, "r", "o/r")["has_container"] is False
+
+
+class TestPythonPackageAsPortableBuild:
+    def _collect(self, collector, paths, pyproject=None):
+        import asyncio, base64
+        from unittest.mock import AsyncMock, patch
+        tree = RepoTree(FakeForge(), "o/r", paths, truncated=False)
+        content = {"content": base64.b64encode(pyproject.encode()).decode()} if pyproject else None
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=content)):
+            return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_pyproject_with_project_table_is_portable(self, collector):
+        r = self._collect(collector, ["pyproject.toml", "lib/pkg/x.py"],
+                          '[project]\nname = "spack"\n[build-system]\nrequires = ["hatchling"]\n')
+        assert r["has_portable_build_system"] is True
+        assert r["python_package"] == "pyproject.toml"
+
+    def test_pyproject_with_only_tool_settings_is_not(self, collector):
+        r = self._collect(collector, ["pyproject.toml"], "[tool.ruff]\nline-length = 99\n")
+        assert r["has_portable_build_system"] is False
+
+    def test_setup_py_is_portable_without_a_read(self, collector):
+        r = self._collect(collector, ["setup.py"])
+        assert r["python_package"] == "setup.py"
+
+    def test_cmake_project_is_unchanged(self, collector):
+        r = self._collect(collector, ["CMakeLists.txt", "pyproject.toml"], "[tool.black]\n")
+        assert r["has_portable_build_system"] is True
+        assert "python_package" not in r
+
+
+class TestOtherBuildPaths:
+    @pytest.mark.parametrize("paths,label", [
+        (["meson.build"], "Meson"),
+        (["fpm.toml", "src/a.f90"], "Fortran Package Manager"),
+        (["spack/packages/py-x/package.py"], "Spack"),
+        (["environments/gnu/spack.yaml"], "Spack"),
+        (["src/CMakeLists.txt", "src/a.c"], "CMake"),
+        (["src/configure"], "Autoconf / configure"),
+        (["configure", "src/a.c"], "Autoconf / configure"),
+        (["install.sh"], "Install script"),
+    ])
+    def test_found(self, collector, paths, label):
+        assert collector._other_build(RepoTree(FakeForge(), "o/r", paths, False)).startswith(label)
+
+    @pytest.mark.parametrize("paths", [
+        ["docs/CMakeLists.txt"], ["examples/CMakeLists.txt"], ["lib/pkg/package.py"],
+        ["docs/spack.yaml"], ["var/test_repos/packages/mock/package.py"],
+        ["share/templates/spack.yaml"], ["third_party/zlib/CMakeLists.txt"], ["a/b/CMakeLists.txt"],
+    ])
+    def test_not_a_build(self, collector, paths):
+        assert collector._other_build(RepoTree(FakeForge(), "o/r", paths, False)) is None
+
+
+class TestE4SContainerImage:
+    def test_package_in_e4s_image_is_container_available(self, monkeypatch):
+        from collectors.quality import accessibility
+        from collectors.ecosystem import collaboration
+        monkeypatch.setattr(accessibility, "_e4s_specs", {"tau", "aml"})
+        monkeypatch.setattr(collaboration, "_spack_by_repo", {"uo-oaciss/tau2": ["tau"]})
+        c = accessibility.AccessibilityCollector(GitHubForge())
+        assert asyncio.run(c._e4s_image(None, "UO-OACISS/tau2")) == "E4S container image (Spack package tau)"
+        assert asyncio.run(c._e4s_image(None, "anlsys/aml")) == "E4S container image (Spack package aml)"
+
+    def test_package_not_in_e4s_is_not(self, monkeypatch):
+        from collectors.quality import accessibility
+        monkeypatch.setattr(accessibility, "_e4s_specs", {"tau"})
+        assert asyncio.run(accessibility.AccessibilityCollector(GitHubForge())._e4s_image(None, "o/other")) is None

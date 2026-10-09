@@ -2,49 +2,19 @@
 
 import asyncio
 import pytest
+from unittest.mock import AsyncMock, patch
 
-from forge.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.fair_licensing import (
     FairLicensingCollector, _CITATION_FIELDS, _CODEMETA_PATHS,
 )
-
-
-class FakeForge:
-    """Minimal stand-in for GitHubForge/GitLabForge."""
-
-    def __init__(self):
-        self.license_result = None
-        self.file_content_results = {}
-        self.file_exists_results = {}
-        self.releases_result = []
-
-    def extract_ref(self, repo_url):
-        return None if repo_url == "not-a-url" else "o/r"
-
-    async def license(self, client, ref):
-        return self.license_result
-
-    async def file_content(self, client, ref, path):
-        return self.file_content_results.get(path)
-
-    async def file_exists(self, client, ref, path):
-        return self.file_exists_results.get(path)
-
-    async def releases(self, client, ref, *, per_page=30, page=1):
-        return self.releases_result
-
-    def get_timestamp(self):
-        return "2026-01-01T00:00:00+00:00"
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
-def forge():
-    return FakeForge()
-
-
-@pytest.fixture
-def collector(forge):
-    return FairLicensingCollector(forge)
+def collector():
+    return FairLicensingCollector(GitHubForge())
 
 
 HDF5_LICENSE = """Copyright Notice and License Terms for HDF5
@@ -54,6 +24,24 @@ Copyright 1998-2006 by The Board of Trustees of the University of Illinois.
 All rights reserved.
 
 This software library and utilities is covered by the 3-clause BSD License.
+"""
+
+AMREX_LICENSE = """AMReX Copyright (c) 2024, The Regents of the University of California,
+through Lawrence Berkeley National Laboratory. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+(1) Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+
+(2) Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+(3) Neither the name of the copyright holder nor the names of its
+contributors may be used to endorse or promote products derived from this
+software without specific prior written permission.
 """
 
 
@@ -85,6 +73,55 @@ class TestLicenseTextResolution:
         )
         assert out["resolved_from_text"] is None
         assert out["identified"] is False
+
+    def test_unnamed_bsd3_body_is_recognised_by_its_clauses(self, collector):
+        # AMReX: verbatim BSD-3-Clause, "(1)" numbering, never says "BSD".
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": AMREX_LICENSE})
+        assert out["resolved_from_text"] == "BSD-3-Clause"
+        assert out["resolved_via"] == "clauses"
+        assert out["identified"] is True
+
+    def test_bsd2_body_without_endorsement_clause(self, collector):
+        text = AMREX_LICENSE.split("(3)")[0]
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": text})
+        assert out["resolved_from_text"] == "BSD-2-Clause"
+
+    def test_unnamed_mit_body(self, collector):
+        text = ("Permission is hereby granted, free of charge, to any person\nobtaining a copy "
+                "of this software ...\nThe above copyright notice and this permission notice\n"
+                "shall be included in all copies.")
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": text})
+        assert out["resolved_from_text"] == "MIT"
+
+    def test_name_in_text_wins_over_clauses(self, collector):
+        text = "Covered by the 3-clause BSD License.\n" + AMREX_LICENSE
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": text})
+        assert out["resolved_via"] == "text"
+
+    def test_citation_declaration_is_the_last_resort(self, collector):
+        out = collector._analyze_license_text(
+            {"spdx_id": "NOASSERTION", "text": "All rights reserved."}, declared="BSD-3-Clause",
+        )
+        assert out["resolved_from_text"] == "BSD-3-Clause"
+        assert out["resolved_via"] == "citation"
+
+    def test_citation_declaration_list_and_variants(self, collector):
+        out = collector._analyze_license_text(
+            {"spdx_id": None, "text": ""}, declared=["LicenseRef-custom", "GPL-3.0-or-later"],
+        )
+        assert out["resolved_from_text"] == "GPL"
+
+    def test_non_osi_declaration_stays_unresolved(self, collector):
+        # The dashboard reads any resolved family as OSI-approved.
+        out = collector._analyze_license_text(
+            {"spdx_id": "NOASSERTION", "text": ""}, declared="LicenseRef-proprietary",
+        )
+        assert out["identified"] is False
+
+    def test_declaration_does_not_override_api_classification(self, collector):
+        out = collector._analyze_license_text({"spdx_id": "MIT", "text": ""}, declared="GPL-3.0")
+        assert out["resolved_from_text"] is None
+        assert out["api_classified"] is True
 
     def test_exception_markers(self, collector):
         out = collector._analyze_license_text(
@@ -317,31 +354,158 @@ class TestScoringGapHandling:
 
 
 class TestFetchGapHandling:
-    def test_get_license_gap_is_tracked(self, collector, forge):
-        forge.license_result = COLLECTION_GAP
-        data, saw_gap = asyncio.run(collector._get_license(None, "o/r"))
+    def test_get_license_gap_is_tracked(self, collector):
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_license(None, "o/r")
+
+        data, saw_gap = asyncio.run(go())
         assert saw_gap is True
 
-    def test_get_citation_gap_with_no_find_is_tracked(self, collector, forge):
-        forge.file_content_results = {"CITATION.cff": COLLECTION_GAP}
-        citation, saw_gap = asyncio.run(collector._get_citation(None, "o/r"))
+    def test_get_citation_gapped_tree_is_tracked(self, collector):
+        citation, saw_gap = asyncio.run(collector._get_citation(None, "o/r", COLLECTION_GAP))
         assert citation == {}
         assert saw_gap is True
 
-    def test_any_exists_gap_with_no_find_is_tracked(self, collector, forge):
-        forge.file_exists_results = {p: COLLECTION_GAP for p in _CODEMETA_PATHS}
-        found, saw_gap = asyncio.run(collector._any_exists(None, "o/r", _CODEMETA_PATHS))
+    def test_get_citation_resolves_case_insensitively(self, collector):
+        # Lab-Notebooks/CodeScribe ships citation.cff, not CITATION.cff.
+        tree = RepoTree(FakeForge(), "o/r", ["citation.cff"], truncated=False)
+        data = {"content": "dGl0bGU6IEZvbw=="}  # base64 "title: Foo"
+
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._get_citation(None, "o/r", tree)
+
+        citation, saw_gap = asyncio.run(go())
+        assert citation == {"title": "Foo"}
+        assert saw_gap is False
+
+    def test_get_citation_confirmed_absent_is_not_a_gap(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        citation, saw_gap = asyncio.run(collector._get_citation(None, "o/r", tree))
+        assert citation == {}
+        assert saw_gap is False
+
+    def test_any_exists_gapped_tree_is_tracked(self, collector):
+        found, saw_gap = collector._any_exists(COLLECTION_GAP, _CODEMETA_PATHS)
         assert found is False
         assert saw_gap is True
 
-    def test_any_exists_found_does_not_need_gap_flag(self, collector, forge):
-        forge.file_exists_results = {p: "http://x" for p in _CODEMETA_PATHS}
-        found, saw_gap = asyncio.run(collector._any_exists(None, "o/r", _CODEMETA_PATHS))
+    def test_any_exists_found_does_not_need_gap_flag(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", _CODEMETA_PATHS, truncated=False)
+        found, saw_gap = collector._any_exists(tree, _CODEMETA_PATHS)
         assert found is True
         assert saw_gap is False
 
-    def test_has_releases_gap_is_tracked(self, collector, forge):
-        forge.releases_result = COLLECTION_GAP
-        has_releases, saw_gap = asyncio.run(collector._has_releases(None, "o/r"))
+    def test_has_releases_gap_is_tracked(self, collector):
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._has_releases(None, "o/r")
+
+        has_releases, saw_gap = asyncio.run(go())
         assert has_releases is False
         assert saw_gap is True
+
+
+class TestReleasesFromTags:
+    def _run(self, collector, releases, tags):
+        async def get(client, url, params=None):
+            return releases if url.endswith("/releases") else tags
+        collector.forge._github_get = get
+        return asyncio.run(collector._has_releases(None, "o/r"))
+
+    def test_version_tags_count_without_release_objects(self, collector):
+        assert self._run(collector, [], [{"name": "v9.17.2"}]) == (True, False)
+
+    def test_non_version_tags_do_not(self, collector):
+        assert self._run(collector, [], [{"name": "stable"}, {"name": "paper-submission"}]) == (False, False)
+
+    def test_tags_gap_is_tracked(self, collector):
+        assert self._run(collector, [], COLLECTION_GAP) == (False, True)
+
+
+class TestBareBsd3:
+    def test_open_source_license_bsd_3(self, collector):
+        out = collector._analyze_license_text(
+            {"spdx_id": "NOASSERTION", "text": "Copyright 2020 UT-Battelle\nOPEN SOURCE LICENSE BSD-3\n"})
+        assert out["resolved_from_text"] == "BSD-3-Clause"
+
+    def test_freebsd_is_not_bsd_3(self, collector):
+        out = collector._analyze_license_text({"spdx_id": "NOASSERTION", "text": "Tested on FreeBSD 3.2"})
+        assert out["resolved_from_text"] is None
+
+
+class TestBibtexCitation:
+    PAPER = """
+```bibtex
+@article{gardner2022sundials,
+  title   = {Enabling new flexibility in the {SUNDIALS} suite},
+  author  = {Gardner, David J and Reynolds, Daniel R},
+  journal = {ACM TOMS},
+  doi     = {10.1145/3539801}
+}
+```
+"""
+
+    def test_paper_entries_give_title_authors_doi(self, collector):
+        result = collector._analyze_bibtex(self.PAPER, "github.com/llnl/sundials")
+        assert result["present"] == ["title", "authors", "doi"]
+
+    def test_software_entry_can_carry_version_and_repository(self, collector):
+        text = """@software{pkg,
+  title = {Pkg}, author = {A. Person},
+  version = {7.4.0},
+  url = {https://github.com/LLNL/sundials},
+  doi = {10.5281/zenodo.1}
+}"""
+        result = collector._analyze_bibtex(text, "github.com/llnl/sundials")
+        assert result["present"] == ["title", "authors", "version", "repository-code", "doi"]
+
+    def test_url_to_another_site_is_not_repository_code(self, collector):
+        text = "@article{x,\n  url = {https://doi.org/10.1/abc}\n}"
+        assert "repository-code" not in collector._analyze_bibtex(text, "github.com/o/r")["present"]
+
+    def _score(self, collector, bibtex):
+        metadata = {"exists": False, "present": [], "missing": []}
+        fair = {"principles": {}, "principle_gaps": {}, "count": 0}
+        return collector._calculate_score({}, metadata, fair, bibtex)["sub_scores"]["fair_metadata"]
+
+    def test_bibtex_fields_are_reported_and_scored(self, collector):
+        row = self._score(collector, {"path": "CITATIONS.md", "present": ["title", "authors", "doi"]})
+        assert row["value"] == "3/6 citation fields present (BibTeX in CITATIONS.md; no CITATION.cff)"
+        assert row["passing"] is False
+
+    def test_no_bibtex_keeps_existing_message(self, collector):
+        assert self._score(collector, None)["value"] == "No CITATION.cff found"
+
+    def test_bibtex_does_not_feed_fair4rs(self, collector):
+        # A paper DOI identifies the paper, not the software.
+        metadata = collector._analyze_citation({})
+        fair = collector._assess_fair({"identified": True}, metadata, False, False, True)
+        assert fair["principles"]["Findable"] is False
+        assert fair["principles"]["Interoperable"] is False
+
+    def test_booktitle_is_not_title(self, collector):
+        text = "@inproceedings{x,\n  booktitle = {Proc. SC}\n}"
+        assert collector._analyze_bibtex(text, "github.com/o/r")["present"] == []
+
+
+class TestReadmeBibtex:
+    def _run(self, collector, readme, citation_files=()):
+        import base64
+        from unittest.mock import AsyncMock, patch
+        tree = RepoTree(FakeForge(), "o/r", ["README.md", *citation_files], truncated=False)
+        data = {"content": base64.b64encode(readme.encode()).decode(), "path": "README.md"}
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._get_bibtex_citation(None, "o/r", tree))
+
+    def test_bibtex_under_citation_heading_is_read(self, collector):
+        md = ("# Pkg\n## Citation\nPlease cite:\n```bibtex\n@software{pkg2026,\n"
+              "  title={Pkg}, author={A and B}, year={2026}\n}\n```\n## Authors\n- A\n")
+        result = self._run(collector, md)
+        assert result["path"] == "README citation section"
+        assert result["present"] == ["title", "authors"]
+
+    def test_bibtex_elsewhere_in_readme_is_not(self, collector):
+        md = "# Pkg\n## Related work\n@article{x,\n  title={Other}\n}\n"
+        assert self._run(collector, md) is None

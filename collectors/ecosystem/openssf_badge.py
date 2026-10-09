@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,7 @@ class OpenSSFBadgeCollector:
         "governance": [
             "GOVERNANCE.md",
             "GOVERNANCE.txt",
+            "GOVERNANCE.rst",
             "governance.md",
             "docs/GOVERNANCE.md",
             ".github/GOVERNANCE.md",
@@ -106,12 +107,22 @@ class OpenSSFBadgeCollector:
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             badge_data = await self._search_badge(client, ref, repo_url)
-            if badge_data:
+            # A registered badge with nothing answered yet (0%) says nothing
+            # about the criteria, so it gets the repository scan like no
+            # badge at all -- otherwise every criterion reads "not met".
+            if badge_data and badge_data.get("badge_percentage_0", 0) > 0:
                 logger.info(f"Badge found — level: {badge_data.get('badge_level')}, progress: {badge_data.get('badge_percentage_0', 0)}%")
                 return self._collect_with_badge(repo_name, ref, badge_data)
-            else:
-                logger.info("No badge found — scanning repository for requirements")
-                return await self._collect_without_badge(client, repo_name, ref)
+            logger.info("No started badge — scanning repository for requirements")
+            tree = await RepoTree.fetch(client, self.forge, ref)
+            result = self._collect_without_badge(repo_name, ref, tree)
+            if badge_data:
+                result["badge_status"].update({
+                    "level": "registered, not started",
+                    "id": badge_data.get("id"),
+                    "url": f"https://www.bestpractices.dev/projects/{badge_data.get('id')}",
+                })
+            return result
 
     # ------------------------------------------------------------------ #
     # Badge vs. scan paths                                                 #
@@ -150,12 +161,12 @@ class OpenSSFBadgeCollector:
             "assessment_method": "openssf_badge_api",
         }
 
-    async def _collect_without_badge(
-        self, client: httpx.AsyncClient, repo_name: str, ref: str
+    def _collect_without_badge(
+        self, repo_name: str, ref: str, tree
     ) -> Dict[str, Any]:
-        governance = await self._scan_files(client, ref, self.GOVERNANCE_FILES)
-        security = await self._scan_files(client, ref, self.SECURITY_FILES)
-        quality = await self._scan_files(client, ref, self.QUALITY_FILES)
+        governance = self._scan_files(tree, self.GOVERNANCE_FILES)
+        security = self._scan_files(tree, self.SECURITY_FILES)
+        quality = self._scan_files(tree, self.QUALITY_FILES)
 
         # A category whose percentage is None means every one of its
         # criteria gapped (see _scan_files) -- drop it from the blend and
@@ -221,21 +232,15 @@ class OpenSSFBadgeCollector:
             logger.debug(f"Error searching for badge: {e}")
         return None
 
-    async def _scan_files(
-        self,
-        client: httpx.AsyncClient,
-        ref: str,
-        file_map: Dict[str, List[str]],
-    ) -> Dict[str, Any]:
-        """Check each criterion in file_map against the repository.
+    def _scan_files(self, tree, file_map: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Check each criterion in file_map against a RepoTree.
 
         This whole path is already an admitted proxy ("estimated": True in
         the caller) for when no real badge exists -- but a gap here is a
         different kind of uncertainty than that estimate, and shouldn't be
-        silently folded into "missing". A criterion whose every pattern hit
-        a gap (rather than a confirmed absence) is reported not_collected;
-        one where at least one pattern was confirmed absent (even if others
-        gapped) still counts as a real miss.
+        silently folded into "missing". Matched case-insensitively and as
+        either a file or a directory (see METRIC_BLIND_SPOTS.md class F1),
+        rather than probed one literal path at a time.
         """
         found: List[str] = []
         missing: List[str] = []
@@ -243,28 +248,22 @@ class OpenSSFBadgeCollector:
         details: Dict[str, Any] = {}
 
         for criterion, patterns in file_map.items():
-            saw_gap = False
-            for pattern in patterns:
-                html_url = await self.forge.file_exists(client, ref, pattern)
-                if html_url is COLLECTION_GAP:
-                    saw_gap = True
-                    continue
-                if html_url:
-                    found.append(criterion)
-                    details[criterion] = {
-                        "exists": True,
-                        "file": pattern,
-                        "url": html_url,
-                    }
-                    logger.info(f"  {criterion}: {pattern}")
-                    break
+            if tree is COLLECTION_GAP:
+                not_collected.append(criterion)
+                details[criterion] = {"not_collected": True}
+                continue
+            matched = tree.match(patterns)
+            if matched:
+                found.append(criterion)
+                details[criterion] = {
+                    "exists": True,
+                    "file": matched,
+                    "url": tree.match_url(patterns),
+                }
+                logger.info(f"  {criterion}: {matched}")
             else:
-                if saw_gap:
-                    not_collected.append(criterion)
-                    details[criterion] = {"not_collected": True}
-                else:
-                    missing.append(criterion)
-                    details[criterion] = {"exists": False, "recommended": patterns[0]}
+                missing.append(criterion)
+                details[criterion] = {"exists": False, "recommended": patterns[0]}
 
         count_total = len(file_map) - len(not_collected)
         return {

@@ -144,7 +144,7 @@ jobs:
           # A manual dispatch only splits if asked (group_count/group inputs);
           # left blank, it runs the whole catalog, same as before batching --
           # useful for validating a fix across everything at once.
-          GROUP_COUNT=10  # ~7 packages/run for a 71-package catalog (~700
+          GROUP_COUNT=10  # ~7 packages/run for a 66-package catalog (~700
                           # req/hour at ~80-100 req/package, ~30% margin
                           # under the 1,000/hour cap); grows gracefully
                           # (batch size creeps up, not coverage breaking)
@@ -199,8 +199,8 @@ jobs:
             jq -r '.packages_by_score | to_entries[] | "- **\(.key):** \(.value)"' output/orchestrator_summary.json >> $GITHUB_STEP_SUMMARY
 
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Top 5 Packages" >> $GITHUB_STEP_SUMMARY
-            jq -r '.top_packages[:5][] | "- \(.[0]): \(.[1])/100"' output/orchestrator_summary.json >> $GITHUB_STEP_SUMMARY
+            echo "### Top Packages" >> $GITHUB_STEP_SUMMARY
+            jq -r '.top_packages[] | "- \(.[0]): \(.[1])/100"' output/orchestrator_summary.json >> $GITHUB_STEP_SUMMARY
           fi
 
   schedule-next:

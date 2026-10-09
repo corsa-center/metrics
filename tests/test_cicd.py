@@ -1,6 +1,12 @@
 """Unit tests for CICDMetricsCollector pure computation methods."""
 
+import asyncio
+
 import pytest
+
+from tests.fakes import FakeForge
+from unittest.mock import AsyncMock, MagicMock
+
 from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
 
 
@@ -104,3 +110,21 @@ class TestCalculateScore:
         result = collector._calculate_score(r)
         assert result["score"] == result["max_score"]
         assert result["percentage"] == 100.0
+
+
+# ------------------------------------------------------------------ #
+# _get_default_branch                                                  #
+# ------------------------------------------------------------------ #
+
+class TestGetDefaultBranch:
+    def test_uses_repo_default_branch(self, collector):
+        # AMReX-Codes/amrex works on "development" and has zero workflow
+        # runs on a branch literally named "main" -- a hardcoded "main"
+        # default silently read that as "no CI data".
+        collector.forge = FakeForge(repo_info_data={"default_branch": "development"})
+        assert asyncio.run(collector._get_default_branch(None, "AMReX-Codes/amrex")) == "development"
+
+    def test_falls_back_to_main_on_error(self, collector):
+        collector.forge = FakeForge(gaps={"repo_info"})
+        assert asyncio.run(collector._get_default_branch(None, "o/r")) == "main"
+

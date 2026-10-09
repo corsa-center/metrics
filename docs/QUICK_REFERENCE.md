@@ -4,17 +4,17 @@
 
 | Collector | Metric | File |
 |-----------|--------|------|
-| Citation | 4.1.1 Software Citation & Adoption | `collectors/impact/citation.py` |
-| CoC / Governance | 4.2.1 CoC, Governance & Contributor Guidelines | `collectors/ecosystem/chaoss_governance.py` |
-| Licensing | 4.2.2 Open-Source Licensing & FAIR Compliance | `collectors/ecosystem/licensing.py` |
-| Active Maintenance | 4.2.3 Active Maintenance | `collectors/ecosystem/active_maintenance.py` |
-| Engagement | 4.2.4 Community Engagement | `collectors/ecosystem/engagement.py` |
-| Community Health | 4.2.10 Project Longevity & Community Health | `collectors/ecosystem/community_health.py` |
-| OpenSSF Badge | OpenSSF Best Practices Badge | `collectors/ecosystem/openssf_badge.py` |
-| OpenSSF Scorecard | OpenSSF Scorecard | `collectors/ecosystem/openssf_scorecard.py` |
-| CI/CD | 4.3.2 Development Practices (CI/CD) | `collectors/quality/development_practices/ci_cd.py` |
-| Reproducibility | 4.3.3 Reproducibility | `collectors/quality/reproducibility.py` |
-| Accessibility | 4.3.5 Accessibility (portable build systems) | `collectors/quality/accessibility.py` |
+| Citation | 4.1.1 Software Citation & Adoption | `../collectors/impact/citation.py` |
+| CoC / Governance | 4.2.1 CoC, Governance & Contributor Guidelines | `../collectors/ecosystem/chaoss_governance.py` |
+| Licensing | 4.2.2 Open-Source Licensing & FAIR Compliance | `../collectors/ecosystem/licensing.py` |
+| Active Maintenance | 4.2.3 Active Maintenance | `../collectors/ecosystem/active_maintenance.py` |
+| Engagement | 4.2.4 Community Engagement | `../collectors/ecosystem/engagement.py` |
+| Community Health | 4.2.10 Project Longevity & Community Health | `../collectors/ecosystem/community_health.py` |
+| OpenSSF Badge | OpenSSF Best Practices Badge | `../collectors/ecosystem/openssf_badge.py` |
+| OpenSSF Scorecard | OpenSSF Scorecard | `../collectors/ecosystem/openssf_scorecard.py` |
+| CI/CD | 4.3.2 Development Practices (CI/CD) | `../collectors/quality/development_practices/ci_cd.py` |
+| Reproducibility | 4.3.3 Reproducibility | `../collectors/quality/reproducibility.py` |
+| Accessibility | 4.3.5 Accessibility (portable build systems) | `../collectors/quality/accessibility.py` |
 
 ---
 
@@ -63,8 +63,10 @@ python scripts/generate_corsa_citations.py \
 | File | Description |
 |------|-------------|
 | `output/ecosystemMetrics.json` | Dashboard-ready metrics JSON |
-| `output/orchestrator_summary.json` | Run summary (scores, counts, top packages) |
-| `orchestrator.log` | Detailed collection log |
+| `../output/orchestrator_summary.json` | Run summary (scores, counts, top packages) |
+| `output/{repo}-metrics/metrics.json` | Per-package dashboard data (CASS sections) |
+| `output/{repo}-metrics/report.html` | Per-package report: each row's evidence, its threshold, and how the scores were computed |
+| `../orchestrator.log` | Detailed collection log |
 
 ---
 
@@ -72,7 +74,7 @@ python scripts/generate_corsa_citations.py \
 
 | File | Purpose |
 |------|---------|
-| [README.md](README.md) | Project overview and setup |
+| [README.md](../README.md) | Project overview and setup |
 | [CONFIGURATION.md](CONFIGURATION.md) | API credentials and config details |
 | [ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md) | Orchestrator usage and options |
 | [QUICK_START.md](QUICK_START.md) | Getting started quickly |

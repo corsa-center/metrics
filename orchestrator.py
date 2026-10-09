@@ -14,13 +14,14 @@ Usage:
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -30,8 +31,9 @@ import yaml
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.github import GitHubForge
-from forge.interface import Forge
 from forge.gitlab import GitLabForge
+from forge.interface import Forge
+from package_report import render_package_report
 
 # Setup logging
 logging.basicConfig(
@@ -83,22 +85,41 @@ KNOWN_COLLECTOR_KEYS = {
     },
 }
 
-# Directory containing per-package config files (relative to this script)
-PACKAGE_CONFIG_DIR = Path(__file__).parent / "package_config"
+# Catalog package schema
+PACKAGE_CONFIG_SCHEMA_VERSION = 1
 
-# Path, within a tracked project's own repo, of its self-declared metrics
-# config (see docs/PROJECT_CONFIG.md). Fetched fresh per collection run.
-PROJECT_CONFIG_PATH = ".corsa/metrics.yaml"
-PROJECT_CONFIG_SCHEMA_VERSION = 1
+_MAIN_ROW = re.compile(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>')
+_SCORE_LINE = re.compile(r'<p[^>]*><strong>Score:</strong>[^<]*</p>')
 
 
-def _sanitize_metric_config(data: Dict) -> Dict:
-    """Coerce a package_config/ or PROJECT_CONFIG_PATH file's collectors:
-    and overrides: blocks into well-shaped dicts, dropping anything that
-    isn't -- so every downstream reader can assume this shape without
-    re-checking. Both files are hand-edited YAML (one by a maintainer, one
-    by an external project) and can leave a key present with no value
-    (parses to None) or the wrong type entirely; treating that the same as
+def _rescore_section(html: Optional[str]) -> Optional[str]:
+    """Recompute a section's "Score: X/Y" line from its rendered rows.
+
+    X is the rows marked ✓; Y is the rows marked ✓ or ✗. A row with no
+    mark -- "Not yet collected", a gap, a config "N/A", a sample too thin
+    to judge -- is neither a pass nor a fail, so it is left out of Y.
+    Sections used to hard-code Y as their full row count, so 4.2.7, 4.2.9
+    and 4.3.4 read 0/5, 1/5 and 2/5 for packages that passed every row
+    actually measured, while 4.2.5 and 4.2.8 already excluded them.
+    Numerators are unchanged: across all 70 packages the ✓ count already
+    matched every section's own tally.
+    """
+    if not html or not _SCORE_LINE.search(html):
+        return html
+    rows = [l for l in html.split("\n") if _MAIN_ROW.match(l.strip())]
+    filled = sum(1 for l in rows if "✓" in l)
+    scored = sum(1 for l in rows if "✓" in l or "✗" in l)
+    shown = f"{filled}/{scored}" if scored else "Not collected"
+    return _SCORE_LINE.sub(lambda _: f'<p><strong>Score:</strong> {shown}</p>', html, count=1)
+
+
+def _sanitize_package_config(data: Dict) -> Dict:
+    """Coerce a package_config collectors:
+    and overrides: blocks into well-formed dicts, dropping anything that
+    isn't -- so every downstream reader can assume this without
+    re-checking. This file is hand-edited YAML so can potentially
+    leave a key present with no value (parses to None) or the wrong type
+    entirely; treating that the same as
     the key being absent keeps this feature's "fails open" guarantee intact
     instead of raising deep in dict-chaining code that assumes it was
     already validated.
@@ -154,20 +175,12 @@ class MetricsOrchestrator:
         # thresholds.yaml raises here, at startup, instead of being
         # silently ignored.
         configure_threshold_overrides(self.config.get("thresholds"))
-        self.dashboard_base_url = self.config.get(
-            "dashboard_base_url", "https://corsa.center/dashboard"
-        ).rstrip("/")
+        self.catalog_url = self.config.get("catalog_url", "")
         self.output_path = Path(self.config.get("output_path", "./output"))
         self.collectors_enabled = self.config.get("collectors", {})
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
         self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
         self.quality_collectors = self.config.get("quality_collectors", {})
-        # Whether to fetch each project's own PROJECT_CONFIG_PATH at all. Does
-        # not affect the maintainer-authored package_config/ files, which are
-        # operator-controlled regardless of this switch.
-        self.project_config_enabled = (self.config.get("project_config") or {}).get(
-            "enabled", True
-        )
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
@@ -220,68 +233,38 @@ class MetricsOrchestrator:
             return [self._resolve_env_vars(v) for v in obj]
         return obj
 
-    def _load_package_config(self, repo_name: str) -> Dict:
-        """Load per-package config file from package_config/ if it exists.
-
-        Config files are named <owner>_<repo>.yaml, e.g. HDFGroup_hdf5.yaml.
-        Returns an empty dict if no config file is found.
+    async def _fetch_package_config(self, package_url) -> Dict:
+        """Fetch a catalog package.
         """
-        safe_name = repo_name.replace("/", "_")
-        config_file = PACKAGE_CONFIG_DIR / f"{safe_name}.yaml"
-        if config_file.exists():
-            with open(config_file) as f:
-                return _sanitize_metric_config(yaml.safe_load(f) or {})
-        return {}
-
-    async def _fetch_project_config(self, package: Dict) -> Dict:
-        """Fetch a project's self-declared PROJECT_CONFIG_PATH from its own repo.
-
-        Lets a project narrow which collectors run for it and annotate
-        sub-metric overrides, same shape as package_config/ (see
-        docs/PROJECT_CONFIG.md). Any problem -- unrecognized host, missing
-        file, network error, bad YAML, schema mismatch, a repo: field that
-        disagrees with the package being collected -- fails open and
-        returns {}, i.e. collect everything, exactly as if the project had
-        never added the file.
-        """
-        if not self.project_config_enabled:
-            return {}
-
-        repo_name = package["repository"]
-
         try:
-            forge = self._forge_for_package(package)
-            if forge is None:
-                return {}
-            ref = forge.extract_ref(package.get("repo_url", ""))
-            if ref is None:
-                return {}
+            headers = self._github_headers(package_url, "application/vnd.github.v3+json")
 
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                content = await forge.file_content(client, ref, PROJECT_CONFIG_PATH)
-            if content is None or content is COLLECTION_GAP:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(package_url, headers=headers)
+            if resp.status_code != 200:
                 return {}
-            data = yaml.safe_load(content) or {}
+            content = base64.b64decode(resp.json().get("content", "")).decode(
+                "utf-8", "replace"
+            )
+            package = yaml.safe_load(content) or {}
         except Exception as e:
-            logger.warning(f"Could not fetch {PROJECT_CONFIG_PATH} for {repo_name}: {e}")
+            logger.warning(f"Could not fetch {package_url}: {e}")
             return {}
 
-        if not isinstance(data, dict):
-            logger.warning(f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: not a mapping")
+        if not isinstance(package, dict):
+            logger.warning(f"Ignoring {package_url}: not a mapping")
             return {}
-        if data.get("schema") != PROJECT_CONFIG_SCHEMA_VERSION:
+        if package.get("schema") != PACKAGE_CONFIG_SCHEMA_VERSION:
             logger.warning(
-                f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: "
-                f"unsupported schema {data.get('schema')!r}"
+                f"Ignoring {package_url}: "
+                f"unsupported schema {package.get('schema')!r}"
             )
             return {}
-        if str(data.get("repo", "")).lower() != repo_name.lower():
-            logger.warning(
-                f"Ignoring {PROJECT_CONFIG_PATH} for {repo_name}: "
-                f"repo field {data.get('repo')!r} does not match"
-            )
+        missing = [k for k in ("name", "repo_type", "repo_url") if not package.get(k)]
+        if missing:
+            logger.warning(f"Ignoring {package_url}: missing required field(s) {missing}")
             return {}
-        return _sanitize_metric_config(data)
+        return _sanitize_package_config(package)
 
     @staticmethod
     def _apply_section_overrides(html: Optional[str], section_overrides: Dict[str, str]) -> Optional[str]:
@@ -306,17 +289,7 @@ class MetricsOrchestrator:
             if not matched:
                 new_lines.append(line)
 
-        result = '\n'.join(new_lines)
-
-        # Recount ✓ hits and total main-metric lines (excludes sub-details and Score)
-        filled = sum(1 for l in new_lines if '✓' in l and 'sub-detail' not in l)
-        total  = len(re.findall(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>', result))
-        result = re.sub(
-            r'<p[^>]*><strong>Score:</strong>[^<]*</p>',
-            f'<p><strong>Score:</strong> {filled}/{total}</p>',
-            result,
-        )
-        return result
+        return _rescore_section('\n'.join(new_lines))
 
     @staticmethod
     def _build_stub_section(section_num: str, overrides: Dict[str, str]) -> str:
@@ -333,42 +306,88 @@ class MetricsOrchestrator:
         lines.append(f"<p><strong>Score:</strong> 0/{total}</p>")
         return "\n".join(lines)
 
-    def _fetch_json(self, url: str) -> Optional[Dict]:
-        """Fetch a JSON file from a URL
+    def _github_headers(self, url: str, accept: str) -> Dict[str, str]:
+        """Request headers for a GitHub API call. The token is attached only
+        when `url` is on api.github.com, so a catalog_url pointed elsewhere
+        can't leak it.
+        """
+        headers = {"Accept": accept}
+        token = self._get_github_token()
+        if token and urlparse(url).hostname == "api.github.com":
+            headers["Authorization"] = f"token {token}"
+        return headers
+
+    def _fetch_catalog_files(self, url: str) -> Optional[List[Dict]]:
+        """Fetch a list of configuration files for the catalog.
+        Currently this is the contents of a directory from a GitHub URL.
 
         Args:
             url: URL to fetch
 
         Returns:
-            Parsed JSON as dict, or None on failure
+            Returns the contents in a consistent object format regardless of the content type
+            or None if the url is not valid.
         """
         logger.info(f"Fetching {url}")
+
         try:
-            response = httpx.get(url, timeout=30.0, follow_redirects=True)
+            headers = self._github_headers(url, "application/vnd.github.object+json")
+            response = httpx.get(url, timeout=30.0, follow_redirects=True, headers=headers)
             response.raise_for_status()
-            return response.json()
+            contents = response.json().get("entries")
+            if contents is not None:
+                return contents
+            logger.error(f"{url} does not point to a GitHub directory")
         except Exception as e:
             logger.error(f"Failed to fetch {url}: {e}")
-            return None
+        return None
 
-    def load_software_catalog(self) -> Dict:
-        """Load software catalog from the dashboard (fetched via HTTP)
-
+    async def load_software_catalog(self) -> Dict:
+        """Load software catalog from the metrics_data directory
         Returns:
-            Dictionary of software packages with metadata
         """
-        url = f"{self.dashboard_base_url}/explore/github-data/intReposInfo.json"
-        data = self._fetch_json(url)
-        if data is None:
-            return {}
-        return data.get("data", {})
+        if not self.catalog_url:
+            raise RuntimeError(f"No catalog URL specified")
+        catalog_files = self._fetch_catalog_files(self.catalog_url)
+        if catalog_files is None:
+            # Fail loudly: an empty catalog would let the run report success
+            # having collected nothing.
+            raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
+        catalog = {}
+        for catalog_file in catalog_files:
+            if catalog_file.get("type") != "file":
+                continue
+            file_name = catalog_file.get("name", "")
+            if not file_name.endswith((".yaml", ".yml")):
+                logger.warning(f"Skipping catalog file {file_name}: not a .yaml/.yml file")
+                continue
+            git_url = catalog_file["git_url"]
+            package = await self._fetch_package_config(git_url)
+            if not package:
+                # One bad file shouldn't take every other package down with
+                # it; _fetch_package_config has already logged why.
+                logger.error(f"Skipping catalog file {file_name}: could not load a valid package")
+                continue
+            name = package["name"]
+            if name in catalog:
+                logger.error(
+                    f"Skipping catalog file {file_name}: package name '{name}' "
+                    f"is already used by another catalog file"
+                )
+                continue
+            catalog[name] = package
+        if not catalog:
+            # Fail loudly: an empty catalog would let the run report success
+            # having collected nothing.
+            raise RuntimeError(f"No valid packages found in the catalog at {self.catalog_url}")
+        return catalog
 
-    def prepare_software_list(
+    async def prepare_software_list(
         self,
         filter_software: Optional[str] = None,
         group: Optional[int] = None,
         group_count: Optional[int] = None,
-    ) -> List[Dict]:
+    ) -> Tuple[Dict, List[Dict]]:
         """Prepare list of software packages to process
 
         Args:
@@ -389,37 +408,27 @@ class MetricsOrchestrator:
         Returns:
             List of software packages with required metadata
         """
-        catalog = self.load_software_catalog()
+        catalog = await self.load_software_catalog()
 
         software_list = []
-        for repo_name, metadata in catalog.items():
-            if not isinstance(metadata, dict):
-                logger.warning(f"Skipping {repo_name}: metadata is not a dict ({type(metadata).__name__})")
+        for name, package in catalog.items():
+            if not package.get("repo_url", 0):
+                logger.warning(f"Skipping {name} because no repository url found")
                 continue
-            # Apply filter if specified
-            if filter_software and filter_software.lower() not in repo_name.lower():
+                # Apply filter if specified
+            if filter_software and filter_software.lower() not in name.lower():
                 continue
-
-            package = {
-                "name": metadata.get("name", repo_name),
-                "repository": repo_name,
-                "repo_url": metadata.get("url", f"https://github.com/{repo_name}"),
-                "description": metadata.get("description", ""),
-                "homepage": metadata.get("homepageUrl"),
-                "license": (metadata.get("licenseInfo") or {}).get("spdxId"),
-                "primary_language": (metadata.get("primaryLanguage") or {}).get("name"),
-            }
             software_list.append(package)
 
         if group_count and group_count > 1 and not filter_software:
             # Sort first so the slice is stable regardless of any incidental
             # reordering of the catalog JSON between runs.
-            software_list.sort(key=lambda p: p["repository"])
+            software_list.sort(key=lambda p: p["name"])
             software_list = software_list[group::group_count]
             logger.info(f"Group {group}/{group_count}: {len(software_list)} packages")
 
         logger.info(f"Prepared {len(software_list)} software packages for processing")
-        return software_list
+        return catalog, software_list
 
     async def collect_impact_dimension(self, package: Dict) -> Dict:
         """Collect Impact dimension metrics (CASS Report Section 4.1)
@@ -436,29 +445,23 @@ class MetricsOrchestrator:
         logger.info(f"Collecting Impact dimension for {package['name']}")
 
         forge = self._forge_for_package(package)
-        if forge is None:
-            logger.info(
-                f"Skipping impact collection for {package['name']}: "
-                f"{package.get('repo_url')} is not a recognized host"
-            )
-            return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
+        if forge is not None:
+            try:
+                from collectors.impact.citation import CitationMetricCollector
 
-        try:
-            from collectors.impact.citation import CitationMetricCollector
-
-            collector = CitationMetricCollector(self.config, forge)
-            result = await collector.collect(package)
-            score = result.get("score", 0) if result else 0
-            return {
-                "dimension": "impact",
-                "score": score,
-                "max_score": 100.0,
-                "sub_results": result,
-            }
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.error(f"Citation collection failed for {package['name']}: {e}")
+                collector = CitationMetricCollector(self.config, forge)
+                result = await collector.collect(package)
+                score = result.get("score", 0) if result else 0
+                return {
+                    "dimension": "impact",
+                    "score": score,
+                    "max_score": 100.0,
+                    "sub_results": result,
+                }
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.error(f"Citation collection failed for {package['name']}: {e}")
 
         # Fall back to dimension placeholder
         try:
@@ -473,46 +476,41 @@ class MetricsOrchestrator:
     def _sub_enabled(self, group: str, key: str, package: Optional[Dict] = None) -> bool:
         """Whether an individual sub-collector is enabled for this package.
 
-        Defaults to True when a toggle is absent at every layer. Three layers,
+        Defaults to True when a toggle is absent at every layer. Two layers,
         each only able to narrow the one before it -- none can re-enable a
         collector a higher layer turned off:
           1. Global config/orchestrator.yaml -- applies to every package.
-          2. The maintainer's central package_config/<owner>_<repo>.yaml.
-          3. The project's own PROJECT_CONFIG_PATH, fetched from its repo.
-        `package` carries (2) and (3) once collect_all_metrics has attached
+          2. The maintainer's central package_config/<package>.yaml.
+        `package` carries (2) once collect_all_metrics has attached
         them; omit it (as the config-matching tests do) to check only (1).
         """
         toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
         if not toggles.get(key, True):
             return False
         if package is not None:
-            for cfg_key in ("package_config", "project_config"):
-                cfg = package.get(cfg_key) or {}
-                narrowed = cfg.get("collectors", {}).get(group, {}).get(key)
-                if narrowed is False:
-                    return False
+            narrowed = package.get("collectors", {}).get(group, {}).get(key)
+            if narrowed is False:
+                return False
         return True
 
     def _package_excluded_keys(self, group: str, package: Dict) -> List[str]:
         """Toggle keys this package's configs turned off that the global
         config would otherwise run -- i.e. exclusions attributable to
-        package_config/ or the project's own file, not to the operator.
+        package_config, not to the operator.
         Recorded on the dimension result so a deliberate exclusion is
         distinguishable from a collector that simply crashed.
         """
         toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
         known_keys = KNOWN_COLLECTOR_KEYS[group]
         candidate_keys = set(toggles) & known_keys
-        for cfg_key in ("package_config", "project_config"):
-            cfg = package.get(cfg_key) or {}
-            mentioned = set(cfg.get("collectors", {}).get(group, {}))
-            unrecognized = mentioned - known_keys
-            if unrecognized:
-                logger.warning(
-                    f"{package.get('repository')}: ignoring unrecognized "
-                    f"{group} collector key(s) in {cfg_key}: {sorted(unrecognized)}"
-                )
-            candidate_keys |= mentioned & known_keys
+        mentioned = set(package.get("collectors", {}).get(group, {}))
+        unrecognized = mentioned - known_keys
+        if unrecognized:
+            logger.warning(
+                f"{package.get('repository')}: ignoring unrecognized "
+                f"{group} collector key(s) in package_config: {sorted(unrecognized)}"
+            )
+        candidate_keys |= mentioned & known_keys
         return sorted(
             key
             for key in candidate_keys
@@ -525,60 +523,39 @@ class MetricsOrchestrator:
         return token if token else None
 
     def _forge_for_package(self, package: Dict) -> Optional[Forge]:
-        """Resolve the Forge for a package, honoring its package_config
-        repo_type (see _resolve_forge). Falls back to reading
-        package_config/ directly when the package dict doesn't carry it yet."""
-        pkg_config = package.get("package_config")
-        if pkg_config is None and package.get("repository"):
-            pkg_config = self._load_package_config(package["repository"])
-        repo_type = (pkg_config or {}).get("repo_type")
-        return self._resolve_forge(package.get("repo_url", ""), repo_type)
+        """The Forge for a package, chosen by its repo_type (see _resolve_forge)."""
+        return self._resolve_forge(package.get("repo_url", ""), package.get("repo_type"))
 
     def _resolve_forge(self, repo_url: str, repo_type: Optional[str] = None) -> Optional[Forge]:
-        """Return a Forge instance for repo_url, or None if the host isn't a
-        recognized code-hosting platform -- the same protective gate
-        _is_known_non_github_repo used to provide (skip a package entirely
-        rather than let every collector silently query the wrong host and
-        report a false "not found"), generalized to also recognize GitLab
-        instead of just skipping it.
+        """Return a Forge instance for repo_url, or None if it isn't on a
+        supported code-hosting platform. None makes the caller skip the
+        package entirely rather than let every collector query the wrong
+        host and report a false "not found".
 
-        github.com and gitlab.com are recognized without any extra config
-        (an absent token still works for public repos, same as before).
-        A self-hosted GitLab instance (e.g. gitlab.kitware.com) has no way
-        to self-identify from its hostname alone, so it must be explicitly
-        listed under api_credentials.gitlab.<host> in config/orchestrator.yaml
-        -- being listed there is itself what makes it recognized, not a
-        separate allowlist, so adding a new self-hosted instance later is
-        just a config change.
-
-        A missing/empty repo_url is *not* treated as unrecognized -- callers
-        that don't pass one (prepare_package_list's own fallback, some
-        tests) get the same "assume GitHub" behavior collection already had.
-
-        repo_type (from package_config/<owner>_<repo>.yaml, see
-        docs/PROJECT_CONFIG.md) overrides the hostname inference above:
-          * "gitlab" -- GitLabForge for repo_url's host, even a self-hosted
-            instance not listed under api_credentials.gitlab (it then runs
-            unauthenticated; a listed host still gets its token).
+        repo_type comes from the package file (see docs/PACKAGE_CONFIG.md):
           * "github" -- GitHubForge, only for github.com. GitHubForge talks
-            to api.github.com, so GitHub Enterprise hosts are refused (None)
-            rather than silently queried against the wrong API.
-          * anything else -- unsupported; logged and treated as
-            unrecognized (None).
+            to api.github.com, so GitHub Enterprise hosts are refused rather
+            than silently queried against the wrong API.
+          * "gitlab" -- GitLabForge for repo_url's own host, so gitlab.com
+            and any self-hosted instance work. A host listed under
+            api_credentials.gitlab.<host> in config/orchestrator.yaml gets
+            its token; an unlisted one runs unauthenticated.
+          * anything else -- unsupported; logged and refused.
+
+        Without a repo_type the platform is inferred from the hostname:
+        github.com (or no URL at all) is GitHub; gitlab.com and hosts listed
+        under api_credentials.gitlab are GitLab; anything else is refused.
         """
         if repo_type:
-            return self._resolve_forge_by_type(repo_url, repo_type)
+            return self._resolve_forge_by_type(repo_url, str(repo_type).strip().lower())
         if not repo_url:
             return GitHubForge(self._get_github_token())
         host = urlparse(repo_url).netloc
         if not host or host == "github.com":
             return GitHubForge(self._get_github_token())
-        gitlab_hosts = self.config.get("api_credentials", {}).get("gitlab", {})
-        if host in gitlab_hosts:
-            token = gitlab_hosts[host].get("token") or None
-            return GitLabForge(token=token, api_base=f"https://{host}/api/v4")
-        if host == "gitlab.com":
-            return GitLabForge(token=None, api_base="https://gitlab.com/api/v4")
+        gitlab_hosts = self.config.get("api_credentials", {}).get("gitlab", {}) or {}
+        if host in gitlab_hosts or host == "gitlab.com":
+            return self._gitlab_forge(host)
         return None
 
     def _resolve_forge_by_type(self, repo_url: str, repo_type: str) -> Optional[Forge]:
@@ -596,11 +573,39 @@ class MetricsOrchestrator:
             if not host:
                 logger.warning("repo_type 'gitlab' given without a repo_url; skipping")
                 return None
-            host_cfg = self.config.get("api_credentials", {}).get("gitlab", {}).get(host) or {}
-            token = host_cfg.get("token") or None
-            return GitLabForge(token=token, api_base=f"https://{host}/api/v4")
+            return self._gitlab_forge(host)
         logger.warning(f"Unsupported repo_type {repo_type!r} for {repo_url}; skipping")
         return None
+
+    def _gitlab_forge(self, host: str) -> GitLabForge:
+        host_cfg = (self.config.get("api_credentials", {}).get("gitlab", {}) or {}).get(host) or {}
+        token = host_cfg.get("token") or None
+        return GitLabForge(token=token, api_base=f"https://{host}/api/v4")
+
+    async def _confirm_repo_exists(self, forge: Forge, repo_url: str) -> bool:
+        """Whether repo_url resolves to a real, accessible repository on its
+        forge.
+
+        A catalog entry can point at a renamed, deleted, or mistranscribed
+        repository. Without this check, every collector's own 404s on that
+        path get read as a confirmed absence of each thing it looked for,
+        rather than one clear "this repository doesn't exist."
+
+        Fails open (returns True) on anything other than a confirmed absence
+        -- a network hiccup or rate limit here must not silently drop a valid
+        package from the run; per-collector gap handling is the right tool
+        for that uncertainty.
+        """
+        ref = forge.extract_ref(repo_url)
+        if ref is None:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                info = await forge.repo_info(client, ref)
+        except Exception as e:
+            logger.warning(f"Could not verify {ref} exists: {e!r} -- proceeding as if it does")
+            return True
+        return info is not None
 
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
@@ -614,10 +619,6 @@ class MetricsOrchestrator:
 
         forge = self._forge_for_package(package)
         if forge is None:
-            logger.info(
-                f"Skipping ecosystem collection for {package['name']}: "
-                f"{package.get('repo_url')} is not a recognized host"
-            )
             return {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
         sub_results = {}
 
@@ -739,46 +740,49 @@ class MetricsOrchestrator:
         # scores a gap as a confident 0. Excluded from the average entirely
         # instead, same as each collector already excludes it from its own
         # internal score.
-        scores = []
+        # (sub-collector key, percentage) -- kept by name so the per-project
+        # report can show which collectors this average was taken over.
+        components: List[tuple] = []
 
-        def _append_pct(container: Dict, *keys):
-            value = container
+        def _append_pct(name: str, *keys):
+            value = sub_results[name]
             for key in keys:
                 value = value.get(key, {}) if isinstance(value, dict) else {}
             if isinstance(value, (int, float)):
-                scores.append(value)
+                components.append((name, value))
 
         if "governance" in sub_results:
-            _append_pct(sub_results["governance"], "overall_score", "percentage")
+            _append_pct("governance", "overall_score", "percentage")
         if "licensing" in sub_results:
-            _append_pct(sub_results["licensing"], "compliance_score", "percentage")
+            _append_pct("licensing", "compliance_score", "percentage")
         if "maintenance" in sub_results:
-            _append_pct(sub_results["maintenance"], "score", "percentage")
+            _append_pct("maintenance", "score", "percentage")
         if "chaoss_activity" in sub_results:
-            _append_pct(sub_results["chaoss_activity"], "overall_score", "score")
+            _append_pct("chaoss_activity", "overall_score", "score")
         if "openssf_badge" in sub_results:
-            _append_pct(sub_results["openssf_badge"], "overall_score", "score")
+            _append_pct("openssf_badge", "overall_score", "score")
         if "engagement" in sub_results:
             eng_s = sub_results["engagement"].get("overall_score", {})
             mx = eng_s.get("max_score", 7)
             eng_score = eng_s.get("score")
             if mx and isinstance(eng_score, (int, float)):
-                scores.append(round(eng_score / mx * 100))
+                components.append(("engagement", round(eng_score / mx * 100)))
         if "openssf_scorecard" in sub_results:
             pct = sub_results["openssf_scorecard"].get("percentage")
             if pct is not None:
-                scores.append(pct)
+                components.append(("openssf_scorecard", pct))
         if "outreach" in sub_results:
-            _append_pct(sub_results["outreach"], "overall_score", "percentage")
+            _append_pct("outreach", "overall_score", "percentage")
         if "funding" in sub_results:
-            _append_pct(sub_results["funding"], "overall_score", "percentage")
+            _append_pct("funding", "overall_score", "percentage")
         if "welcomeness" in sub_results:
-            _append_pct(sub_results["welcomeness"], "overall_score", "percentage")
+            _append_pct("welcomeness", "overall_score", "percentage")
         if "collaboration" in sub_results:
-            _append_pct(sub_results["collaboration"], "overall_score", "percentage")
+            _append_pct("collaboration", "overall_score", "percentage")
         if "fair_licensing" in sub_results:
-            _append_pct(sub_results["fair_licensing"], "overall_score", "percentage")
+            _append_pct("fair_licensing", "overall_score", "percentage")
 
+        scores = [value for _, value in components]
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
         return {
@@ -786,6 +790,7 @@ class MetricsOrchestrator:
             "score": round(avg_score, 2),
             "max_score": 100.0,
             "sub_results": sub_results,
+            "score_components": dict(components),
             "excluded_by_config": self._package_excluded_keys("ecosystem", package),
         }
 
@@ -802,10 +807,6 @@ class MetricsOrchestrator:
 
         forge = self._forge_for_package(package)
         if forge is None:
-            logger.info(
-                f"Skipping quality collection for {package['name']}: "
-                f"{package.get('repo_url')} is not a recognized host"
-            )
             return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
         sub_results = {}
 
@@ -913,42 +914,44 @@ class MetricsOrchestrator:
         # missing, not when a collector's own percentage is None because
         # everything it measures gapped. Excluded from the average rather
         # than crashing sum()/len() or silently scoring a gap as 0.
-        scores = []
+        # (sub-collector key, percentage), as in the ecosystem dimension.
+        components: List[tuple] = []
 
-        def _append_quality_pct(container: Dict, *keys):
-            value = container
+        def _append_quality_pct(name: str, *keys):
+            value = sub_results[name]
             for key in keys:
                 value = value.get(key, {}) if isinstance(value, dict) else {}
             if isinstance(value, (int, float)):
-                scores.append(value)
+                components.append((name, value))
 
         if "ci_cd" in sub_results:
-            _append_quality_pct(sub_results["ci_cd"], "percentage")
+            _append_quality_pct("ci_cd", "percentage")
         if "reproducibility" in sub_results:
-            _append_quality_pct(sub_results["reproducibility"], "overall_score", "percentage")
+            _append_quality_pct("reproducibility", "overall_score", "percentage")
         if "accessibility" in sub_results:
-            _append_quality_pct(sub_results["accessibility"], "overall_score", "percentage")
+            _append_quality_pct("accessibility", "overall_score", "percentage")
         if sub_results.get("test_coverage", {}).get("coverage_exists"):
-            _append_quality_pct(sub_results["test_coverage"], "coverage_percentage")
+            _append_quality_pct("test_coverage", "coverage_percentage")
         if "static_analysis" in sub_results:
             sa = sub_results["static_analysis"]
             if sa.get("has_codeql"):
-                scores.append(100)
+                components.append(("static_analysis", 100))
             elif not sa.get("not_collected"):
-                scores.append(0)
+                components.append(("static_analysis", 0))
         if "dev_tooling" in sub_results:
-            _append_quality_pct(sub_results["dev_tooling"], "overall_score", "percentage")
+            _append_quality_pct("dev_tooling", "overall_score", "percentage")
         if "deployment_environments" in sub_results:
-            _append_quality_pct(sub_results["deployment_environments"], "overall_score", "percentage")
+            _append_quality_pct("deployment_environments", "overall_score", "percentage")
         if "usability" in sub_results:
-            _append_quality_pct(sub_results["usability"], "overall_score", "percentage")
+            _append_quality_pct("usability", "overall_score", "percentage")
         if "maintainability" in sub_results:
-            _append_quality_pct(sub_results["maintainability"], "overall_score", "percentage")
+            _append_quality_pct("maintainability", "overall_score", "percentage")
         if "reliability" in sub_results:
-            _append_quality_pct(sub_results["reliability"], "overall_score", "percentage")
+            _append_quality_pct("reliability", "overall_score", "percentage")
         if "supply_chain" in sub_results:
-            _append_quality_pct(sub_results["supply_chain"], "overall_score", "percentage")
+            _append_quality_pct("supply_chain", "overall_score", "percentage")
 
+        scores = [value for _, value in components]
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
         return {
@@ -956,11 +959,12 @@ class MetricsOrchestrator:
             "score": round(avg_score, 2),
             "max_score": 100.0,
             "sub_results": sub_results,
+            "score_components": dict(components),
             "excluded_by_config": self._package_excluded_keys("quality", package),
         }
 
     async def collect_all_metrics(self, package: Dict) -> Dict:
-        """Collect all metrics for a package across the 3 CASS dimensions
+        """Collect all metrics for a package across the 3 dimensions.
 
         Args:
             package: Package metadata
@@ -969,30 +973,43 @@ class MetricsOrchestrator:
             Complete metrics dictionary
         """
         logger.info(
-            f"Starting metrics collection for {package['name']} ({package['repository']})"
+            f"Starting metrics collection for {package['name']} ({package['repo_url']})"
         )
 
-        # Attach both per-package config layers before the three dimensions
-        # (which read them via _sub_enabled) run concurrently below. Each is
-        # {} if no config exists or it failed to load -- collect as normal.
-        package["package_config"] = self._load_package_config(package["repository"])
-        package["project_config"] = await self._fetch_project_config(package)
-
-        # Collect all 3 CASS dimensions in parallel. Each dimension resolves
-        # its own Forge from package['repo_url'] (via _resolve_forge) and
-        # returns an empty placeholder rather than collecting if the host
-        # isn't recognized -- see _resolve_forge's docstring. No gate is
-        # needed here anymore now that GitLab is a recognized host too.
-        (
-            impact_metrics,
-            ecosystem_metrics,
-            quality_metrics,
-        ) = await asyncio.gather(
-            self.collect_impact_dimension(package),
-            self.collect_ecosystem_dimension(package),
-            self.collect_quality_dimension(package),
-            return_exceptions=True,
-        )
+        forge = self._forge_for_package(package)
+        if forge is None:
+            # Not on a supported platform. Leave all sub-metrics unset ("not
+            # yet collected" downstream) rather than let each collector
+            # silently 404 against the wrong host and report a false
+            # "not found"/"failing" result.
+            logger.info(
+                f"Skipping collection for {package['name']}: "
+                f"repo_type {package.get('repo_type')!r} at {package['repo_url']} "
+                f"is not a supported platform"
+            )
+            impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
+            ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
+            quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+        elif not await self._confirm_repo_exists(forge, package["repo_url"]):
+            logger.error(
+                f"Skipping collection for {package['name']}: "
+                f"{package['repo_url']} does not exist"
+            )
+            impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
+            ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
+            quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+        else:
+            # Collect all 3 dimensions in parallel
+            (
+                impact_metrics,
+                ecosystem_metrics,
+                quality_metrics,
+            ) = await asyncio.gather(
+                self.collect_impact_dimension(package),
+                self.collect_ecosystem_dimension(package),
+                self.collect_quality_dimension(package),
+                return_exceptions=True,
+            )
 
         # Handle exceptions
         if isinstance(impact_metrics, Exception):
@@ -1021,8 +1038,16 @@ class MetricsOrchestrator:
                 "ecosystem": ecosystem_metrics,
                 "quality": quality_metrics,
             },
-            "project_config": package.get("project_config", {}),
             "last_updated": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _metric_weights(self) -> Dict[str, float]:
+        """Dimension weights for the overall score, from config or defaults."""
+        weights = self.config.get("metric_weights", {})
+        return {
+            "impact": weights.get("impact", 0.33),
+            "ecosystem": weights.get("ecosystem", 0.34),
+            "quality": weights.get("quality", 0.33),
         }
 
     def _calculate_overall_score(
@@ -1031,18 +1056,17 @@ class MetricsOrchestrator:
         ecosystem: Dict,
         quality: Dict,
     ) -> int:
-        """Calculate weighted overall sustainability score based on 3 CASS dimensions
+        """Calculate weighted overall sustainability score based on 3 dimensions
 
         Default weights (can be configured):
         - Impact: 33%
         - Ecosystem: 34%
         - Quality: 33%
         """
-        # Get weights from config or use defaults
-        weights = self.config.get("metric_weights", {})
-        impact_weight = weights.get("impact", 0.33)
-        ecosystem_weight = weights.get("ecosystem", 0.34)
-        quality_weight = weights.get("quality", 0.33)
+        weights = self._metric_weights()
+        impact_weight = weights["impact"]
+        ecosystem_weight = weights["ecosystem"]
+        quality_weight = weights["quality"]
 
         # Extract scores from dimension results
         impact_score = impact.get("score", 0)
@@ -1076,7 +1100,7 @@ class MetricsOrchestrator:
         Returns:
             Dictionary of all metrics keyed by repository name
         """
-        software_list = self.prepare_software_list(filter_software, group, group_count)
+        catalog, software_list = await self.prepare_software_list(filter_software, group, group_count)
         all_metrics = {}
 
         # Packages are independent, and each one spends nearly all its time
@@ -1102,7 +1126,7 @@ class MetricsOrchestrator:
             async with semaphore:
                 try:
                     metrics = await self.collect_all_metrics(package)
-                    all_metrics[package["repository"]] = metrics
+                    all_metrics[package["name"]] = metrics
                 except Exception as e:
                     logger.error(f"Failed to process {package['name']}: {e}")
                 finally:
@@ -1117,7 +1141,7 @@ class MetricsOrchestrator:
         # Write output
         if not dry_run:
             self._write_summary_report(all_metrics)
-            self._write_dashboard_output(all_metrics)
+            self._write_dashboard_output(catalog, all_metrics)
 
         return all_metrics
 
@@ -1159,7 +1183,7 @@ class MetricsOrchestrator:
 
         logger.info(f"Summary report written to {output_file}")
 
-    def _transform_for_dashboard(self, repo_name: str, metrics: Dict) -> Dict:
+    def _transform_for_dashboard(self, metrics: Dict, overrides: Dict[str, Dict[str, str]]) -> Dict:
         """Transform internal metrics into the per-package CASS v3 format.
 
         The dashboard expects per-package files at:
@@ -1170,35 +1194,21 @@ class MetricsOrchestrator:
         """
         dims = metrics.get("dimensions", {})
 
-        # Merge sub-metric text overrides from both config layers: the
-        # project's own PROJECT_CONFIG_PATH (fetched during collection, so it
-        # travels on `metrics`) and the maintainer's central
-        # package_config/<owner>_<repo>.yaml (re-read fresh here since it's a
-        # cheap local file). On a conflicting label within the same section,
-        # the maintainer's central file wins -- applied second, below.
-        project_overrides: Dict[str, Dict[str, str]] = (
-            metrics.get("project_config", {}).get("overrides", {})
-        )
-        pkg_config = self._load_package_config(repo_name)
-        central_overrides: Dict[str, Dict[str, str]] = pkg_config.get("overrides", {})
-
-        pkg_overrides: Dict[str, Dict[str, str]] = {}
-        for section, labels in project_overrides.items():
-            pkg_overrides.setdefault(section, {}).update(labels)
-        for section, labels in central_overrides.items():
-            pkg_overrides.setdefault(section, {}).update(labels)
-
         def _stub(section_num: str) -> Optional[str]:
             """Return a stub HTML block if the section has any overrides, else None."""
-            if section_num in pkg_overrides:
-                return self._build_stub_section(section_num, pkg_overrides[section_num])
+            if section_num in overrides:
+                return self._build_stub_section(section_num, overrides[section_num])
             return None
 
         def _sub_row(sub: Dict, key: str) -> str:
             """Render one collector sub-score as a section row (plus any detail)."""
             info = sub.get(key, {})
             label = info.get("label", key)
-            if info.get("not_collected"):
+            # A sub-score the collector didn't return isn't a measured fail.
+            if info.get("not_applicable") or info.get("insufficient_sample") or info.get("unmeasured"):
+                # Reported, but neither a pass nor a fail -- no mark.
+                return f'<p><strong>{label}:</strong> {info.get("value", "Not applicable")}</p>'
+            if not info or info.get("not_collected"):
                 return f'<p><strong>{label}:</strong> Not yet collected</p>'
             mark = "✓" if info.get("passing") else "✗"
             row = f'<p><strong>{label}:</strong> {info.get("value", "N/A")} {mark}</p>'
@@ -1238,11 +1248,11 @@ class MetricsOrchestrator:
                 citation_lines.append(
                     f'<p><strong>Informal Mentions:</strong> {informal["raw_value"]:,}</p>'
                 )
-            dependents = sub_metrics.get("dependent_packages", {})
-            if dependents.get("raw_value", 0) > 0:
-                citation_lines.append(
-                    f'<p><strong>Dependent Packages:</strong> {dependents["raw_value"]:,}</p>'
-                )
+            # The citation collector's "dependent_packages" is the fork
+            # count (GitHub exposes no used-by count); the real reverse
+            # dependencies are the Reverse-Dependency Analysis row below.
+            # It is already listed as GitHub Forks, so it isn't repeated
+            # under a name that claims more than it measures.
             dois = sub_metrics.get("doi_resolutions", {})
             if dois.get("raw_value", 0) > 0:
                 citation_lines.append(
@@ -1378,12 +1388,16 @@ class MetricsOrchestrator:
                 chaoss_score = chaoss.get("overall_score", {})
                 score_val = chaoss_score.get("score", 0)
                 status = chaoss_score.get("status", "unknown")
-                chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
-                gov_pts += 1 if chaoss_ok else 0
-                gov_lines.append(
-                    f'<p><strong>CHAOSS Governance Metrics:</strong> '
-                    f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
-                )
+                if score_val is None:
+                    # Every category unmeasured or gapped: no score to judge.
+                    gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+                else:
+                    chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
+                    gov_pts += 1 if chaoss_ok else 0
+                    gov_lines.append(
+                        f'<p><strong>CHAOSS Governance Metrics:</strong> '
+                        f'{score_val}/100 ({status}) {"✓" if chaoss_ok else "✗"}</p>'
+                    )
                 # Per-category breakdown, weakest first, so the failing areas
                 # are what a maintainer sees rather than just the headline score.
                 # A category can be {"not_collected": True} instead of a
@@ -1408,8 +1422,9 @@ class MetricsOrchestrator:
             #    Owners assigned, and the documents still being maintained.
             eff = governance.get("effectiveness", {})
             eff_signals = []
-            if eff.get("has_codeowners"):
-                eff_signals.append("CODEOWNERS defined")
+            # Name the missing half too: "docs updated 53 days ago ✗" alone
+            # didn't say why the row failed.
+            eff_signals.append("CODEOWNERS defined" if eff.get("has_codeowners") else "no CODEOWNERS")
             days = eff.get("days_since_governance_update")
             if days is not None:
                 eff_signals.append(f"docs updated {days} days ago")
@@ -1417,7 +1432,7 @@ class MetricsOrchestrator:
             gov_pts += 1 if eff_ok else 0
             gov_lines.append(
                 f'<p><strong>Governance Effectiveness Assessment:</strong> '
-                f'{"; ".join(eff_signals) if eff_signals else "No governance ownership or upkeep found"} '
+                f'{"; ".join(eff_signals)} '
                 f'{"✓" if eff_ok else "✗"}</p>'
             )
 
@@ -1480,7 +1495,9 @@ class MetricsOrchestrator:
                 osi = True
             osi_label = "Yes" if osi is True else ("No" if osi is False else "Unknown")
             if osi is True and resolved and not spdx_id:
-                osi_label = f"Yes (via {resolved} in licence text)"
+                via = fair_lic.get("license_exceptions", {}).get("resolved_via")
+                where = "CITATION.cff" if via == "citation" else "licence text"
+                osi_label = f"Yes (via {resolved} in {where})"
             osi_passing = osi is True
             lic_pts += 1 if osi_passing else 0
             lic_lines.append(
@@ -1560,7 +1577,7 @@ class MetricsOrchestrator:
             # 5. Multi-Channel Communication Activity
             channels = maintenance.get("channels", {})
             ch_found = channels.get("found", [])
-            ch_ok = len(ch_found) >= get_threshold("4.2.3", "Multi-Channel Communication Activity")
+            ch_ok = len(ch_found) >= get_threshold("4.2.3", "Multi-Channel Communication Activity", "min_channels")
             maint_pts += 1 if ch_ok else 0
             maint_lines.append(
                 f'<p><strong>Multi-Channel Communication Activity:</strong> '
@@ -1583,10 +1600,15 @@ class MetricsOrchestrator:
                     f'previously active contributors stopped ({rate * 100:.0f}%) '
                     f'{"✓" if ab_ok else "✗"}</p>'
                 )
+                if ab.get("repositories"):
+                    maint_lines.append(
+                        f'<p class="sub-detail">Across {", ".join(ab["repositories"])}</p>')
             else:
+                # Needs a full year of activity before the year being judged;
+                # unmeasurable is excluded, not scored as a failure.
                 maint_lines.append(
                     '<p><strong>Contributor Abandonment Forecasting:</strong> '
-                    'Not enough contributor history to assess ✗</p>'
+                    'Not enough contributor history to assess (needs two years)</p>'
                 )
 
             maint_lines.append(f'<p><strong>Score:</strong> {maint_pts}/6</p>')
@@ -1607,6 +1629,10 @@ class MetricsOrchestrator:
                 if s.get("not_collected"):
                     return f'<p><strong>{label}:</strong> Not yet collected</p>'
                 val = s.get("value", "N/A")
+                if s.get("insufficient_sample"):
+                    # Reported but unscored; carries no mark so the row
+                    # isn't counted by the Score-line recount either.
+                    return f'<p><strong>{label}:</strong> {val}</p>'
                 mark = "✓" if s.get("passing") else "✗"
                 return f'<p><strong>{label}:</strong> {val} {mark}</p>'
 
@@ -1891,7 +1917,10 @@ class MetricsOrchestrator:
                 if static_analysis.get("has_codeql"):
                     rel_pts += 1
                     url = static_analysis.get("workflow_url", "")
-                    link = f'<a href="{url}">CodeQL enabled</a>' if url else "CodeQL enabled"
+                    text = ("CodeQL enabled (default setup)"
+                            if static_analysis.get("workflow_file") == "CodeQL default setup"
+                            else "CodeQL enabled")
+                    link = f'<a href="{url}">{text}</a>' if url else text
                     section_431_lines.append(f'<p><strong>Enhanced Security Analysis:</strong> {link} ✓</p>')
                 elif static_analysis.get("not_collected"):
                     # A gap here isn't a confirmed "no CodeQL" -- don't
@@ -1931,6 +1960,13 @@ class MetricsOrchestrator:
                     section_431_lines.append(
                         f'<p class="sub-detail">{test_coverage.get("lines_covered", 0):,}/{lines_total:,} lines covered</p>'
                     )
+            elif test_coverage.get("coverage_in_ci"):
+                # Measured, just not somewhere this can read -- not a fail.
+                section_431_lines.append(
+                    '<p><strong>Test Coverage Excellence:</strong> Not yet collected</p>'
+                    f'<p class="sub-detail">Coverage is measured in CI '
+                    f'({test_coverage["coverage_in_ci"]}) but not published to Codecov</p>'
+                )
             else:
                 section_431_lines.append(
                     '<p><strong>Test Coverage Excellence:</strong> No Codecov data found ✗</p>'
@@ -1973,6 +2009,8 @@ class MetricsOrchestrator:
             fair4rs_found = cats.get("fair4rs_metadata", {}).get("found", [])
             container_found = cats.get("containers", {}).get("found", [])
             dep_found = cats.get("dependency_pinning", {}).get("found", [])
+            env_detail = cats.get("reproducibility_docs", {}).get("details", {}).get("Environment specification", {})
+            env_spec = env_detail.get("file") if env_detail.get("exists") else None
             semver = cats.get("semantic_versioning", {})
 
             repr_lines = [
@@ -1988,9 +2026,12 @@ class MetricsOrchestrator:
                           reproducibility.get("uses_semantic_versioning"),
                           ", ".join(semver.get("example_tags", [])[:2]) if semver.get("example_tags") else None,
                           bool(semver.get("not_collected"))),
+                # A lockfile, or an environment specification (Spack env,
+                # conda environment, devcontainer): the report's "dependency
+                # management practices, environment specification".
                 _repr_row("Environment Management",
-                          reproducibility.get("has_dependency_pinning"),
-                          ", ".join(dep_found) if dep_found else None,
+                          reproducibility.get("has_dependency_pinning") or env_spec is not None,
+                          ", ".join(dep_found + ([env_spec] if env_spec else [])) or None,
                           bool(cats.get("dependency_pinning", {}).get("not_collected"))),
                 _repr_row("Reproducibility Documentation",
                           reproducibility.get("has_reproducibility_docs"),
@@ -2055,8 +2096,11 @@ class MetricsOrchestrator:
                         f'<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge {link} ({pct:.0f}%) {mark}</p>'
                     )
                 else:
+                    badge_url = badge_status.get("url")
+                    status = (f'<a href="{badge_url}">registered, not started</a>' if badge_url
+                              else "not registered")
                     section_432_lines.append(
-                        '<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge not registered ✗</p>'
+                        f'<p><strong>Community Contribution Facilitation:</strong> OpenSSF Badge {status} ✗</p>'
                     )
                 for cat_label, cat_key in [
                     ("Governance", "governance_criteria"),
@@ -2128,7 +2172,13 @@ class MetricsOrchestrator:
                 return row
 
             build_found = cats.get("build_systems", {}).get("found", [])
+            if accessibility.get("other_build"):
+                build_found = build_found + [accessibility["other_build"]]
+            if accessibility.get("python_package"):
+                build_found = build_found + [f'pip-installable Python package ({accessibility["python_package"]})']
             container_found = cats.get("containers", {}).get("found", [])
+            if accessibility.get("container_image"):
+                container_found = container_found + [accessibility["container_image"]]
 
             # 5. Deployment Environment Testing comes from its own collector, so
             #    it is rendered with _sub_row and scored alongside the _acc_row
@@ -2243,7 +2293,7 @@ class MetricsOrchestrator:
         section_438_data = "\n".join(section_438_lines) if section_438_lines else None
 
         # Apply per-package overrides to all collected sections
-        ov = pkg_overrides
+        ov = overrides
         section_411_data = self._apply_section_overrides(section_411_data, ov.get("4.1.1", {}))
         section_421_data = self._apply_section_overrides(section_421_data, ov.get("4.2.1", {}))
         section_422_data = self._apply_section_overrides(section_422_data, ov.get("4.2.2", {}))
@@ -2274,8 +2324,7 @@ class MetricsOrchestrator:
             "quality": dims.get("quality", {}).get("excluded_by_config", []),
         }
 
-        return {
-            "package": repo_name,
+        result = {
             "stars": github_stats.get("stars", 0),
             "forks": github_stats.get("forks", 0),
             "config_exclusions": config_exclusions,
@@ -2315,20 +2364,70 @@ class MetricsOrchestrator:
                 "4.3.8": {"title": "Software Supply Chain Integrity",        "data": section_438_data or _stub("4.3.8")},
             },
         }
+        # One scoring rule for every section, instead of each builder's own
+        # denominator -- see _rescore_section.
+        for dim in ("impact", "ecosystem", "quality"):
+            for section in result[dim].values():
+                section["data"] = _rescore_section(section["data"])
+        return result
 
-    def _write_dashboard_output(self, all_metrics: Dict):
+    @staticmethod
+    def _output_dir_name(package_name: str, package: Dict) -> str:
+        """Repository name the dashboard keys a package's files by, e.g.
+        "hdf5" for https://github.com/HDFGroup/hdf5. The catalog's `name:`
+        is free text ("HDF5", "CORSA Metrics Framework"), so it can't be used
+        as a path; fall back to it only when there is no repo_url.
+        """
+        path = urlparse(package.get("repo_url") or "").path.strip("/")
+        source = path or package_name
+        repo = source.split("/")[-1]
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+        return repo
+
+    def _write_dashboard_output(self, catalog: Dict, all_metrics: Dict):
         """Write per-package metrics.json files for the dashboard.
 
-        Creates: output/{repo-name}-metrics/metrics.json for each package.
-        These are uploaded as workflow artifacts and downloaded by the
-        dashboard's update workflow into explore/github-data/.
+        Creates: output/{repo-name}-metrics/metrics.json for each package,
+        and beside it report.html -- the same results as one readable page
+        with the thresholds each row was judged against (see
+        package_report.py). These are uploaded as workflow artifacts and
+        downloaded by the dashboard's update workflow into
+        explore/github-data/.
         """
-        for repo_name, metrics in all_metrics.items():
-            dashboard_data = self._transform_for_dashboard(repo_name, metrics)
+        failed = []
+        written: Dict[str, str] = {}
 
-            # Extract repo part from "Owner/repo" for directory name
-            repo_short = repo_name.split("/")[-1]
-            metrics_dir = self.output_path / f"{repo_short}-metrics"
+        for package_name, metrics in all_metrics.items():
+
+            # One package's rendering error used to abort the loop and drop
+            # every later package's output; write the rest, then fail the run.
+            try:
+                overrides = catalog[package_name].get("overrides", {})
+                section_data = self._transform_for_dashboard(metrics, overrides)
+                # The dashboard (js/catalog.js, get_repos_info.py) reads
+                # stars/forks/impact/ecosystem/quality from the top level, so
+                # keep those flat and add the catalog entry beside them.
+                dashboard_data = {
+                    "package": package_name,
+                    "metadata": catalog[package_name],
+                    **section_data,
+                }
+            except Exception as e:
+                logger.error(f"Could not render dashboard output for {package_name}: {e!r}", exc_info=True)
+                failed.append(package_name)
+                continue
+
+            # The dashboard keys files by repository name alone, so two
+            # catalog entries for same-named repos overwrite each other.
+            dir_name = self._output_dir_name(package_name, catalog[package_name])
+            if dir_name.lower() in written:
+                logger.error(
+                    f"{package_name} and {written[dir_name.lower()]} both write "
+                    f"{dir_name}-metrics/metrics.json; the dashboard shows only {package_name}"
+                )
+            written[dir_name.lower()] = package_name
+            metrics_dir = self.output_path / f"{dir_name}-metrics"
             metrics_dir.mkdir(parents=True, exist_ok=True)
 
             output_file = metrics_dir / "metrics.json"
@@ -2336,6 +2435,20 @@ class MetricsOrchestrator:
                 json.dump(dashboard_data, f, indent=2)
 
             logger.info(f"Dashboard metrics written to {output_file}")
+
+            report_file = metrics_dir / "report.html"
+            report_file.write_text(
+                render_package_report(
+                    package_name,
+                    section_data,
+                    metrics,
+                    self._metric_weights(),
+                    catalog[package_name].get("overrides", {})
+                )
+            )
+
+        if failed:
+            raise RuntimeError(f"Dashboard output failed for: {', '.join(failed)}")
 
 
 async def main():

@@ -2,52 +2,16 @@
 
 import asyncio
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from forge.base import COLLECTION_GAP
-from collectors.ecosystem.outreach import OutreachCollector, _ONBOARDING_PATHS
-
-
-class FakeForge:
-    """Minimal stand-in for GitHubForge/GitLabForge."""
-
-    def __init__(self):
-        self.contributors_pages = []
-        self.commits_pages = []
-        self.search_results = {}
-        self.file_results = {}
-
-    def extract_ref(self, repo_url):
-        return None if repo_url == "not-a-url" else "o/r"
-
-    async def contributors(self, client, ref, *, per_page=100, page=1):
-        idx = page - 1
-        return self.contributors_pages[idx] if idx < len(self.contributors_pages) else []
-
-    async def commits(self, client, ref, *, since=None, per_page=100, page=1):
-        idx = page - 1
-        return self.commits_pages[idx] if idx < len(self.commits_pages) else []
-
-    async def search_issues(self, client, query, *, per_page=1):
-        for key, value in self.search_results.items():
-            if key in query:
-                return value
-        return 0
-
-    async def file_exists(self, client, ref, path):
-        return self.file_results.get(path)
-
-    def get_timestamp(self):
-        return "2026-01-01T00:00:00+00:00"
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.ecosystem.outreach import OutreachCollector, _ONBOARDING_LABELS
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
-def forge():
-    return FakeForge()
-
-
-@pytest.fixture
-def collector(forge):
-    return OutreachCollector(forge)
+def collector():
+    return OutreachCollector(FakeForge())
 
 
 class TestContributorGrowth:
@@ -107,18 +71,48 @@ class TestScoring:
         )
 
     def test_three_submetrics_stay_uncollected(self, collector):
-        sub = self._score(collector)["sub_scores"]
+        growth = {"new_contributors": 5, "retention_rate": 40.0}
+        sub = self._score(collector, growth)["sub_scores"]
         uncollected = [k for k, v in sub.items() if v.get("not_collected")]
         assert len(uncollected) == 3
         # The 3 permanently-uncollected submetrics must not inflate the
         # denominator -- only the 5 actually-measured ones are scorable.
-        assert self._score(collector)["max_score"] == 5
+        assert self._score(collector, growth)["max_score"] == 5
 
     def test_retention_threshold(self, collector):
-        assert self._score(collector, {"retention_rate": 50})["sub_scores"][
+        assert self._score(collector, {"retention_rate": 50, "new_contributors": 4})["sub_scores"][
             "contributor_retention"]["passing"]
-        assert not self._score(collector, {"retention_rate": 49})["sub_scores"][
+        assert not self._score(collector, {"retention_rate": 49, "new_contributors": 4})["sub_scores"][
             "contributor_retention"]["passing"]
+
+    def test_retention_of_too_few_newcomers_is_unmarked(self, collector):
+        for growth in ({"new_contributors": 0, "retention_rate": None},
+                       {"new_contributors": 2, "retention_rate": 0.0}):
+            s = self._score(collector, growth)
+            assert s["sub_scores"]["contributor_retention"]["insufficient_sample"]
+            assert s["max_score"] == 4
+
+    def test_truncated_contributor_list_is_not_measurable(self, collector):
+        contributors = [{"identity": f"core{i}", "commit_count": 500} for i in range(20)]
+        recent = {**{f"core{i}": 50 for i in range(20)}, **{f"new{i}": 1 for i in range(30)}}
+        growth = collector._analyze_contributor_growth(contributors, recent)
+        assert growth["contributor_list_truncated"]
+        sub = self._score(collector, growth)["sub_scores"]
+        for key in ("new_contributor_tracking", "contributor_retention", "contributor_lifecycle"):
+            assert sub[key].get("unmeasured"), key
+            assert "Not measurable" in sub[key]["value"]
+
+    def test_one_or_two_unlisted_authors_is_not_truncation(self, collector):
+        # The contributor list lags new commits slightly; that isn't truncation.
+        contributors = [{"identity": f"c{i}", "commit_count": 5} for i in range(10)]
+        recent = {**{f"c{i}": 5 for i in range(10)}, "brand_new": 1}
+        assert not collector._analyze_contributor_growth(contributors, recent)["contributor_list_truncated"]
+
+    def test_capped_commit_window_leaves_new_contributors_unmeasured(self, collector):
+        growth = {"new_contributors": 0, "retention_rate": None, "commit_window_truncated": True}
+        sub = self._score(collector, growth)["sub_scores"]
+        assert sub["new_contributor_tracking"].get("unmeasured")
+        assert not sub["contributor_lifecycle"].get("unmeasured")
 
     def test_good_first_issue_needs_open_ones(self, collector):
         # Closed-only history doesn't help a newcomer arriving today.
@@ -126,7 +120,6 @@ class TestScoring:
         assert not s["sub_scores"]["good_first_issue"]["passing"]
         s = self._score(collector, issues={"total": 5, "open": 2, "closed": 3})
         assert s["sub_scores"]["good_first_issue"]["passing"]
-
     def test_onboarding_threshold(self, collector):
         assert not self._score(collector, onboarding={"found": ["a", "b"]})[
             "sub_scores"]["onboarding_infrastructure"]["passing"]
@@ -134,24 +127,37 @@ class TestScoring:
             "sub_scores"]["onboarding_infrastructure"]["passing"]
 
 
+
 class TestNewcomerLabelQuery:
     def test_all_labels_go_in_one_query(self):
-        # Eight searches (four labels x two states) became two. Comma-separated
-        # values in a label: qualifier are ORed, and the OR form deduplicates
-        # issues carrying more than one of the labels.
-        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
-        labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
-        assert labels == '"good first issue","help wanted",good-first-issue,newcomer'
+        # Comma-separated values in a label: qualifier are ORed, so all
+        # labels take one search per state.
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS, _label_query
+        assert _label_query(_NEWCOMER_LABELS) == '"good first issue","help wanted",good-first-issue,newcomer'
 
-    def test_spaced_labels_are_quoted(self):
+    def test_spaced_and_namespaced_labels_are_quoted(self):
+        from collectors.ecosystem.outreach import _label_query
+        assert _label_query(["is:good-first-issue", "good-first-issue"]) == '"is:good-first-issue",good-first-issue'
+
+    def test_repository_labels_in_their_own_naming_are_used(self, collector):
+        labels = [{"name": n} for n in ["bug", "is:good-first-issue", "is:help-wanted",
+                                          "difficulty: easy", "easy-to-review-ish", "reg:helper-scripts"]]
+        collector.forge.label_list = labels
+        got = asyncio.run(collector._newcomer_labels(None, "o/r"))
+        assert got == ["is:good-first-issue", "is:help-wanted", "difficulty: easy"]
+
+    def test_no_matching_labels_falls_back_to_common_names(self, collector):
         from collectors.ecosystem.outreach import _NEWCOMER_LABELS
-        labels = ",".join(f'"{l}"' if " " in l else l for l in _NEWCOMER_LABELS)
-        assert '"good first issue"' in labels
-        assert "good-first-issue" in labels and '"good-first-issue"' not in labels
+        collector.forge.label_list = [{"name": "bug"}]
+        assert asyncio.run(collector._newcomer_labels(None, "o/r")) == _NEWCOMER_LABELS
+        collector.forge.gaps = {"labels"}
+        assert asyncio.run(collector._newcomer_labels(None, "o/r")) == _NEWCOMER_LABELS
+
 
 
 class TestEmptyResult:
     def test_invalid_url(self, collector):
+        import asyncio
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "not-a-url"}))
         assert r["overall_score"]["score"] == 0
         assert r["overall_score"]["max_score"] == 5
@@ -203,7 +209,7 @@ class TestScoringGapHandling:
         s = self._score(
             collector,
             issues={"total": 0, "open": 0, "closed": 0, "not_collected": True},
-            onboarding={"found": [], "not_collected": list(_ONBOARDING_PATHS)},
+            onboarding={"found": [], "not_collected": list(_ONBOARDING_LABELS)},
             contributors_gap=True, commits_gap=True,
         )
         assert s["score"] is None
@@ -212,53 +218,134 @@ class TestScoringGapHandling:
 
 
 class TestGetContributorsGapHandling:
-    def test_gap_on_first_page_reports_gap_with_partial_results(self, collector, forge):
-        forge.contributors_pages = [COLLECTION_GAP]
+    def test_gap_on_first_page_reports_gap_with_partial_results(self, collector):
+        collector.forge.gaps = {"contributors"}
         contributors, saw_gap = asyncio.run(collector._get_contributors(None, "o/r"))
         assert contributors == []
         assert saw_gap is True
 
-    def test_gap_after_a_successful_first_page_keeps_what_was_fetched(self, collector, forge):
-        forge.contributors_pages = [
-            [{"identity": "a", "commit_count": 5}], COLLECTION_GAP,
-        ]
-        contributors, saw_gap = asyncio.run(collector._get_contributors(None, "o/r"))
-        assert len(contributors) == 1
+    def test_gap_after_a_successful_first_page_keeps_what_was_fetched(self, collector):
+        async def contributors(client, ref, *, per_page=100, page=1):
+            if page == 1:
+                return [{"identity": f"u{i}", "commit_count": 5} for i in range(100)]
+            return COLLECTION_GAP
+        collector.forge.contributors = contributors
+
+        contributors_out, saw_gap = asyncio.run(collector._get_contributors(None, "o/r"))
+        assert len(contributors_out) == 100
         assert saw_gap is True
 
-    def test_clean_exhaustion_is_not_a_gap(self, collector, forge):
-        forge.contributors_pages = [[]]
+    def test_clean_exhaustion_is_not_a_gap(self, collector):
         contributors, saw_gap = asyncio.run(collector._get_contributors(None, "o/r"))
         assert contributors == []
         assert saw_gap is False
 
 
+class TestRecentCommitWindow:
+    def _walk(self, collector, total_commits):
+        collector.forge.commit_list = [{"author_identity": "a"}] * total_commits
+        return asyncio.run(collector._get_recent_commit_authors(None, "o/r"))
+
+    def test_hitting_the_page_cap_is_truncation(self, collector):
+        from collectors.ecosystem.outreach import _MAX_COMMIT_PAGES
+        counts, gap, truncated = self._walk(collector, _MAX_COMMIT_PAGES * 100 + 1)
+        assert truncated and not gap
+
+    def test_reaching_the_end_is_not_truncation(self, collector):
+        _, _, truncated = self._walk(collector, 150)
+        assert not truncated
+
+
 class TestGetNewcomerIssuesGapHandling:
-    def test_open_search_failure_with_zero_is_not_collected(self, collector, forge):
-        forge.search_results = {"state:open": None, "state:closed": 3}
+    def test_open_search_failure_with_zero_is_not_collected(self, collector):
+        collector.forge.search = lambda q: None if "state:open" in q else 3
         result = asyncio.run(collector._get_newcomer_issues(None, "o/r"))
         assert result["not_collected"] is True
 
-    def test_open_confirmed_nonzero_survives_a_closed_gap(self, collector, forge):
-        forge.search_results = {"state:open": 4, "state:closed": None}
+    def test_open_confirmed_nonzero_survives_a_closed_gap(self, collector):
+        collector.forge.search = lambda q: 4 if "state:open" in q else None
         result = asyncio.run(collector._get_newcomer_issues(None, "o/r"))
         assert result["open"] == 4
         assert "not_collected" not in result
 
 
-class TestCheckOnboardingGapHandling:
-    def _run(self, collector, forge, responses):
-        forge.file_results = responses
-        return asyncio.run(collector._check_onboarding(None, "o/r"))
+class TestCheckOnboarding:
+    """_check_onboarding now takes a RepoTree (or COLLECTION_GAP) directly --
+    see corsa-center/metrics#49 and METRIC_BLIND_SPOTS.md class F2.
+    """
 
-    def test_gapped_label_with_no_find_is_not_collected(self, collector, forge):
-        responses = {p: COLLECTION_GAP for paths in _ONBOARDING_PATHS.values() for p in paths}
-        result = self._run(collector, forge, responses)
+    def test_gap_tree_reports_all_labels_not_collected(self, collector):
+        result = collector._check_onboarding(COLLECTION_GAP)
         assert result["found"] == []
-        assert set(result["not_collected"]) == set(_ONBOARDING_PATHS)
+        assert set(result["not_collected"]) == set(_ONBOARDING_LABELS)
 
-    def test_found_label_survives_gaps_on_others(self, collector, forge):
-        responses = {p: COLLECTION_GAP for paths in _ONBOARDING_PATHS.values() for p in paths}
-        responses["CONTRIBUTING.md"] = "http://x"
-        result = self._run(collector, forge, responses)
+    def test_contributing_guide_found(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["CONTRIBUTING.md"], truncated=False)
+        result = collector._check_onboarding(tree)
         assert "Contributing guide" in result["found"]
+
+    def test_issue_template_directory_counts(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", [".github/ISSUE_TEMPLATE/bug_report.md"], truncated=False)
+        result = collector._check_onboarding(tree)
+        assert "Issue templates" in result["found"]
+
+    def test_getting_started_guide_found_at_an_unenumerated_path(self, collector):
+        # AMReX-Codes/amrex's actual location -- none of the six literal
+        # paths this check used to enumerate would have matched it.
+        tree = RepoTree(
+            FakeForge(), "o/r",
+            ["Docs/sphinx_documentation/source/GettingStarted.rst"],
+            truncated=False,
+        )
+        result = collector._check_onboarding(tree)
+        assert "Getting-started guide" in result["found"]
+
+    def test_missing_resources_are_confirmed_absent_not_gapped(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        result = collector._check_onboarding(tree)
+        assert result["found"] == []
+        assert set(result["missing"]) == set(_ONBOARDING_LABELS)
+        assert result["not_collected"] == []
+
+    def test_contributing_guide_in_nested_docs_tree(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["src/docs/sphinx/developer/contributing.rst"], truncated=False)
+        assert "Contributing guide" in collector._check_onboarding(tree)["found"]
+
+    def test_bundled_subproject_contributing_guide_not_counted(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["packages/lib/docs/CONTRIBUTING.md"], truncated=False)
+        assert "Contributing guide" in collector._check_onboarding(tree)["missing"]
+
+    def test_top_level_tutorial_directory_counts(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["tutorial/00_hello/main.cc"], truncated=False)
+        assert "Getting-started guide" in collector._check_onboarding(tree)["found"]
+
+
+class TestReadmeOnboarding:
+    def _missing_all(self, collector):
+        return collector._check_onboarding(RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False))
+
+    def test_readme_getting_started_section_counts(self, collector):
+        onboarding = self._missing_all(collector)
+        collector._credit_readme(onboarding, "# Proj\n\n## Installing / Getting started\n\nmake\n")
+        assert onboarding["found"] == ["Getting-started guide"]
+        assert "Getting-started guide" not in onboarding["missing"]
+
+    def test_readme_contributing_section_needs_a_process(self, collector):
+        onboarding = self._missing_all(collector)
+        collector._credit_readme(onboarding, "## Contributing\n\nWe welcome contributions!\n")
+        assert "Contributing guide" in onboarding["missing"]
+        collector._credit_readme(onboarding, "## Contributing\n\nFork the repo and open a pull request.\n")
+        assert "Contributing guide" in onboarding["found"]
+
+    def test_readme_is_fetched_only_when_something_is_missing(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["CONTRIBUTING.md", ".github/ISSUE_TEMPLATE.md",
+                                   ".github/PULL_REQUEST_TEMPLATE.md", "docs/quickstart.md"],
+                        truncated=False)
+        with patch.object(collector, "_get_contributors", new=AsyncMock(return_value=([], False))), \
+             patch.object(collector, "_get_recent_commit_authors", new=AsyncMock(return_value=({}, False, False))), \
+             patch.object(collector, "_get_newcomer_issues", new=AsyncMock(return_value={"open": 0, "closed": 0, "total": 0})), \
+             patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector.forge, "readme", new=AsyncMock(return_value="")) as readme:
+            result = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        readme.assert_not_called()
+        assert len(result["onboarding"]["found"]) == 4

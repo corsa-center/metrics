@@ -44,7 +44,7 @@ def _render(maintenance):
     metrics = {
         "dimensions": {"ecosystem": {"sub_results": {"maintenance": maintenance}}}
     }
-    out = orch._transform_for_dashboard("HDFGroup/hdf5", metrics)
+    out = orch._transform_for_dashboard(metrics, {})
     return out["ecosystem"]["4.2.10"]["data"]
 
 
@@ -215,8 +215,8 @@ class TestOverrides:
             html, {"Community Health Trends": "N/A"}
         )
         assert "<strong>Community Health Trends:</strong> N/A</p>" in overridden
-        # The N/A row no longer counts as a hit, and sub-details stay excluded.
-        assert "<strong>Score:</strong> 4/5" in overridden
+        # The N/A row is neither a hit nor a miss, and sub-details stay excluded.
+        assert "<strong>Score:</strong> 4/4" in overridden
 
 
 class TestProjectAgeDates:

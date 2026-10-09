@@ -21,21 +21,27 @@ reporting a meaningless 0 vs 0.
 
 import asyncio
 import logging
+import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
+)
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
 # Configuration files that mean a defect-finding tool is wired in. Style linters
 # are deliberately absent — dev_tooling.py scores those, and formatting is not
-# the same concern as defect detection.
+# the same concern as defect detection. Type checkers (mypy, Pyright) and the
+# Bandit security scanner are included: they find defects in Python code the
+# way clang-tidy and Cppcheck do in C/C++, which the list otherwise covers
+# exclusively.
 _ANALYSIS_CONFIGS = {
     "SonarQube/SonarCloud": ["sonar-project.properties", ".sonarcloud.properties"],
     "clang-tidy": [".clang-tidy"],
@@ -44,6 +50,29 @@ _ANALYSIS_CONFIGS = {
     "DeepSource": [".deepsource.toml"],
     "Codacy": [".codacy.yml", ".codacy.yaml"],
     "Coverity": [".coverity.yml", "cov-int"],
+    "mypy": ["mypy.ini", ".mypy.ini"],
+    "Pyright": ["pyrightconfig.json"],
+    "Bandit": [".bandit"],
+}
+
+# CERT has no secure-coding standard for these, and compiler hardening flags
+# don't apply to them, so a project written mainly in one is marked not
+# applicable rather than failed when no indicators are found. A list of
+# exclusions rather than of compiled languages, because GitHub's primary
+# language often misreports C/C++ repositories whose bulk is IR, docs or data
+# ("LLVM", "HTML", "Gnuplot").
+_CERT_NOT_APPLICABLE = {"python", "jupyter notebook", "r", "julia", "javascript", "typescript", "matlab"}
+
+# Hosted analysis services leave no config file in the tree; a README badge
+# for this repository is the evidence the project is registered with one.
+# {repo} is filled with owner/repo (or its underscore form) where the badge
+# URL names the repository.
+_ANALYSIS_BADGES = {
+    "CodeFactor": r"codefactor\.io/repository/github/{repo}\b",
+    "SonarQube/SonarCloud": r"sonarcloud\.io/(?:api/project_badges|summary|dashboard)\S*?{repo_}\b",
+    "Codacy": r"app\.codacy\.com/(?:gh/{repo}|project/badge/Grade/)",
+    "DeepSource": r"deepsource\.io/gh/{repo}\b",
+    "Coverity": r"scan\.coverity\.com/projects/",
 }
 
 # Tool and sanitizer names to look for inside CI workflow definitions.
@@ -56,33 +85,56 @@ _ANALYSIS_IN_CI = {
     "scan-build": re.compile(r"\bscan-build\b", re.I),
     "Flawfinder": re.compile(r"\bflawfinder\b", re.I),
     "Sanitizers": re.compile(r"-fsanitize=|\b(?:asan|ubsan|tsan|msan)\b", re.I),
+    "mypy": re.compile(r"\bmypy\b", re.I),
+    "Pyright": re.compile(r"\bpyright\b", re.I),
+    "Bandit": re.compile(r"\bbandit\b", re.I),
 }
 
-# Only workflows whose names suggest analysis are read, to bound the requests.
-# "check" is deliberately absent: it matched linkchecker, markdown-link-check
-# and review-checklist, which consumed the read budget before any workflow that
-# actually builds the code.
+# Workflows whose names suggest analysis are read first; the rest of the
+# request budget then fills with whatever workflows remain (see
+# _read_analysis_workflows). Previously this was the ONLY thing read, which
+# meant a repo naming its per-compiler CI jobs generically -- AMReX's gcc.yml,
+# clang.yml, cuda.yml, hip.yml -- had zero of its workflows read at all
+# (METRIC_BLIND_SPOTS.md class F4). "check" is deliberately absent from the
+# hint: it matched linkchecker, markdown-link-check and review-checklist,
+# which used to consume the whole (smaller) budget on its own.
 _ANALYSIS_WORKFLOW_HINT = re.compile(
     r"(analy|lint|scan|secur|sanitiz|tidy|sonar|coverity|codeql|nightly|asan|ubsan)", re.I
 )
-_MAX_ANALYSIS_WORKFLOWS = 8
+_MAX_ANALYSIS_WORKFLOWS = 25
 
 # Build-configuration files likely to carry hardening settings.
 _BUILD_FILES = ["CMakeLists.txt", "configure.ac", "Makefile.am", "meson.build"]
 
-# Larger projects keep compiler flags out of the root build file. Rather than
-# guessing filenames per project — HDF5 puts its sanitizer setup in
-# config/sanitizer/sanitizers.cmake — these conventional directories are listed
-# and any file whose name suggests flags is read.
-_FLAG_DIRECTORIES = ["cmake", "config/cmake", "config/sanitizer", "CMake"]
+# Larger projects keep compiler flags out of the root build file -- AMReX's
+# live in Tools/CMake/, HDF5's in config/flags/. Rather than guessing which
+# directories to list, any file anywhere in the tree whose name suggests
+# flags is read.
 _FLAG_FILE_HINT = re.compile(r"(sanitiz|warn|flag|harden|secur)", re.I)
-_MAX_FLAG_FILES = 4
+# Compiler-setup modules carry flags too, under names the hint above never
+# matches -- SUNDIALS sets -Werror and -fsanitize=address in
+# cmake/SundialsSetupCompilers.cmake. Read after the stronger hints, so
+# they can't crowd those out of the cap.
+_COMPILER_FILE_HINT = re.compile(
+    r"setup[-_]?compilers?|compiler[-_]?(?:flags|options|settings|warnings)", re.I
+)
+# CMake's generated build tree, sometimes committed by accident (TAU ships
+# CMakeFiles/3.22.1/CMakeCXXCompiler.cmake) -- not the project's settings.
+_GENERATED_CMAKE_DIR = re.compile(r"(?:^|/)CMakeFiles/")
+_MAX_FLAG_FILES = 6
 
 _HARDENING_MARKERS = {
-    "Warnings as errors": re.compile(r"-Werror\b"),
+    # CMAKE_COMPILE_WARNING_AS_ERROR is CMake's native switch (3.24+).
+    "Warnings as errors": re.compile(r"-Werror\b|COMPILE_WARNING_AS_ERROR\b|WARNINGS_AS_ERRORS\b"),
     "Fortify source": re.compile(r"_FORTIFY_SOURCE", re.I),
     "Stack protector": re.compile(r"-fstack-protector", re.I),
-    "Sanitizers": re.compile(r"-fsanitize=", re.I),
+    # Also the CMake options projects expose for them
+    # (SUNDIALS_ENABLE_ADDRESS_SANITIZER, ENABLE_UBSAN, ...).
+    "Sanitizers": re.compile(
+        r"-fsanitize=|\b\w*(?:ADDRESS|MEMORY|LEAK|THREAD|UNDEFINED(?:_BEHAVIOR)?)_SANITIZER\b"
+        r"|ENABLE_[AUMT]SAN\b",
+        re.I,
+    ),
     "CERT / MISRA reference": re.compile(r"\b(?:CERT[- ]?C\b|MISRA)\b", re.I),
 }
 
@@ -95,7 +147,23 @@ _DEFECT_LABELS = ["bug", "defect", "crash", "regression", "type: bug", "kind/bug
 # has 479 Bug-typed issues, so a label-only query reported it as unmeasurable.
 _DEFECT_ISSUE_TYPES = ["Bug", "Defect"]
 
+# A repository's own labels are matched by shape rather than exact spelling:
+# projects write "type-bug", "is:bug", "kind/bug", "Bug". Negations
+# ("not-a-bug", "no bug") are excluded; "bugfix" and "debugger" don't match.
+_BUG_LABEL = re.compile(
+    r"(?:^|[\s:/_.-])(?:bugs?|defects?|regressions?|crash(?:es)?)(?:[\s_-]*reports?)?$", re.I)
+_NEGATED_LABEL = re.compile(r"(?:^|[\s:/_-])(?:not|no|non)(?:[\s_-]|$)", re.I)
+_MAX_LABEL_PAGES = 3
+
 _TREND_WINDOW_DAYS = 365
+
+
+def _binomial_tail(recent: int, total: int, direction: str) -> float:
+    """One-sided p-value for `recent` of `total` defect reports falling in the
+    recent window, if the defect rate were unchanged (each report equally
+    likely to land in either window)."""
+    ks = range(recent, total + 1) if direction == "increasing" else range(0, recent + 1)
+    return sum(math.comb(total, k) for k in ks) / 2 ** total
 
 
 class ReliabilityCollector:
@@ -114,11 +182,13 @@ class ReliabilityCollector:
         logger.info(f"Collecting reliability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            workflows, workflows_gap = await self._read_analysis_workflows(client, ref)
+            tree = await RepoTree.fetch(client, self.forge, ref)
+            workflows, workflows_gap = await self._read_analysis_workflows(client, ref, tree)
             results = await asyncio.gather(
-                self._find_analysis_tools(client, ref, workflows),
-                self._find_hardening(client, ref, workflows),
+                self._find_analysis_tools(tree, workflows),
+                self._find_hardening(client, ref, tree, workflows),
                 self._defect_trend(client, ref),
+                self._analysis_badges(client, ref),
                 return_exceptions=True,
             )
 
@@ -127,6 +197,8 @@ class ReliabilityCollector:
             tools, tools_gap = [], True
         else:
             tools, tools_gap = results[0]
+        if isinstance(results[3], list):
+            tools = sorted(set(tools) | set(results[3]))
 
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=hardening reason=exception:{results[1]!r}")
@@ -151,41 +223,40 @@ class ReliabilityCollector:
             "analysis_tools": tools,
             "hardening": hardening,
             "defect_trend": trend,
-            "overall_score": self._calculate_score(tools, hardening, trend, tools_gap, hardening_gap),
+            "overall_score": self._calculate_score(
+                tools, hardening, trend, tools_gap, hardening_gap,
+                language=package.get("primary_language")),
         }
 
     # ------------------------------------------------------------------ fetch
 
-    async def _find_analysis_tools(
-        self, client: httpx.AsyncClient, ref: str,
-        workflows: List[str],
-    ) -> tuple:
+    async def _analysis_badges(self, client: httpx.AsyncClient, ref: str) -> List[str]:
+        """Hosted analysis services with a README badge for this repository."""
+        text = await self.forge.readme(client, ref)
+        if not text:
+            return []
+        slug = re.escape(ref)
+        slug_ = re.escape(ref.replace("/", "_"))
+        return [tool for tool, pattern in _ANALYSIS_BADGES.items()
+                if re.search(pattern.format(repo=slug, repo_=slug_), text, re.I)]
+
+    async def _find_analysis_tools(self, tree, workflows: List[str]) -> tuple:
         """Defect-finding tools, from config files and analysis-shaped workflows.
 
         Returns (sorted tool names, saw_gap). A tool found via a config file
         or in the CI text is real regardless of gaps elsewhere; saw_gap only
-        matters to the caller when the result is otherwise empty.
+        matters to the caller when the result is otherwise empty. Config
+        files are matched against a RepoTree (case-insensitive, one fetch)
+        rather than probed one literal path at a time -- see
+        METRIC_BLIND_SPOTS.md class F1.
         """
         found = set()
-        saw_gap = False
+        saw_gap = tree is COLLECTION_GAP
 
-        async def check(tool: str, paths: List[str]) -> tuple:
-            gap = False
-            for path in paths:
-                result = await self.forge.file_exists(client, ref, path)
-                if result is COLLECTION_GAP:
-                    gap = True
-                    continue
-                if result:
-                    return tool, gap
-            return None, gap
-
-        results = await asyncio.gather(*[check(t, p) for t, p in _ANALYSIS_CONFIGS.items()])
-        for tool, gap in results:
-            if tool:
-                found.add(tool)
-            elif gap:
-                saw_gap = True
+        if not saw_gap:
+            for tool, paths in _ANALYSIS_CONFIGS.items():
+                if tree.match(paths):
+                    found.add(tool)
 
         for text in workflows:
             for tool, pattern in _ANALYSIS_IN_CI.items():
@@ -194,41 +265,56 @@ class ReliabilityCollector:
         return sorted(found), saw_gap
 
     async def _read_analysis_workflows(
-        self, client: httpx.AsyncClient, ref: str
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> tuple:
-        """Text of the workflows whose names suggest they run analysis, and
-        whether the directory listing (or any candidate read) gapped.
+        """Text of up to _MAX_ANALYSIS_WORKFLOWS workflow files, and whether
+        any candidate read gapped.
+
+        Workflows whose name suggests analysis are read first; the rest of
+        the budget is then filled with whatever workflows remain, rather
+        than reading only keyword-matched names. A repo whose per-compiler
+        jobs are named generically (AMReX's gcc.yml, cuda.yml, hip.yml) used
+        to have zero of its workflows read at all -- this still prioritizes
+        the likely-relevant ones, but no longer reads nothing when the
+        naming convention doesn't cooperate (METRIC_BLIND_SPOTS.md class F4).
         """
-        entries = await self.forge.ci_config_files(client, ref)
-        if entries is COLLECTION_GAP:
+        if tree is COLLECTION_GAP:
             return [], True
-        # A platform's root CI file (.gitlab-ci.yml) holds most of the jobs
-        # whatever its name, so it is always read.
-        candidates = [
-            e for e in entries
-            if e.get("primary") or _ANALYSIS_WORKFLOW_HINT.search(e["name"])
-        ][:_MAX_ANALYSIS_WORKFLOWS]
+        # GitHub Actions workflows and GitLab CI files (the root file and the
+        # .gitlab/ files it typically includes).
+        all_workflows = tree.find(r"^(?:\.github/workflows/.*|\.gitlab-ci|\.gitlab/.*)\.ya?ml$")
+        hinted = [w for w in all_workflows if _ANALYSIS_WORKFLOW_HINT.search(w.rsplit("/", 1)[-1])]
+        rest = [w for w in all_workflows if w not in hinted]
+        candidates = (hinted + rest)[:_MAX_ANALYSIS_WORKFLOWS]
+        # More workflows exist than the cap allows reading: an empty result
+        # from what follows isn't a confirmed absence, since the unread
+        # remainder could hold the marker being searched for (HDF5 has 76
+        # workflows; this repo's cap only reaches 25 of them).
+        truncated = len(all_workflows) > len(candidates)
 
         async def read(path: str) -> Optional[str]:
             text = await self.forge.file_content(client, ref, path)
-            return text if text and text is not COLLECTION_GAP else None
+            if text is COLLECTION_GAP:
+                return None
+            return text or ""
 
-        texts = await asyncio.gather(*[read(e["path"]) for e in candidates])
-        saw_gap = any(t is None for t in texts)
+        texts = await asyncio.gather(*[read(p) for p in candidates])
+        saw_gap = truncated or any(t is None for t in texts)
         return [t for t in texts if t], saw_gap
 
     async def _find_hardening(
         self, client: httpx.AsyncClient, ref: str,
-        workflows: List[str],
+        tree, workflows: List[str],
     ) -> tuple:
         """Secure-coding practice indicators in the build files and in CI.
 
-        Large projects keep compiler flags out of the root build file — HDF5's
-        live under config/cmake/ — and sanitizer runs are usually CI jobs rather
-        than build settings, so both corpora are searched. Returns (markers
-        found, saw_gap): a marker actually found is real regardless of gaps
-        elsewhere, but an empty result needs saw_gap to tell "no hardening
-        configured" from "couldn't read enough of the repo to tell".
+        Large projects keep compiler flags out of the root build file — AMReX's
+        live under Tools/CMake/, HDF5's under config/flags/ — and sanitizer runs
+        are usually CI jobs rather than build settings, so both corpora are
+        searched. Returns (markers found, saw_gap): a marker actually found is
+        real regardless of gaps elsewhere, but an empty result needs saw_gap
+        to tell "no hardening configured" from "couldn't read enough of the
+        repo to tell".
         """
 
         async def read(path: str):
@@ -237,7 +323,7 @@ class ReliabilityCollector:
                 return COLLECTION_GAP
             return text or ""
 
-        flag_paths, flag_gap = await self._find_flag_files(client, ref)
+        flag_paths, flag_gap = self._find_flag_files(tree)
         texts = await asyncio.gather(
             *[read(p) for p in _BUILD_FILES + flag_paths]
         )
@@ -251,29 +337,48 @@ class ReliabilityCollector:
             if pattern.search(corpus)
         ], saw_gap
 
-    async def _find_flag_files(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> tuple:
-        """Paths of build-configuration files whose names suggest compiler
-        flags, and whether any directory listing gapped.
+    def _find_flag_files(self, tree) -> tuple:
+        """Paths of .cmake files whose names suggest compiler flags, searched
+        across the whole tree rather than four fixed directories -- AMReX
+        keeps its flags in Tools/CMake/, which a directory allowlist never
+        reached even though a real hardening setting (-Werror in
+        AMReXFlagsTargets.cmake) was sitting right there
+        (corsa-center/metrics#51, METRIC_BLIND_SPOTS.md class F3).
+
+        Restricted to .cmake specifically (not any file with a flag-shaped
+        name) so the small result cap isn't spent on false positives a
+        whole-tree search otherwise turns up -- SECURITY.md ("secur") and a
+        CI workflow named flag_prs_to_master.yml ("flag") both matched
+        _FLAG_FILE_HINT on Trilinos and would have crowded out its real
+        TriBITS compiler-flag .cmake files.
         """
+        if tree is COLLECTION_GAP:
+            return [], True
+        cmake = [p for p in tree.paths if p.endswith(".cmake")
+                 and not _VENDORED_DIR.search(p) and not _GENERATED_CMAKE_DIR.search(p)]
+        strong = [p for p in cmake if _FLAG_FILE_HINT.search(p.rsplit("/", 1)[-1])]
+        compiler = [p for p in cmake if p not in strong
+                    and _COMPILER_FILE_HINT.search(p.rsplit("/", 1)[-1])]
+        compiler.sort(key=lambda p: (p.count("/"), p))
+        return (strong + compiler)[:_MAX_FLAG_FILES], False
 
-        async def listing(directory: str) -> tuple:
-            data = await self.forge.dir_listing(client, ref, directory)
-            if data is COLLECTION_GAP:
-                return [], True
-            return [
-                e["path"] for e in data
-                if e.get("type") == "file" and _FLAG_FILE_HINT.search(e.get("name", ""))
-            ], False
-
-        results = await asyncio.gather(*[listing(d) for d in _FLAG_DIRECTORIES])
-        paths: List[str] = []
-        saw_gap = False
-        for group_paths, gap in results:
-            paths.extend(group_paths)
-            saw_gap = saw_gap or gap
-        return paths[:_MAX_FLAG_FILES], saw_gap
+    async def _repo_defect_labels(
+        self, client: httpx.AsyncClient, ref: str
+    ) -> List[str]:
+        """The repository's own labels that mark a defect, or [] if none (or
+        the listing failed), in which case the conventional list is used."""
+        found: List[str] = []
+        for page in range(1, _MAX_LABEL_PAGES + 1):
+            data = await self.forge.labels(client, ref, page=page, per_page=100)
+            if not isinstance(data, list):
+                break
+            found += [l["name"] for l in data if isinstance(l, dict)
+                      and _BUG_LABEL.search(l.get("name", ""))
+                      and not _NEGATED_LABEL.search(l.get("name", ""))]
+            if len(data) < 100:
+                break
+        # Search queries are limited to 256 characters.
+        return found[:8]
 
     async def _defect_trend(
         self, client: httpx.AsyncClient, ref: str
@@ -292,7 +397,8 @@ class ReliabilityCollector:
         # parser splits it and silently drops the rest of the label list —
         # which returned 0 for every project until it was caught.
         labels = ",".join(
-            f'"{l}"' if (" " in l or ":" in l) else l for l in _DEFECT_LABELS
+            f'"{l}"' if (" " in l or ":" in l) else l
+            for l in (await self._repo_defect_labels(client, ref) or _DEFECT_LABELS)
         )
 
         async def count(qualifier: str, date_range: str) -> tuple:
@@ -308,7 +414,7 @@ class ReliabilityCollector:
         prev_range = f"{prev_start}..{recent_start}"
 
         # Issue types first, since a project using them generally does not also
-        # label defects; fall back to labels only when types yield nothing.
+        # label defects.
         type_expr = ",".join(_DEFECT_ISSUE_TYPES)
         (recent, recent_gap), (previous, previous_gap) = await asyncio.gather(
             count(f"type:{type_expr}", recent_range),
@@ -317,17 +423,28 @@ class ReliabilityCollector:
         saw_gap = recent_gap or previous_gap
         source = "issue type"
 
-        if recent + previous == 0:
+        # Fall back to labels whenever types alone can't carry the comparison,
+        # not only when they return exactly zero. A single natively-typed
+        # issue used to suppress the fallback entirely: AMReX has one typed
+        # issue and 35 bug-labelled ones, and reported "does not record defect
+        # reports by type or label" on the strength of that one. Projects
+        # migrating to issue types have both conventions in play at once.
+        min_volume = get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume")
+        if recent + previous < min_volume:
             # Comma-separated values in a label: qualifier are ORed, so one
             # query covers every convention in _DEFECT_LABELS. Attempted even
             # if the type search gapped, since it's an independent query --
             # any gap it hits is merged into saw_gap below either way.
-            (recent, recent_gap), (previous, previous_gap) = await asyncio.gather(
+            (label_recent, recent_gap), (label_previous, previous_gap) = await asyncio.gather(
                 count(f"label:{labels}", recent_range),
                 count(f"label:{labels}", prev_range),
             )
             saw_gap = saw_gap or recent_gap or previous_gap
-            source = "label"
+            # Keep whichever convention actually carries the project's
+            # defects, rather than assuming the second query supersedes.
+            if label_recent + label_previous > recent + previous:
+                recent, previous = label_recent, label_previous
+                source = "label"
 
         if saw_gap:
             return {"measurable": False, "recent": recent, "previous": previous,
@@ -345,14 +462,23 @@ class ReliabilityCollector:
                          else "increasing")
             if ratio < 0.75:
                 direction = "improving"
+        # At these volumes a large ratio is often chance: 18 vs 11 is within
+        # normal year-to-year variation. Only call a trend when the split
+        # between the two windows is unlikely under an unchanged rate.
+        within_variation = (direction != "stable" and _binomial_tail(recent, recent + previous, direction)
+                            >= get_threshold("4.3.1", "Reliability Trend Analysis", "significance"))
+        if within_variation:
+            direction = "stable"
         return {"measurable": True, "recent": recent, "previous": previous,
-                "direction": direction, "source": source}
+                "direction": direction, "source": source,
+                "within_normal_variation": within_variation}
 
     # ---------------------------------------------------------------- scoring
 
     def _calculate_score(
         self, tools: List[str], hardening: List[str], trend: Dict,
         tools_gap: bool = False, hardening_gap: bool = False,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
 
@@ -379,17 +505,29 @@ class ReliabilityCollector:
         }
         if not hardening and hardening_gap:
             cert_entry["not_collected"] = True
+        elif not hardening and language and language.lower() in _CERT_NOT_APPLICABLE:
+            cert_entry.update({
+                "value": f"Not applicable to a {language} project",
+                "detail": None, "not_collected": True, "not_applicable": True,
+            })
         sub["cert_compliance"] = cert_entry
 
         if trend.get("not_collected"):
             value = "Defect trend could not be measured (search rate limited)"
             passing = False
         elif not trend.get("measurable"):
-            value = "Project does not record defect reports by type or label"
+            # Too few typed or labelled defect reports to compare two years.
+            # Unmeasurable, not a failure: excluded from the score below.
+            n = trend.get("recent", 0) + trend.get("previous", 0)
+            value = (f"{n} defect report(s) found by issue type or label over two years, "
+                     f"too few to judge a trend")
             passing = False
         else:
+            direction = trend["direction"]
+            if trend.get("within_normal_variation"):
+                direction += " -- change within normal variation"
             value = (f"{trend['recent']} defect reports in the last year vs "
-                     f"{trend['previous']} the year before ({trend['direction']}, "
+                     f"{trend['previous']} the year before ({direction}, "
                      f"by {trend.get('source', 'label')})")
             passing = trend["direction"] in get_threshold("4.3.1", "Reliability Trend Analysis", "passing_directions")
         trend_entry: Dict[str, Any] = {
@@ -399,6 +537,8 @@ class ReliabilityCollector:
         }
         if trend.get("not_collected"):
             trend_entry["not_collected"] = True
+        elif not trend.get("measurable"):
+            trend_entry.update({"not_collected": True, "insufficient_sample": True})
         sub["reliability_trend"] = trend_entry
 
         scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}

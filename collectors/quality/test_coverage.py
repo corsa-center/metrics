@@ -9,17 +9,38 @@ API returns coverage totals for public repositories without authentication:
 Coveralls was evaluated as a second source but its public JSON endpoint
 (coveralls.io/github/{owner}/{repo}.json) returns HTTP 403 for
 unauthenticated, non-browser requests — it isn't usable here.
+
+When there's no Codecov project, the CI configuration is checked for coverage
+instrumentation: a project measuring coverage somewhere this can't read (a
+CDash coverage build, for instance) is "not collected", not a confirmed
+failure.
 """
 
+import asyncio
 import httpx
 import logging
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Optional
 
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
 _CODECOV_API = "https://api.codecov.io/api/v2/{provider}/{owner}/repos/{repo}/"
+
+_CI_CONFIG = re.compile(r"^(?:\.github/workflows/[^/]+|\.gitlab-ci|\.gitlab/.+)\.ya?ml$", re.I)
+_MAX_CI_FILES = 25
+# Build options and tools that only appear when coverage is being measured.
+_COVERAGE_IN_CI = re.compile(
+    r"--coverage\b|-fprofile-arcs|\bgcovr\b|\blcov\b|\bllvm-cov\b|\bpytest-cov\b"
+    r"|--cov(?:=|\s)|\bcoverage run\b|\bcodecov\b|\bcoveralls"
+    # A coverage build type or build/job name: CMAKE_BUILD_TYPE=Coverage,
+    # "debug-coverage", "coverage_test_linux".
+    r"|CMAKE_BUILD_TYPE\W{0,3}Coverage\b|[-_]coverage(?=[-_\s\"':]|$)|\bcoverage[-_]"
+    r"|\w*_COVERAGE=ON\b|\bENABLE_COVERAGE\b|\bCODE_COVERAGE\b",
+    re.I,
+)
 
 
 class TestCoverageCollector:
@@ -40,7 +61,20 @@ class TestCoverageCollector:
         logger.info(f"Fetching test coverage for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            return await self._fetch_coverage(client, repo_name, ref)
+            result = await self._fetch_coverage(client, repo_name, ref)
+        if not result["coverage_exists"] and result["repository"] != "unknown":
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                result["coverage_in_ci"] = await self._coverage_in_ci(client, ref)
+        return result
+
+    async def _coverage_in_ci(self, client: httpx.AsyncClient, ref: str) -> Optional[str]:
+        """The first CI config file that measures coverage, or None."""
+        tree = await RepoTree.fetch(client, self.forge, ref)
+        if tree is COLLECTION_GAP:
+            return None
+        paths = tree.find(_CI_CONFIG.pattern)[:_MAX_CI_FILES]
+        texts = await asyncio.gather(*[self.forge.raw_text(client, ref, p) for p in paths])
+        return next((p for p, t in zip(paths, texts) if t and _COVERAGE_IN_CI.search(t)), None)
 
     async def _fetch_coverage(
         self,

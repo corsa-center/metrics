@@ -154,3 +154,33 @@ class TestScoring:
 
     def test_max_score_is_four(self, collector):
         assert collector._calculate_score(self._comp(), self._ref())["max_score"] == 4
+
+
+class TestTestNamingConventions:
+    @pytest.mark.parametrize("path", [
+        "core/unit_test/TestViewAPI.hpp",
+        "algorithms/unit_tests/TestSort.cpp",
+        "packages/tpetra/core/src/Tpetra_Map_UnitTests.cpp",
+        "hello_world/hello_world_unit_tests.cpp",
+        "src/thing_tests.py",
+    ])
+    def test_counted_as_test(self, collector, path):
+        c = collector._analyze_tree([_f(path), _f("src/a.c")])
+        assert c["test_files"] == 1
+
+    @pytest.mark.parametrize("path", ["src/latest.py", "src/contest.c", "src/testament.c"])
+    def test_not_counted_as_test(self, collector, path):
+        assert collector._analyze_tree([_f(path)])["test_files"] == 0
+
+
+class TestDepthIgnoresTestData:
+    def test_deep_fixture_does_not_set_depth(self, collector):
+        c = collector._analyze_tree([
+            _f("lib/spack/spack/test/data/mirrors/v2/build_cache/a/b/c/d/e.py"),
+            _f("lib/spack/spack/cmd/install.py"),
+        ])
+        assert c["max_depth"] == 5
+
+    def test_deep_code_still_counts(self, collector):
+        c = collector._analyze_tree([_f("a/b/c/d/e/f/g/h/i/j/k/deep.cpp")])
+        assert c["max_depth"] == 12

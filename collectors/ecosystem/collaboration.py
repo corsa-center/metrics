@@ -18,6 +18,12 @@ record the project's own homepage as their repository URL rather than the GitHub
 repo — HDF5's Spack entry points at support.hdfgroup.org, so the repository-URL
 lookup alone misses the single most relevant package manager for this portfolio.
 
+conda-forge is looked up by name on anaconda.org too, because ecosyste.ms does
+not index every feedstock: AMReX ships `amrex` on conda-forge but ecosyste.ms
+has no record of it. A name match is only accepted when the package's own
+metadata (dev_url / home / source_git_url) points back at this repository, so
+an unrelated package that happens to share the name is not credited.
+
 The collector also produces the Installation Success Tracking figure that CASS
 section 4.3.4 needs, since it rests on the same registry data.
 
@@ -28,6 +34,7 @@ Compliance Tracking (both need domain-specific standards knowledge).
 
 import asyncio
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -39,6 +46,23 @@ from collectors.ecosystem.base import get_threshold
 logger = logging.getLogger(__name__)
 
 _PACKAGES_API = "https://packages.ecosyste.ms/api/v1"
+_ANACONDA_API = "https://api.anaconda.org/package/conda-forge"
+_SPACK_PACKAGES = "https://packages.spack.io/data/packages"
+# Every Spack recipe with its homepages and download URLs, for finding the
+# recipe that builds a repository when it goes by another name than the
+# repository. Fetched once per run.
+_SPACK_INDEX = "https://packages.spack.io/data/repology.json"
+_GITHUB_REPO_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?=[/#?]|$)", re.I)
+_spack_by_repo: Optional[Dict[str, List[str]]] = None
+_spack_index_lock = asyncio.Lock()
+
+# Source-level dependents found by the dependency-audit tool
+# (corsa-center/dependent-audit), published per project. Registries miss
+# code consumed from source -- a git submodule, a CMake FetchContent, a
+# header include -- which is how most HPC libraries are used.
+_DEPENDENCY_AUDIT = ("https://raw.githubusercontent.com/corsa-center/project-dependent-tracking"
+                     "/main/{name}-dependency-context/dependency_graph.json")
+_AUDIT_CONFIDENCE = {"high", "medium"}
 
 # ecosyste.ms publishes a low per-second rate limit; one retry with a pause
 # covers the throttling seen when several lookups run back to back.
@@ -60,13 +84,21 @@ class CollaborationCollector:
             return self._empty_result(repo_name)
 
         logger.info(f"Collecting collaboration metrics for {repo_name}")
+        # Package registries key projects by "owner/name"; on GitLab the
+        # owner may be a nested group path, so split at the last slash.
+        owner, _, repo = ref.rpartition("/")
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            by_repo, spack = await asyncio.gather(
+            by_repo, spack, conda, source = await asyncio.gather(
                 self._lookup_by_repository(client, ref),
-                self._lookup_spack(client, ref.rsplit("/", 1)[-1]),
+                self._lookup_spack(client, repo, owner),
+                self._lookup_conda_forge(client, owner, repo),
+                self._source_dependents(client, owner, repo),
                 return_exceptions=True,
             )
+        if isinstance(source, Exception):
+            logger.warning(f"Dependency-audit lookup failed: {source}")
+            source = None
 
         if isinstance(by_repo, Exception):
             logger.warning(f"ecosyste.ms repository lookup failed: {by_repo}")
@@ -74,15 +106,20 @@ class CollaborationCollector:
         if isinstance(spack, Exception):
             logger.warning(f"Spack lookup failed: {spack}")
             spack = None
+        if isinstance(conda, Exception):
+            logger.warning(f"conda-forge lookup failed: {conda}")
+            conda = None
 
-        registries = self._merge(by_repo + ([spack] if spack else []))
+        registries = self._merge(by_repo + [r for r in (spack, conda) if r])
+        registries = self._drop_spurious_go_entries(registries, package.get("primary_language"))
         return {
             "package_name": repo_name,
             "repository": ref,
             "timestamp": self.forge.get_timestamp(),
             "registries": registries,
             "ecosystems": sorted({r["ecosystem"] for r in registries}),
-            "overall_score": self._calculate_score(registries),
+            "source_dependents": source,
+            "overall_score": self._calculate_score(registries, source),
             # Distribution evidence, not part of the weighted score above —
             # see CASS §4.1.1 Considerations: download counts measure
             # distribution rather than use and are most informative as
@@ -129,20 +166,117 @@ class CollaborationCollector:
         return [self._normalize(p) for p in data if p.get("ecosystem") and p.get("name")]
 
     async def _lookup_spack(
-        self, client: httpx.AsyncClient, repo: str
+        self, client: httpx.AsyncClient, repo: str, owner: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Spack recipe for this project, looked up by name.
 
         Tried lower-cased as well, since Spack package names are lower-case by
-        convention while repository names often are not (ADIOS2 -> adios2).
+        convention while repository names often are not (ADIOS2 -> adios2),
+        then under any name whose recipe downloads from this repository.
         """
-        for name in dict.fromkeys([repo, repo.lower()]):
+        names = [repo, repo.lower()]
+        if owner:
+            names += await self._main_spack_recipe(client, owner, repo)
+        for name in dict.fromkeys(names):
             data = await self._get_json(
                 client, f"{_PACKAGES_API}/registries/spack.io/packages/{quote(name)}"
             )
             if isinstance(data, dict) and data.get("name"):
-                return self._normalize(data)
+                record = self._normalize(data)
+                # ecosyste.ms's Spack dependents lag Spack's own index
+                # (AMReX 2 vs 6, HDF5 161 vs 222); take the larger.
+                own = await self._get_json(client, f"{_SPACK_PACKAGES}/{quote(record['name'])}.json")
+                if isinstance(own, dict) and isinstance(own.get("dependent_to"), list):
+                    record["dependent_packages"] = max(
+                        record["dependent_packages"], len(own["dependent_to"])
+                    )
+                return record
         return None
+
+    async def _spack_names_for(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+        """Spack packages whose homepage or download URLs are this
+        repository. The index only recognizes GitHub URLs, so a GitLab
+        project falls back to the name-based lookup."""
+        global _spack_by_repo
+        async with _spack_index_lock:
+            if _spack_by_repo is None:
+                data = await self._get_json(client, _SPACK_INDEX)
+                if not isinstance(data, dict):
+                    return []  # retried by the next package
+                _spack_by_repo = self._index_spack_by_repository(data.get("packages", {}))
+        return sorted(_spack_by_repo.get(f"{owner}/{repo}".lower(), []))
+
+    async def _main_spack_recipe(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+        """Of the recipes built from this repository (a monorepo can feed
+        several), the one most packages depend on."""
+        names = (await self._spack_names_for(client, owner, repo))[:5]
+        if len(names) < 2:
+            return names
+        counts = []
+        for name in names:
+            own = await self._get_json(client, f"{_SPACK_PACKAGES}/{quote(name)}.json")
+            deps = own.get("dependent_to") if isinstance(own, dict) else None
+            counts.append(len(deps) if isinstance(deps, list) else 0)
+        return [max(zip(counts, names), key=lambda cn: (cn[0], -names.index(cn[1])))[1]]
+
+    @staticmethod
+    def _index_spack_by_repository(packages: Dict[str, Any]) -> Dict[str, List[str]]:
+        def strings(x):
+            if isinstance(x, str):
+                yield x
+            elif isinstance(x, list):
+                for y in x:
+                    yield from strings(y)
+            elif isinstance(x, dict):
+                for y in x.values():
+                    yield from strings(y)
+
+        index: Dict[str, List[str]] = {}
+        for name, pkg in packages.items():
+            if not isinstance(pkg, dict):
+                continue
+            for text in strings([pkg.get("homepages"), pkg.get("downloads"), pkg.get("version")]):
+                for m in _GITHUB_REPO_URL.finditer(text):
+                    key = f"{m.group(1)}/{m.group(2)}".lower()
+                    if name not in index.setdefault(key, []):
+                        index[key].append(name)
+        return index
+
+    async def _lookup_conda_forge(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Optional[Dict[str, Any]]:
+        """conda-forge package for this repository, looked up by name and
+        accepted only if its metadata links back to the repository."""
+        target = f"{self.forge.host}/{owner}/{repo}".lower()
+        for name in dict.fromkeys([repo.lower(), repo]):
+            data = await self._get_json(client, f"{_ANACONDA_API}/{quote(name)}")
+            if not isinstance(data, dict) or not data.get("name"):
+                continue
+            links = [data.get(k) or "" for k in ("dev_url", "home", "source_git_url")]
+            if not any(self._points_at(link, target) for link in links):
+                logger.debug(f"conda-forge '{name}' does not link to {target}; not credited")
+                continue
+            return {
+                "ecosystem": "conda",
+                "name": data["name"],
+                # anaconda.org has no reverse-dependency count; _merge keeps
+                # any higher figure ecosyste.ms has for the same package.
+                "dependent_packages": 0,
+                "dependent_repos": 0,
+                "install_command": f"conda install -c conda-forge {data['name']}",
+                "registry_url": data.get("html_url"),
+                "downloads": data.get("ndownloads") or 0,
+                "downloads_period": "total",
+            }
+        return None
+
+    @staticmethod
+    def _points_at(link: str, target: str) -> bool:
+        """Whether a URL is this GitHub repository (scheme, www, .git and a
+        trailing slash or subpath ignored)."""
+        link = link.lower().split("://", 1)[-1].removeprefix("www.")
+        link = link.removesuffix("/").removesuffix(".git")
+        return link == target or link.startswith(target + "/")
 
     @staticmethod
     def _normalize(p: Dict[str, Any]) -> Dict[str, Any]:
@@ -156,6 +290,29 @@ class CollaborationCollector:
             "downloads": p.get("downloads") or 0,
             "downloads_period": p.get("downloads_period"),
         }
+
+    @staticmethod
+    def _drop_spurious_go_entries(
+        registries: List[Dict[str, Any]], primary_language: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """Drop a "go" registry entry that carries zero dependents for a
+        repo whose own primary language isn't Go.
+
+        Go's decentralized module system lets any public repository path be
+        `go get`-ed without the project ever intending to publish a Go
+        module, so ecosyste.ms can index a non-Go repo under "go" with no
+        real dependents. Left alone for a repo whose primary language
+        actually is Go (a real, young package can legitimately have zero
+        dependents yet), and left alone whenever the primary language isn't
+        known at all -- absence of information isn't license to discard
+        real data.
+        """
+        if not primary_language or primary_language.lower() == "go":
+            return registries
+        return [
+            r for r in registries
+            if not (r["ecosystem"] == "go" and r["dependent_packages"] == 0 and r["dependent_repos"] == 0)
+        ]
 
     @staticmethod
     def _merge(packages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -188,10 +345,15 @@ class CollaborationCollector:
 
     # ---------------------------------------------------------------- scoring
 
-    def _calculate_score(self, registries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _calculate_score(
+        self, registries: List[Dict[str, Any]], source: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         ecosystems = sorted({r["ecosystem"] for r in registries})
         max_packages = max((r["dependent_packages"] for r in registries), default=0)
-        max_repos = max((r["dependent_repos"] for r in registries), default=0)
+        # Registry and source-level dependents are found different ways and
+        # can overlap, so the larger count stands rather than their sum.
+        source_repos = (source or {}).get("count", 0)
+        max_repos = max(max((r["dependent_repos"] for r in registries), default=0), source_repos)
 
         sub: Dict[str, Dict[str, Any]] = {}
 
@@ -210,9 +372,21 @@ class CollaborationCollector:
         sub["collaboration_network"] = {
             "label": "Collaboration Network Analysis",
             "value": f"{max_packages:,} dependent packages, {max_repos:,} dependent repositories"
-                     if registries else "No downstream dependents found",
+                     if registries or source_repos else "No downstream dependents found",
+            "detail": (f"{source_repos:,} source-level dependents found by dependency audit"
+                       + ("" if source.get("complete") else " (partial search)"))
+                      if source_repos else None,
             "passing": reach,
         }
+        # Registries can't see source-level use, so without a dependency-audit
+        # graph a registry-only shortfall isn't a confirmed lack of dependents.
+        # A registry count that already clears the bar still stands.
+        if source is None and not reach:
+            sub["collaboration_network"].update({
+                "value": (sub["collaboration_network"]["value"]
+                          + " in registries; source-level dependents not audited"),
+                "not_collected": True, "unmeasured": True,
+            })
 
         for key, label in [
             ("cross_project_reference", "Cross-project Reference Detection"),
@@ -241,13 +415,47 @@ class CollaborationCollector:
             "advanced_dependency_analysis", "cross_project_reference",
             "interoperability", "collaboration_network", "standards_compliance",
         ]
-        score = sum(1 for k in collaboration_keys if sub[k].get("passing"))
+        # Only measured rows count: the three uncollected stubs (and an
+        # unmeasured network row) used to be scored as failures, pulling
+        # every package's Ecosystem score down.
+        scorable = [k for k in collaboration_keys if not sub[k].get("not_collected")]
+        score = sum(1 for k in scorable if sub[k].get("passing"))
         return {
             "score": score,
-            "max_score": len(collaboration_keys),
-            "percentage": round(score / len(collaboration_keys) * 100, 2),
+            "max_score": len(scorable),
+            "percentage": round(score / len(scorable) * 100, 2) if scorable else None,
             "sub_scores": sub,
         }
+
+    async def _source_dependents(
+        self, client: httpx.AsyncClient, owner: str, repo: str
+    ) -> Optional[Dict[str, Any]]:
+        """Direct source-level dependents from the project's dependency-audit
+        graph, or None when there's no graph, it's for a different repository,
+        or it predates confidence scoring (unscored matches include obvious
+        false positives for generic names, so they aren't used).
+
+        Counts DEPENDS_ON edges into the project rated high or medium
+        confidence, from repositories outside its own organization; vendored
+        copies and mirrors are excluded.
+        """
+        graph = await self._get_json(client, _DEPENDENCY_AUDIT.format(name=repo.lower()))
+        if not isinstance(graph, dict):
+            return None
+        root = f"{owner}/{repo}".lower()
+        if str((graph.get("meta") or {}).get("root", "")).lower() != root:
+            return None
+        edges = [e for e in graph.get("edges", []) if str(e.get("target", "")).lower() == root]
+        if not edges or not any("confidence" in e and "relationship" in e for e in edges):
+            return None
+        dependents = {
+            e["source"].lower() for e in edges
+            if e.get("relationship") == "DEPENDS_ON" and e.get("confidence") in _AUDIT_CONFIDENCE
+            and not e["source"].lower().startswith(f"{owner.lower()}/")
+        }
+        complete = bool(((graph.get("meta") or {}).get("completeness") or {}).get("complete"))
+        return {"count": len(dependents), "complete": complete,
+                "url": _DEPENDENCY_AUDIT.format(name=repo.lower())}
 
     @staticmethod
     def _downloads_summary(registries: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -21,26 +21,51 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
 # README headings that answer a new user's first questions. Matched against
 # heading text only, so a passing mention in a paragraph doesn't count.
 _README_SECTIONS = {
-    "Installation": r"(?:install|building|build from source|getting started|setup)",
+    "Installation": r"(?:install|build(?:ing)?\b|getting started|set ?up\b)",
     "Usage": r"(?:usage|using|quick ?start|how to use|basic use|tutorial)",
     "Examples": r"(?:examples?|demos?|sample)",
-    "Support": r"(?:support|help|contact|community|questions|mailing list)",
+    "Support": r"(?:support|help|contact|community|questions|mailing list|who (?:do|to) (?:i )?talk to)",
 }
 
-_DOC_DIRECTORIES = ["docs", "doc", "documentation", "Documentation"]
+_DOC_DIRECTORIES = ["docs", "doc", "documentation"]
 
 # Markdown ATX headings and Setext underlines both appear in real READMEs.
 _ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
-_SETEXT_HEADING = re.compile(r"^\s{0,3}(\S.*)\n\s{0,3}[=-]{3,}\s*$", re.MULTILINE)
+# Underlines also in reStructuredText's other adornment characters.
+_SETEXT_HEADING = re.compile(
+    r"^\s{0,3}(\S.*)\n\s{0,3}(?:={3,}|-{3,}|~{3,}|\^{3,}|\*{3,}|#{3,}|\+{3,})\s*$", re.MULTILINE)
+# Plain-text READMEs with no markup often mark sections "* Quick start".
+_PLAIN_HEADING = re.compile(r"^\* ([A-Z][^\n*]{2,60})\n\s*\n", re.MULTILINE)
+# Link text counts too: a README can cover a topic with a link instead of a
+# section ("[Getting Started](...)", "[Contact Us](...)"). Image and badge
+# links (![...]) are excluded.
+_LINK_TEXT = re.compile(r"(?<!!)\[(?!!)([^\]\n]{3,80})\]\(")
+
+
+def readme_covers(text: str, label: str) -> bool:
+    """Whether README markdown covers one of _README_SECTIONS, by a heading or
+    by link text starting with the topic. Anchored at the start for links: a
+    link reading "Building X using Spack" is an install guide, not usage."""
+    return readme_mentions(text, _README_SECTIONS[label])
+
+
+def readme_mentions(text: str, pattern: str) -> bool:
+    """Whether a README heading, or link text starting with the topic,
+    matches pattern."""
+    atx = _ATX_HEADING.findall(text)
+    headings = atx + _SETEXT_HEADING.findall(text)
+    if not atx:
+        headings += _PLAIN_HEADING.findall(text)
+    return (any(re.search(pattern, h, re.IGNORECASE) for h in headings)
+            or any(re.match(rf"\W*{pattern}", t, re.IGNORECASE) for t in _LINK_TEXT.findall(text)))
 
 
 class UsabilityCollector:
@@ -59,12 +84,13 @@ class UsabilityCollector:
         logger.info(f"Collecting usability metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            readme, (doc_dir, doc_dir_gap), (site, site_gap) = await asyncio.gather(
+            readme, tree, (site, site_gap) = await asyncio.gather(
                 self._analyze_readme(client, ref),
-                self._find_doc_directory(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
                 self._find_documentation_site(client, ref),
                 return_exceptions=False,
             )
+        doc_dir, doc_dir_gap = self._find_doc_directory(tree)
 
         return {
             "package_name": repo_name,
@@ -91,37 +117,29 @@ class UsabilityCollector:
         if text is None:
             return {"exists": False, "sections": [], "missing": list(_README_SECTIONS)}
 
-        headings = _ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)
-
-        found = [
-            label
-            for label, pattern in _README_SECTIONS.items()
-            if any(re.search(pattern, h, re.IGNORECASE) for h in headings)
-        ]
+        found = [label for label in _README_SECTIONS if readme_covers(text, label)]
         return {
             "exists": True,
             "length": len(text),
-            "heading_count": len(headings),
+            "heading_count": len(_ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)),
             "sections": found,
             "missing": [s for s in _README_SECTIONS if s not in found],
         }
 
-    async def _find_doc_directory(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> tuple:
+    def _find_doc_directory(self, tree) -> tuple:
         """First documentation directory present in the repository, and
-        whether any candidate along the way gapped rather than confirming
-        absence.
+        whether the tree fetch gapped rather than confirming absence.
+
+        Matched via RepoTree.has_dir(), which is case-insensitive -- AMReX's
+        "Docs" and superlu's "DOC" both match a candidate spelled "docs"
+        without needing every casing enumerated here (corsa-center/metrics#54).
         """
-        saw_gap = False
-        for path in _DOC_DIRECTORIES:
-            url = await self.forge.file_exists(client, ref, path)
-            if url is COLLECTION_GAP:
-                saw_gap = True
-                continue
-            if url:
-                return path, saw_gap
-        return None, saw_gap
+        if tree is COLLECTION_GAP:
+            return None, True
+        for name in _DOC_DIRECTORIES:
+            if tree.has_dir(name):
+                return name, False
+        return None, False
 
     async def _find_documentation_site(
         self, client: httpx.AsyncClient, ref: str
@@ -132,10 +150,11 @@ class UsabilityCollector:
             return None, True
         if data is None:
             return None, False
-        if data.get("homepage"):
-            return {"url": data["homepage"], "source": "repository homepage"}, False
+        homepage = (data.get("homepage") or "").strip()
+        if homepage:
+            return {"url": homepage, "source": "repository homepage"}, False
         if data.get("has_pages"):
-            return {"url": self.forge.pages_url(ref), "source": "GitHub Pages"}, False
+            return {"url": self.forge.pages_url(ref), "source": f"{self.forge.display_name} Pages"}, False
         return None, False
 
     def _calculate_score(

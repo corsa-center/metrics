@@ -6,10 +6,12 @@ SAST (enabled by including GitLab's SAST template in .gitlab-ci.yml). The
 result key stays `has_codeql` for compatibility with stored output; `scanner`
 names what was actually found.
 
-On GitHub this checks for a CodeQL workflow file. GitHub's code-scanning alerts API
-(/repos/{owner}/{repo}/code-scanning/alerts) requires authentication even
-for public repos (returns 401 unauthenticated), so this uses the same
-workflow-presence proxy pattern as
+On GitHub, CodeQL is found from a CodeQL workflow file or from GitHub's
+"default setup", which is enabled in repository settings and leaves no file
+in the tree -- it only appears in the Actions workflows list, under a
+dynamic/github-code-scanning/ path. GitHub's code-scanning alerts API
+requires authentication even for public repos (returns 401
+unauthenticated), so this uses the same workflow-presence proxy pattern as
 collectors/ecosystem/openssf_badge.py rather than fetching alert counts.
 """
 
@@ -24,6 +26,8 @@ from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_SETUP_PATH_PREFIX = "dynamic/github-code-scanning/codeql"
+
 # Code-scanning markers searched for in CI file contents, in report order.
 _SCANNER_MARKERS: List[Tuple[str, "re.Pattern[str]"]] = [
     ("CodeQL", re.compile(r"codeql-action|\bcodeql\s+database\b", re.I)),
@@ -34,6 +38,7 @@ _SCANNER_MARKERS: List[Tuple[str, "re.Pattern[str]"]] = [
 
 # What a negative result means on each platform, for the rendered "not found" line.
 _SCANNERS_CHECKED = {"github": "CodeQL", "gitlab": "CodeQL or GitLab SAST"}
+
 # Bounds worst-case API calls per repo when falling back to a content scan.
 _MAX_WORKFLOWS_TO_SCAN = 25
 
@@ -54,8 +59,20 @@ class StaticAnalysisCollector:
             return self._empty_result(repo_name)
 
         logger.info(f"Checking CodeQL / static analysis for {ref}")
-
         checked = _SCANNERS_CHECKED.get(self.forge.platform, "CodeQL")
+
+        def found_result(scanner: str, file: str, url: Optional[str]) -> Dict[str, Any]:
+            return {
+                "package_name": repo_name,
+                "repository": ref,
+                "timestamp": self.forge.get_timestamp(),
+                "has_codeql": True,
+                "scanner": scanner,
+                "scanners_checked": checked,
+                "workflow_file": file,
+                "workflow_url": url,
+            }
+
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             saw_gap = False
             for path in self.forge.platform_paths("security_scan_workflows"):
@@ -64,34 +81,20 @@ class StaticAnalysisCollector:
                     saw_gap = True
                     continue
                 if html_url:
-                    return {
-                        "package_name": repo_name,
-                        "repository": ref,
-                        "timestamp": self.forge.get_timestamp(),
-                        "has_codeql": True,
-                        "scanner": "CodeQL",
-                        "scanners_checked": checked,
-                        "workflow_file": path,
-                        "workflow_url": html_url,
-                    }
+                    return found_result("CodeQL", path, html_url)
+
+            default_setup, setup_gap = await self._find_default_setup(client, ref)
+            if default_setup:
+                return found_result("CodeQL", "CodeQL default setup", default_setup)
+            saw_gap = saw_gap or setup_gap
 
             # None of the common filenames matched — some projects bundle CodeQL
             # into a differently-named workflow (e.g. ADIOS2's `everything.yml`).
-            # Fall back to scanning workflow file contents for a codeql-action
-            # reference, since filename guessing alone produces false negatives.
-            # On GitLab this content scan is the only check.
+            # Fall back to scanning CI file contents, since filename guessing
+            # alone produces false negatives. On GitLab this is the only check.
             found, scan_gap = await self._scan_workflows_for_codeql(client, ref)
             if found:
-                return {
-                    "package_name": repo_name,
-                    "repository": ref,
-                    "timestamp": self.forge.get_timestamp(),
-                    "has_codeql": True,
-                    "scanner": found["scanner"],
-                    "scanners_checked": checked,
-                    "workflow_file": found["file"],
-                    "workflow_url": found["url"],
-                }
+                return found_result(found["scanner"], found["file"], found["url"])
             saw_gap = saw_gap or scan_gap
 
         result = {
@@ -109,9 +112,21 @@ class StaticAnalysisCollector:
             result["not_collected"] = True
         return result
 
-    async def _scan_workflows_for_codeql(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> tuple:
+    async def _find_default_setup(self, client: httpx.AsyncClient, ref: str) -> tuple:
+        """Actions page URL of an active CodeQL default setup, or None.
+
+        Returns (url_or_None, saw_gap). A disabled default setup doesn't
+        count. Always (None, False) on GitLab, which has no equivalent.
+        """
+        workflows = await self.forge.ci_workflows(client, ref)
+        if workflows is COLLECTION_GAP:
+            return None, True
+        for wf in workflows or []:
+            if (wf.get("path") or "").startswith(_DEFAULT_SETUP_PATH_PREFIX) and wf.get("state") == "active":
+                return wf.get("html_url") or self.forge.web_url(ref, "actions", "tree"), False
+        return None, False
+
+    async def _scan_workflows_for_codeql(self, client: httpx.AsyncClient, ref: str) -> tuple:
         """Scan CI file contents for a code-scanning marker (_SCANNER_MARKERS).
 
         Returns (match_or_None, saw_gap).
@@ -120,11 +135,12 @@ class StaticAnalysisCollector:
         if entries is COLLECTION_GAP:
             return None, True
 
-        yaml_files = list(entries)[:_MAX_WORKFLOWS_TO_SCAN]
+        yaml_files = list(entries or [])[:_MAX_WORKFLOWS_TO_SCAN]
 
         async def check_file(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-            text = await self.forge.file_content(client, ref, entry["path"])
-            if text is COLLECTION_GAP:
+            # Raw read, not the REST API: no rate-limit quota spent.
+            text = await self.forge.raw_text(client, ref, entry["path"])
+            if text is None:
                 return COLLECTION_GAP
             if text:
                 for scanner, pattern in _SCANNER_MARKERS:

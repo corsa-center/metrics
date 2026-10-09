@@ -18,18 +18,17 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
-from forge.base import RetryingTransport
+from collectors.ecosystem.base import PUBLIC_CHANNEL_PATTERNS, RetryingTransport, get_threshold
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
+
 # Community channels a project might link from its README, beyond the tracker.
-_CHANNEL_PATTERNS = {
-    "Mailing list": re.compile(r"mailing[- ]list|listserv|groups\.google\.com|majordomo|\bmailman\b", re.I),
-    "Chat (Slack/Discord/Matrix)": re.compile(r"slack\.com|discord\.(?:gg|com)|matrix\.to|gitter\.im|zulipchat", re.I),
-    "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
-    "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
-}
+_CHANNEL_PATTERNS = PUBLIC_CHANNEL_PATTERNS
+
+# Pages (100 issues each) read while counting community issues.
+_COMMUNITY_ISSUE_PAGES = 5
 
 # The pass/fail thresholds for this collector's data (departure rate,
 # channel count, release cadence, etc.) live in config/thresholds.yaml under
@@ -38,7 +37,7 @@ _CHANNEL_PATTERNS = {
 
 
 class ActiveMaintenanceCollector:
-    """Collects active maintenance metrics from GitHub repositories"""
+    """Collects active maintenance metrics from a project's code-hosting forge."""
 
     def __init__(self, forge: Forge):
         self.forge = forge
@@ -55,6 +54,13 @@ class ActiveMaintenanceCollector:
             logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
+        # Companion repositories a project's work also lives in (declared in
+        # its metrics_data catalog entry), so moving part of a project to
+        # another repository isn't read as its contributors abandoning it.
+        # They are assumed to be on the same forge as the main repository.
+        related = [r for r in package.get("related_repositories") or []
+                   if isinstance(r, str) and r.count("/") >= 1]
+
         async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
             # Collect all data concurrently
             (
@@ -65,6 +71,8 @@ class ActiveMaintenanceCollector:
                 first_commit_date,
                 contributor_stats,
                 readme_text,
+                wiki_has_content,
+                community_issues,
             ) = await asyncio.gather(
                 self._get_repo_info(client, ref),
                 self._get_commit_activity(client, ref),
@@ -73,8 +81,16 @@ class ActiveMaintenanceCollector:
                 self.forge.first_commit_date(client, ref),
                 self.forge.contributor_weekly_stats(client, ref),
                 self._get_readme(client, ref),
+                self.forge.wiki_has_content(client, ref),
+                self._count_community_issues(client, ref),
                 return_exceptions=True,
             )
+            extra = []
+            if related:
+                extra = await asyncio.gather(
+                    *[self.forge.contributor_weekly_stats(client, r) for r in related],
+                    return_exceptions=True,
+                )
 
         # Handle exceptions
         if isinstance(repo_info, Exception):
@@ -98,14 +114,23 @@ class ActiveMaintenanceCollector:
         if isinstance(readme_text, Exception):
             logger.error(f"README fetch failed: {readme_text}")
             readme_text = ""
+        if isinstance(wiki_has_content, Exception):
+            wiki_has_content = False
+        if isinstance(community_issues, Exception):
+            community_issues = None
 
         # Analyze
         maintenance_indicators = self._analyze_maintenance_indicators(repo_info, first_commit_date)
         commit_analysis = self._analyze_commits(commit_activity)
         release_analysis = self._analyze_releases(releases)
         contributor_analysis = self._analyze_contributors(contributors)
+        if related:
+            contributor_stats = self._merge_contributor_stats(
+                [contributor_stats] + [e for e in extra if isinstance(e, list)])
         abandonment = self._analyze_abandonment(contributor_stats)
-        channels = self._analyze_channels(repo_info, readme_text)
+        if related:
+            abandonment["repositories"] = [ref] + related
+        channels = self._analyze_channels(repo_info, readme_text, wiki_has_content, community_issues)
 
         # Calculate score
         score = self._calculate_score(
@@ -125,10 +150,60 @@ class ActiveMaintenanceCollector:
             "score": score,
         }
 
+    async def _count_community_issues(self, client: httpx.AsyncClient, ref: str) -> Optional[int]:
+        """How many issues opened in the last 365 days came from outside the
+        maintainer group, counted until the threshold is reached. None on
+        failure.
+
+        Uses forge.recent_issues() rather than issues(), which on GitHub
+        also returns pull requests -- on a busy repository the newest 100
+        items are mostly PRs. Pages past the newest 100 (up to
+        _COMMUNITY_ISSUE_PAGES): a project whose maintainers file their own
+        tickets can bury its community issues -- AMReX's newest 100 were 98
+        maintainer-filed, while the full year held 51 from outside.
+        """
+        since = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
+        enough = get_threshold(
+            "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
+        outside = 0
+        try:
+            for page in range(1, _COMMUNITY_ISSUE_PAGES + 1):
+                items = await self.forge.recent_issues(client, ref, since, page=page)
+                if items is None:
+                    # A later page failing still leaves a real lower bound.
+                    return outside if page > 1 else None
+                outside += sum(1 for i in items if i.get("is_outsider"))
+                if outside >= enough or len(items) < 100:
+                    break
+        except Exception as e:
+            logger.debug(f"Could not count community issues for {ref}: {e}")
+            return outside or None
+        return outside
+
     async def _get_readme(self, client: httpx.AsyncClient, ref: str) -> str:
         """README text, used to find community channels linked from it."""
         text = await self.forge.readme(client, ref)
         return text or ""
+
+    @staticmethod
+    def _merge_contributor_stats(stat_lists: List[List[Dict]]) -> List[Dict]:
+        """Combine /stats/contributors results from several repositories into
+        one per-contributor weekly series over the union of their weeks."""
+        weeks: set = set()
+        by_login: Dict[str, Dict[int, int]] = {}
+        for stats in stat_lists:
+            for entry in stats or []:
+                login = ((entry.get("author") or {}).get("login") or "").lower()
+                if not login:
+                    continue
+                series = by_login.setdefault(login, {})
+                for w in entry.get("weeks") or []:
+                    weeks.add(w.get("w"))
+                    series[w.get("w")] = series.get(w.get("w"), 0) + w.get("c", 0)
+        ordered = sorted(w for w in weeks if w is not None)
+        return [{"author": {"login": login},
+                 "weeks": [{"w": w, "c": series.get(w, 0)} for w in ordered]}
+                for login, series in by_login.items()]
 
     def _analyze_abandonment(self, stats: List[Dict]) -> Dict:
         """Contributors who were active last year but have since gone quiet.
@@ -164,18 +239,28 @@ class ActiveMaintenanceCollector:
             "departure_rate": round(departed / previously_active, 3),
         }
 
-    def _analyze_channels(self, repo_info: Dict, readme: str) -> Dict:
-        """Community channels the project runs, beyond the issue tracker."""
+    def _analyze_channels(
+        self, repo_info: Dict, readme: str,
+        wiki_has_content: bool = False, community_issues: Optional[int] = None,
+    ) -> Dict:
+        """Community channels the project runs. The issue tracker counts only
+        when people outside the maintainer group actually use it -- every
+        repository has one, so its mere presence says nothing."""
         found = []
         if repo_info.get("has_discussions"):
             found.append("GitHub Discussions")
-        if repo_info.get("has_wiki"):
+        if repo_info.get("has_wiki") and wiki_has_content:
             found.append("Wiki")
+        min_issues = get_threshold(
+            "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
+        if (repo_info.get("has_issues", True) and community_issues is not None
+                and community_issues >= min_issues):
+            found.append("GitHub Issues")
 
         for label, pattern in _CHANNEL_PATTERNS.items():
             if readme and pattern.search(readme):
                 found.append(label)
-        return {"found": found, "count": len(found)}
+        return {"found": found, "count": len(found), "community_issues_last_year": community_issues}
 
     async def _get_repo_info(self, client: httpx.AsyncClient, ref: str) -> Dict:
         """Get basic repository info (archived status, description, pushed_at)."""
@@ -190,9 +275,15 @@ class ActiveMaintenanceCollector:
         return {"participation": participation, "last_commit": last_commit}
 
     async def _get_releases(self, client: httpx.AsyncClient, ref: str) -> List[Dict]:
-        """Get recent releases."""
-        data = await self.forge.releases(client, ref, per_page=20)
-        return data if data else []
+        """Recent releases, newest first: release objects plus version tags
+        that have no release object. Many projects publish versions only as
+        tags, which the releases API doesn't list."""
+        releases = list(await self.forge.releases(client, ref, per_page=20) or [])
+        named = {r.get("tag_name") for r in releases}
+        releases += [t for t in await self.forge.version_tags(client, ref)
+                     if t["tag_name"] not in named]
+        return sorted(releases, key=lambda r: r.get("published_at") or r.get("created_at") or "",
+                      reverse=True)
 
     async def _get_contributors(self, client: httpx.AsyncClient, ref: str) -> List[Dict]:
         """Get contributors, paginated.

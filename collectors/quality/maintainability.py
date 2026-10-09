@@ -46,8 +46,10 @@ _DOC_EXTENSIONS = {".md", ".rst", ".adoc", ".tex", ".dox"}
 # or under an explicit doc directory.
 _CONTEXTUAL_DOC_EXTENSIONS = {".txt"}
 
-_TEST_PATH = re.compile(r"(^|/)(tests?|testing|unittests?)(/|$)", re.IGNORECASE)
-_TEST_FILE = re.compile(r"(^|/)(test_[^/]+|[^/]+_test)\.[a-z0-9]+$", re.IGNORECASE)
+# Includes the unit_test/ and *_UnitTests.cpp conventions common in C++ HPC code.
+_TEST_PATH = re.compile(r"(^|/)(tests?|testing|unit_?tests?)(/|$)", re.IGNORECASE)
+_TEST_FILE = re.compile(
+    r"(^|/)(test_[^/]+|[^/]+_(?:unit)?tests?|[^/]*UnitTests?[^/]*)\.[a-z0-9]+$", re.IGNORECASE)
 _DOC_PATH = re.compile(r"(^|/)(docs?|documentation)(/|$)", re.IGNORECASE)
 
 # Configuration for a documentation generator — the difference between having
@@ -173,7 +175,6 @@ class MaintainabilityCollector:
 
         for f in files:
             path = f["path"]
-            max_depth = max(max_depth, path.count("/") + 1)
 
             for name, pattern in _DOC_GENERATORS.items():
                 if pattern.search(path):
@@ -186,6 +187,11 @@ class MaintainabilityCollector:
                 # A test file is not also counted as source, so the ratio below
                 # compares tests against the code they actually cover.
                 (tests if is_test else source).append(f)
+                # Depth of the code itself: test data fixtures (recorded
+                # mirror layouts, sample meshes) nest deeper than anything a
+                # maintainer navigates, and one such file set the whole value.
+                if not is_test:
+                    max_depth = max(max_depth, path.count("/") + 1)
             elif is_test:
                 # Fixtures and expected-output files under a test tree are not
                 # documentation, whatever their extension.

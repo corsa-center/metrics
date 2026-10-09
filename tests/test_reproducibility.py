@@ -2,42 +2,18 @@
 
 import asyncio
 import pytest
-from forge.base import COLLECTION_GAP
-from collectors.quality.reproducibility import ReproducibilityCollector, _FILE_CHECKS
-
-
-class FakeForge:
-    """Minimal stand-in for GitHubForge/GitLabForge."""
-
-    def __init__(self):
-        self.file_results = {}
-        self.releases_result = []
-        self.tags_result = []
-
-    def extract_ref(self, repo_url):
-        return None if repo_url == "not-a-url" else "o/r"
-
-    async def file_exists(self, client, ref, path):
-        return self.file_results.get(path)
-
-    async def releases(self, client, ref, *, per_page=30, page=1):
-        return self.releases_result
-
-    async def tags(self, client, ref, *, per_page=30, page=1):
-        return self.tags_result
-
-    def get_timestamp(self):
-        return "2026-01-01T00:00:00+00:00"
+from unittest.mock import AsyncMock, MagicMock
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.quality.reproducibility import (
+    ReproducibilityCollector, _FILE_CHECKS, _versioning_scheme,
+)
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
-def forge():
-    return FakeForge()
-
-
-@pytest.fixture
-def collector(forge):
-    return ReproducibilityCollector(forge)
+def collector():
+    return ReproducibilityCollector(GitHubForge())
 
 
 class TestEmptyResult:
@@ -61,29 +37,146 @@ class TestCollectInvalidUrl:
 
 
 class TestSemanticVersioning:
-    def test_semver_tags_detected(self, collector, forge):
-        forge.releases_result = [{"tag_name": t} for t in ["v1.2.3", "v1.2.2", "v1.2.1"]]
-        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
+    def _mock_releases(self, tags):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [{"tag_name": t} for t in tags]
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+        return mock_client
+
+    def test_semver_tags_detected(self, collector):
+        client = self._mock_releases(["v1.2.3", "v1.2.2", "v1.2.1"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
         assert result["uses_semver"] is True
         assert result["semver_count"] == 3
 
-    def test_non_semver_tags(self, collector, forge):
-        forge.releases_result = [{"tag_name": t} for t in ["release-2024", "latest", "nightly"]]
-        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
+    def test_non_semver_tags(self, collector):
+        client = self._mock_releases(["release-2024", "latest", "nightly"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
         assert result["uses_semver"] is False
         assert result["semver_count"] == 0
 
-    def test_mixed_tags(self, collector, forge):
-        forge.releases_result = [{"tag_name": t} for t in ["v2.0.0", "nightly", "v1.9.0"]]
-        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
+    def test_mixed_tags(self, collector):
+        client = self._mock_releases(["v2.0.0", "nightly", "v1.9.0"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
         assert result["uses_semver"] is True
         assert result["semver_count"] == 2
 
-    def test_no_releases_falls_back_to_tags(self, collector, forge):
-        forge.releases_result = []
-        forge.tags_result = [{"name": "v3.0.0"}]
-        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
+    def test_calendar_versioning_counts(self, collector):
+        # AMReX tags 26.09 monthly on schedule; strict three-component semver
+        # read that as no versioning discipline. corsa-center/metrics#53.
+        client = self._mock_releases(["26.09", "26.08", "26.07"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
         assert result["uses_semver"] is True
+        assert result["semver_count"] == 3
+        assert result["scheme"] == "calver"
+
+    def test_four_digit_calendar_versioning_counts(self, collector):
+        client = self._mock_releases(["2024.05", "2024.02"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
+        assert result["uses_semver"] is True
+        assert result["scheme"] == "calver"
+
+    def test_semver_still_reports_as_semver(self, collector):
+        client = self._mock_releases(["v1.2.3"])
+        result = asyncio.run(
+            collector._check_semantic_versioning(client, "owner", "repo")
+        )
+        assert result["scheme"] == "semver"
+
+
+class TestVersioningSchemeNormalization:
+    """A project-name-prefixed tag reads the same as a bare version string
+    once normalized -- see corsa-center/metrics#53 (Version Control Best
+    Practices) and METRIC_BLIND_SPOTS.md class F6. Each case here is a real
+    tag from a specific portfolio repo the probe flagged as still failing
+    after the initial CalVer fix.
+    """
+
+    @pytest.mark.parametrize("tag,expected", [
+        ("llvmorg-23.1.1", "semver"),                # llvm/llvm-project
+        ("trilinos-release-17-2-1", "semver"),        # trilinos/Trilinos (hyphens, not dots)
+        ("papi-7-2-0-t", "semver"),                   # icl-utk-edu/papi (trailing suffix)
+        ("legion-26.06.0", "semver"),                 # StanfordLegion/legion
+        ("gex-2025.8.0", "semver"),                   # BerkeleyLab/gasnet
+        ("upcxx-2025.10.0", "semver"),                # BerkeleyLab/upcxx
+        ("vstable_2026_09_04", "semver"),              # snl-dakota/dakota (underscores)
+        ("release-2022.05.15", "semver"),             # HPCToolkit/hpctoolkit
+        ("release-2022.04", "calver"),                # HPCToolkit/hpctoolkit (2-part)
+        ("tag.v1.10.0", "semver"),                    # Parallel-NetCDF/PnetCDF
+        ("checkpoint.1.15.1", "semver"),              # Parallel-NetCDF/PnetCDF
+        ("flang_20190329", "calver"),                 # flang-compiler/flang (compact date)
+        ("v3.0", "major.minor"),                      # OpenACCUserGroup/OpenACCV-V
+        ("v7.0", "major.minor"),                      # CODARcode/Chimbuko
+        ("v0.31", "major.minor"),                     # SCOREC/pumi-pic
+        ("26.09", "calver"),                          # AMReX-Codes/amrex
+        ("v1.2.3", "semver"),
+    ])
+    def test_real_portfolio_tags_now_recognized(self, tag, expected):
+        assert _versioning_scheme(tag) == expected
+
+    @pytest.mark.parametrize("tag", [
+        "main", "nightly", "latest", "gex-stable",
+        "urp_rs_21", "Old_master_support_end",
+    ])
+    def test_non_version_tags_still_unmatched(self, tag):
+        assert _versioning_scheme(tag) is None
+
+    def test_no_releases_falls_back_to_tags(self, collector):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = []
+        mock_resp.raise_for_status = MagicMock()
+
+        tag_resp = MagicMock()
+        tag_resp.status_code = 200
+        tag_resp.json.return_value = [{"name": "v3.0.0"}]
+        tag_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[mock_resp, tag_resp])
+
+        result = asyncio.run(
+            collector._check_semantic_versioning(mock_client, "owner", "repo")
+        )
+        assert result["uses_semver"] is True
+
+    def test_non_matching_releases_do_not_fall_back_to_tags(self, collector):
+        # Releases exist but don't carry a real version -- reported as-is.
+        # A project's raw git tags include every ad hoc marker it ever made
+        # (support-end notices, downstream collaboration snapshots, ...),
+        # not just its versioning history, so they aren't a reliable
+        # fallback source the way "no releases at all" is: sandialabs/Albany
+        # publishes exactly one non-versioned Release, and its tags are
+        # dominated by tags like "compass-2026-03-21" for an external
+        # collaboration's snapshots -- unrelated to Albany's own versioning
+        # discipline, but shaped enough like a date to be misread as one.
+        release_resp = MagicMock()
+        release_resp.status_code = 200
+        release_resp.json.return_value = [{"tag_name": "Initial release"}]
+        release_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=release_resp)
+
+        result = asyncio.run(
+            collector._check_semantic_versioning(mock_client, "owner", "repo")
+        )
+        assert result["uses_semver"] is False
+        assert result["example_tags"] == ["Initial release"]
+        mock_client.get.assert_called_once()
 
 
 class TestComputeOverall:
@@ -168,73 +261,214 @@ class TestComputeOverall:
 
 
 class TestScanFiles:
-    def _run_scan(self, collector, forge, found_paths):
-        forge.file_results = {p: "http://x" for p in found_paths}
-        return asyncio.run(collector._scan_files(None, "o/r"))
+    """_scan_files now takes a RepoTree (or COLLECTION_GAP) directly, rather
+    than probing paths one at a time -- see METRIC_BLIND_SPOTS.md class F2.
+    """
 
-    def test_dockerfile_detected(self, collector, forge):
-        result = self._run_scan(collector, forge, {"Dockerfile"})
+    def _tree(self, paths):
+        return RepoTree(FakeForge(), "owner/repo", list(paths), truncated=False)
+
+    def test_dockerfile_detected(self, collector):
+        result = collector._scan_files(self._tree({"Dockerfile"}))
         assert "Dockerfile" in result["containers"]["found"]
 
-    def test_poetry_lock_detected(self, collector, forge):
-        result = self._run_scan(collector, forge, {"poetry.lock"})
+    def test_poetry_lock_detected(self, collector):
+        result = collector._scan_files(self._tree({"poetry.lock"}))
         assert "Poetry lock" in result["dependency_pinning"]["found"]
 
-    def test_citation_cff_detected(self, collector, forge):
-        result = self._run_scan(collector, forge, {"CITATION.cff"})
+    def test_citation_cff_detected(self, collector):
+        result = collector._scan_files(self._tree({"CITATION.cff"}))
         assert "CITATION.cff" in result["fair4rs_metadata"]["found"]
 
-    def test_nothing_found(self, collector, forge):
-        result = self._run_scan(collector, forge, set())
+    def test_match_is_case_insensitive(self, collector):
+        result = collector._scan_files(self._tree({"Poetry.Lock"}))
+        assert "Poetry lock" in result["dependency_pinning"]["found"]
+
+    def test_nothing_found(self, collector):
+        result = collector._scan_files(self._tree(set()))
         for cat in ("containers", "dependency_pinning", "fair4rs_metadata"):
             assert result[cat]["found"] == []
             assert result[cat]["percentage"] == 0.0
 
 
 class TestScanFilesGapHandling:
-    def _run_scan(self, collector, forge, responses):
-        forge.file_results = responses
-        return asyncio.run(collector._scan_files(None, "o/r"))
-
-    def test_gapped_item_is_not_collected_not_a_confirmed_miss(self, collector, forge):
-        result = self._run_scan(collector, forge, {"Dockerfile": COLLECTION_GAP})
+    def test_gapped_tree_reports_every_item_not_collected(self, collector):
+        result = collector._scan_files(COLLECTION_GAP)
         containers = result["containers"]
-        assert "Dockerfile" not in containers["missing"]
-        assert "Dockerfile" in containers["not_collected"]
+        assert containers["found"] == []
+        assert containers["missing"] == []
+        assert set(containers["not_collected"]) == set(_FILE_CHECKS["containers"])
 
-    def test_found_item_survives_a_gap_on_another_path(self, collector, forge):
-        result = self._run_scan(collector, forge, {"poetry.lock": "http://x"})
-        pinning = result["dependency_pinning"]
-        assert "Poetry lock" in pinning["found"]
-
-    def test_category_fully_gapped_reports_no_percentage(self, collector, forge):
-        # Every candidate for every item in fair4rs_metadata gaps.
-        responses = {p: COLLECTION_GAP for paths in _FILE_CHECKS["fair4rs_metadata"].values() for p in paths}
-        result = self._run_scan(collector, forge, responses)
+    def test_category_fully_gapped_reports_no_percentage(self, collector):
+        result = collector._scan_files(COLLECTION_GAP)
         assert result["fair4rs_metadata"]["percentage"] is None
         assert result["fair4rs_metadata"]["count_total"] == 0
 
+    def test_confirmed_missing_is_not_the_same_as_gapped(self, collector):
+        tree = RepoTree(FakeForge(), "owner/repo", ["README.md"], truncated=False)
+        result = collector._scan_files(tree)
+        containers = result["containers"]
+        assert containers["not_collected"] == []
+        assert set(containers["missing"]) == set(_FILE_CHECKS["containers"])
+
 
 class TestSemanticVersioningGapHandling:
-    """HTTP-level gap detection (network errors, 403s) is covered against
-    the forge directly in tests/forge/test_github.py; these only need to
-    prove this collector reacts correctly to what the forge hands back."""
+    def _mock_client(self, status_code, body=None):
+        mock_resp = MagicMock()
+        mock_resp.status_code = status_code
+        mock_resp.json.return_value = body
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+        return mock_client
 
-    def test_releases_gap_is_not_collected_not_a_confirmed_no(self, collector, forge):
-        forge.releases_result = COLLECTION_GAP
-        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
+    def test_releases_request_failure_is_not_collected_not_a_confirmed_no(self, collector):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=ConnectionError("boom"))
+        result = asyncio.run(collector._check_semantic_versioning(mock_client, "o/r"))
         assert result["uses_semver"] is False
         assert result["not_collected"] is True
 
-    def test_tags_gap_is_not_collected(self, collector, forge):
-        forge.tags_result = COLLECTION_GAP
-        result = asyncio.run(collector._check_tags(None, "o/r", 5))
+    def test_releases_rate_limited_is_not_collected(self, collector):
+        client = self._mock_client(403)
+        result = asyncio.run(collector._check_semantic_versioning(client, "o/r"))
+        assert result["not_collected"] is True
+
+    def test_tags_request_failure_is_not_collected(self, collector):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=ConnectionError("boom"))
+        result = asyncio.run(collector._check_tags(mock_client, "o/r", 5))
         assert result["uses_semver"] is False
         assert result["not_collected"] is True
 
-    def test_confirmed_no_releases_or_tags_is_a_real_negative(self, collector, forge):
-        forge.releases_result = []
-        forge.tags_result = []
-        result = asyncio.run(collector._check_semantic_versioning(None, "o/r"))
+    def test_confirmed_no_releases_or_tags_is_a_real_negative(self, collector):
+        # 200 with an empty body -- a real, trustworthy "no releases, no tags".
+        empty_releases = self._mock_client(200, [])
+        result = asyncio.run(collector._check_semantic_versioning(empty_releases, "o/r"))
         assert result["uses_semver"] is False
         assert "not_collected" not in result
+
+
+class TestScanFilesAnywhereInTree:
+    """Containers and environment specs are found wherever the project keeps
+    them, but not inside vendored code."""
+
+    def _scan(self, collector, paths):
+        return collector._scan_files(RepoTree(FakeForge(), "o/r", paths, truncated=False))
+
+    def test_dockerfile_in_a_subdirectory(self, collector):
+        # SUNDIALS: scripts/docker/Dockerfile.
+        out = self._scan(collector, ["scripts/docker/Dockerfile", "src/a.c"])
+        assert out["containers"]["found"] == ["Dockerfile"]
+        assert out["containers"]["details"]["Dockerfile"]["file"] == "scripts/docker/Dockerfile"
+
+    def test_suffixed_and_containerfile_variants(self, collector):
+        for path in ["ci/Dockerfile.cuda", "docker/rocm.dockerfile", "Containerfile"]:
+            assert "Dockerfile" in self._scan(collector, [path])["containers"]["found"], path
+
+    def test_vendored_dockerfile_does_not_count(self, collector):
+        out = self._scan(collector, ["external/googletest/Dockerfile", "third_party/x/Dockerfile"])
+        assert out["containers"]["found"] == []
+
+    def test_spack_environment_in_a_subdirectory(self, collector):
+        out = self._scan(collector, ["scripts/docker/int64-double/spack.yaml"])
+        assert "Environment specification" in out["reproducibility_docs"]["found"]
+
+    def test_uberenv_and_devcontainer(self, collector):
+        for path in [".uberenv_config.json", ".devcontainer/devcontainer.json", "ci/environment-gpu.yml"]:
+            assert "Environment specification" in self._scan(collector, [path])["reproducibility_docs"]["found"], path
+
+    def test_unrelated_yaml_is_not_an_environment(self, collector):
+        out = self._scan(collector, [".github/workflows/ci.yml", "docs/spack-notes.yaml"])
+        assert "Environment specification" not in out["reproducibility_docs"]["found"]
+
+    def test_documents_about_containers_are_not_definitions(self, collector):
+        out = self._scan(collector, ["docs/installation/singularity.html", "docs/Dockerfile.md",
+                                        "docs/_sources/installation/singularity.rst.txt"])
+        assert out["containers"]["found"] == []
+
+    def test_apptainer_def_file(self, collector):
+        assert "Singularity / Apptainer" in self._scan(
+            collector, ["scripts/ci/images/spack/Apptainer.def"])["containers"]["found"]
+
+    def test_docs_build_environment_is_not_the_software_environment(self, collector):
+        out = self._scan(collector, ["docs/environment.yml", "doc/source/environment.yaml"])
+        assert "Environment specification" not in out["reproducibility_docs"]["found"]
+
+
+class TestReadmeInstallSection:
+    def _docs(self, collector, readme):
+        import base64
+        from unittest.mock import AsyncMock, patch
+        tree = RepoTree(FakeForge(), "o/r", ["README.md", "src/a.py"], truncated=False)
+        data = ({"content": base64.b64encode(readme.encode()).decode(), "path": "README.md",
+                 "html_url": "https://github.com/o/r#readme"} if readme else None)
+        semver = {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)), \
+             patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+            r = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        return r
+
+    def test_readme_installation_section_counts_as_install_guide(self, collector):
+        r = self._docs(collector, "# Pkg\n## Installation\nuv sync\n")
+        assert r["has_reproducibility_docs"] is True
+        assert r["categories"]["reproducibility_docs"]["details"]["Install / build guide"]["file"] \
+            == "README (installation section)"
+
+    def test_readme_without_one_does_not(self, collector):
+        assert self._docs(collector, "# Pkg\nSome prose about install.\n")["has_reproducibility_docs"] is False
+
+
+class TestManagedDependencies:
+    def _collect(self, collector, files):
+        import base64
+        from unittest.mock import patch
+        tree = RepoTree(FakeForge(), "o/r", list(files), truncated=False)
+        semver = {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
+
+        async def get(client, url, params=None):
+            path = url.split("/contents/", 1)[-1]
+            text = files.get(path)
+            return {"content": base64.b64encode(text.encode()).decode()} if text else None
+
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)), \
+             patch.object(collector.forge, "_github_get", side_effect=get):
+            return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_fpm_dependency_pinned_to_a_tag(self, collector):
+        r = self._collect(collector, {"fpm.toml": '[dependencies]\nlib = {git = "https://x", tag = "3.6.1"}\n'})
+        assert r["has_dependency_pinning"]
+        assert "Versioned dependency manifest" in r["categories"]["dependency_pinning"]["found"]
+
+    def test_pyproject_with_only_python_and_build_bounds_does_not_count(self, collector):
+        r = self._collect(collector, {"pyproject.toml": (
+            '[project]\nname = "x"\nversion = "1.0"\nrequires-python = ">=3.9"\n'
+            'dependencies = ["numpy"]\n[build-system]\nrequires = ["setuptools>=61"]\n')})
+        assert not r["has_dependency_pinning"]
+
+    def test_pyproject_with_versioned_dependencies_counts(self, collector):
+        r = self._collect(collector, {"pyproject.toml": '[project]\ndependencies = ["numpy>=1.26", "click"]\n'})
+        assert r["has_dependency_pinning"]
+
+    def test_dependabot_for_ci_actions_only_does_not_count(self, collector):
+        yml = 'version: 2\nupdates:\n  - package-ecosystem: "github-actions"\n    directory: "/"\n'
+        assert not self._collect(collector, {".github/dependabot.yml": yml})["has_dependency_pinning"]
+
+    def test_dependabot_for_the_softwares_packages_counts(self, collector):
+        yml = 'version: 2\nupdates:\n  - package-ecosystem: "github-actions"\n  - package-ecosystem: "pip"\n'
+        r = self._collect(collector, {".github/dependabot.yml": yml})
+        assert "Dependabot dependency updates" in r["categories"]["dependency_pinning"]["found"]
+
+    @pytest.mark.parametrize("path", ["shell.nix", "flake.nix", "pixi.toml",
+                                      "spack/packages/py-mypkg/package.py"])
+    def test_other_environment_specs(self, collector, path):
+        from collectors.quality.reproducibility import _TREE_PATTERNS
+        import re
+        assert re.search(_TREE_PATTERNS[("reproducibility_docs", "Environment specification")], path)
+
+    def test_spack_internals_are_not_a_recipe(self, collector):
+        from collectors.quality.reproducibility import _TREE_PATTERNS
+        import re
+        assert not re.search(_TREE_PATTERNS[("reproducibility_docs", "Environment specification")],
+                             "lib/spack/spack/package.py")

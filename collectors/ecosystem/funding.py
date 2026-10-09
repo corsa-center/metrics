@@ -9,7 +9,9 @@ and one pass over the contributor list rather than fetching it twice.
 
 Collected:
   4.2.8  Enhanced Funding Documentation Analysis  : FUNDING.yml, funding.json,
-                                                    grant/award numbers in the README
+                                                    grant/award numbers and funding
+                                                    acknowledgments in the README and
+                                                    root NOTICE/ACKNOWLEDGMENTS/FUNDING/COPYRIGHT files
          Institutional Affiliation Tracking       : contributor `company` fields
          Corporate Sponsorship Detection          : funding platforms, org ownership
          Funding Portfolio Analysis               : count of distinct sources
@@ -29,9 +31,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
+)
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +42,105 @@ _FUNDING_FILES = [
     ".github/FUNDING.yml", ".github/FUNDING.yaml", "FUNDING.yml", "funding.json",
 ]
 
-# Award-number shapes used by the agencies that fund this portfolio.
-# Deliberately narrow: a looser pattern matches version strings and issue numbers.
+# Award-number shapes, as (pattern, kind). Drawn from how funders' award
+# numbers are actually written in project READMEs (US, EU, UK, Germany,
+# France, Canada, Japan, Australia, China, Switzerland, Wellcome), and kept
+# narrow: a looser pattern matches version strings and issue numbers.
+# Patterns with a capture group take the award from context ("... grant
+# agreement No 101095998"); the value is the group. Specific formats come
+# before the generic contextual one so an award keeps its funder's kind.
+# (?-i:...) marks prefixes that are also ordinary words in lower case.
 _GRANT_PATTERNS = [
     (r"\bDE-[A-Z]{2}\d{2}-?\d{2}[A-Z]{2}\d{5}\b", "DOE contract"),
-    (r"\bDE-(?:AC|SC|EE|NA)\d{2}-?\d*[A-Z]*\d*\b", "DOE award"),
-    (r"\b(?:NSF|OAC|ACI|SI2|CSSI)[- ]\d{6,7}\b", "NSF award"),
-    (r"\b(?:R01|R50|U24|P41)[A-Z]{2}\d{6}\b", "NIH award"),
-    (r"\bgrant (?:no\.?|number)?\s*#?\s*\d{6,}\b", "grant number"),
+    # DE-NA numbers are NNSA's; kept apart so an NNSA acknowledgment beside
+    # one (e.g. a lab's operating-contract statement) isn't a second source.
+    (r"\bDE-NA-?\d{7}\b", "NNSA contract"),
+    # Written both as DE-SC0021354 and DE-SC-0021354.
+    (r"\bDE-(?:AC|SC|EE|NA)-?\d{2}-?\d*[A-Z]*\d*\b", "DOE award"),
+    (r"\b(?:NSF|OAC|ACI|SI2|CSSI|CCF|CNS|IIS|DMS|DMR|AST|PHY|CHE|EAR|OCE|AGS|ECCS|CBET"
+     r"|CMMI|DBI|DEB|IOS|MCB|OPP|SES|BCS|DUE|DRL|OIA)[- ]\d{6,7}\b", "NSF award"),
+    # NIH activity code + institute + serial: R01GM123456, U19-AI135995.
+    (r"(?-i:\b[RUPKFTS]\d{2}-?[A-Z]{2}\d{6}\b)", "NIH award"),
+    (r"(?-i:\b(?:FA|HR|N0|W9|W31)\d{3,4}-\d{2}-[A-Z]-\d{4}\b)", "DoD contract"),
+    (r"(?-i:\b(?:EP|ST|NE|MR|BB|ES|AH)/[A-Z]\d{6}/\d\b)", "UKRI award"),
+    (r"\bANR-\d{2}-[A-Z0-9]{2,5}-\d{4}(?:-\d{2})?\b", "ANR award"),
+    (r"(?-i:\b(?:RGPIN|RGPAS|DGECR|ALLRP|CRDPJ|STPGP)-\d{4}-\d{4,5}\b)", "NSERC award"),
+    (r"(?-i:\bJP\d{2}[A-Z]{1,2}\d{4,5}\b)", "JSPS KAKENHI grant"),
+    (r"(?:KAKENHI|JSPS)[^.;\n]{0,60}?\b(\d{2}[A-Z]{1,2}\d{4,5})\b", "JSPS KAKENHI grant"),
+    (r"(?-i:\bJPMJ[A-Z]{2}\d{2}[A-Z0-9]{2}\b)", "JST grant"),
+    (r"(?-i:\b(?:DP|DE|FT|FL|LP|IC|CE|LE|IH|IN)\d{9}\b)", "ARC grant"),
+    (r"(?-i:\b(?:EXC|SFB|TRR|GRK)[- ]?\d{3,4}(?:/\d)?\b)", "DFG grant"),
+    (r"(?:DFG|Deutsche Forschungsgemeinschaft|German Research Foundation)[^.;\n]{0,100}?"
+     r"project[- ]?(?:number|no\.?|id)\s*:?\s*(\d{6,9})\b", "DFG grant"),
+    (r"\b\d{6}/Z/\d{2}/Z\b", "Wellcome grant"),
+    (r"(?:National Natural Science Foundation of China|NSFC)[^.;\n]{0,80}?"
+     r"(?:No\.?|numbers?|grants?)\s*:?\s*(\d{8})\b", "NSFC grant"),
+    (r"(?:Swiss National Science Foundation|SNSF|SNF)[^.;\n]{0,80}?"
+     r"(?:No\.?|numbers?|grants?)\s*:?\s*(\d{6}(?:_\d{6})?)\b", "SNSF grant"),
+    (r"grant agreements?\s*(?:No\.?|n[°o]\.?|nr\.?|number|#)?\s*:?\s*(\d{6,9})\b", "EU grant"),
+    # Any other award given by number in context.
+    (r"\b(?:grant|award|contract|project)\s+(?:agreement\s+)?(?:No\.?|n[°o]\.?|nr\.?|number|#)"
+     r"\s*:?\s*([A-Z0-9][A-Z0-9/_.-]*\d{5,}[A-Z0-9/_.-]*)", "grant number"),
 ]
+
+# Which funder an award-number kind belongs to, so an acknowledgment naming
+# the same funder isn't counted as a second funding source.
+_GRANT_AGENCY = {
+    "DOE contract": "DOE", "DOE award": "DOE", "NNSA contract": "NNSA",
+    "NSF award": "NSF", "NIH award": "NIH",
+    "DoD contract": "DoD", "UKRI award": "UKRI", "ANR award": "ANR", "NSERC award": "NSERC",
+    "JSPS KAKENHI grant": "JSPS", "JST grant": "JST", "ARC grant": "Australian Research Council",
+    "DFG grant": "DFG", "Wellcome grant": "Wellcome", "NSFC grant": "NSFC",
+    "SNSF grant": "SNSF", "EU grant": "European Commission",
+}
+
+# Root files where projects acknowledge funding besides the README. Federal
+# lab codes usually carry it in NOTICE: AMReX's says "developed under funding
+# from the U.S. Department of Energy", with no award number anywhere.
+_ACKNOWLEDGMENT_FILE = r"^(?:notice|acknowledge?ments?|funding|copyright)(?:\.(?:md|txt|rst))?$"
+# Documentation pages that commonly carry the funding statement: the docs
+# landing page and any acknowledgments page, in the project's own top-level
+# doc tree. Built output (_build/, _sources/) is skipped; the shallowest few
+# are read.
+_DOC_FUNDING_FILE = (r"^(?:src/)?(?:docs?|documentation|sphinx)/(?:[^/]+/)*"
+                     r"(?:index|acknowledge?ments?|funding)\.(?:md|rst|txt)$")
+_DOC_BUILD_DIR = re.compile(r"(?:^|/)(?:_build|_sources|build|html)/")
+_MAX_DOC_FUNDING_FILES = 3
+
+# Funding agencies an acknowledgment can name, as (agency, pattern).
+_AGENCIES = [
+    ("DOE", r"(?:US |United States )?Department of Energy|\bDOE\b|Office of Science|Exascale Computing Project"),
+    ("NSF", r"National Science Foundation|\bNSF\b"),
+    ("NIH", r"National Institutes? of Health|\bNIH\b"),
+    ("NASA", r"\bNASA\b|National Aeronautics and Space Administration"),
+    ("DoD", r"Department of Defense|\bDoD\b|\bDARPA\b|Office of Naval Research|Army Research|Air Force"),
+    ("NNSA", r"National Nuclear Security Administration|\bNNSA\b"),
+    ("European Commission", r"European (?:Commission|Research Council|Union)|Horizon (?:2020|Europe)|\bERC\b|\bEuroHPC\b"),
+    ("DFG", r"Deutsche Forschungsgemeinschaft|German Research Foundation|\bDFG\b"),
+    ("BMBF", r"\bBMBF\b|Federal Ministry of Education and Research"),
+    ("UKRI", r"\bUKRI\b|UK Research and Innovation|\b(?:EPSRC|BBSRC|STFC|NERC|ESRC|AHRC)\b"
+             r"|Engineering and Physical Sciences Research Council|Innovate UK"),
+    ("ANR", r"Agence Nationale de la Recherche|French National Research Agency|\bANR\b"),
+    ("SNSF", r"Swiss National Science Foundation|\bSNSF\b"),
+    ("NWO", r"\bNWO\b|Dutch Research Council|Netherlands Organisation for Scientific Research"),
+    ("NSERC", r"\bNSERC\b|Natural Sciences and Engineering Research Council"),
+    ("JSPS", r"\bJSPS\b|KAKENHI|Japan Society for the Promotion of Science"),
+    ("JST", r"Japan Science and Technology Agency|\bJST\b"),
+    ("Australian Research Council", r"Australian Research Council"),
+    ("NSFC", r"National Natural Science Foundation of China|\bNSFC\b"),
+    ("Wellcome", r"\bWellcome(?: Trust)?\b"),
+]
+# An agency counts only inside a funding sentence, not wherever it's named:
+# "deployed on DOE HPC systems" or "supports ECP applications" isn't funding.
+# `supports` is excluded by the word boundary after `support(ed)`.
+_FUNDING_VERB = r"\b(?:fund(?:ed|ing)?|support(?:ed)?|sponsor(?:ed|ship)?|grants?|awards?|financed)\b"
+_SENTENCE_WINDOW = 160
+_FUNDING_TOPIC = r"(?:acknowledge?ments?|funding|financial support|sponsors?)\b"
+# Markdown ATX headings, and underlined (Setext / reStructuredText) ones.
+_FUNDING_HEADING = re.compile(
+    rf"^\s{{0,3}}#{{1,6}}\s+{_FUNDING_TOPIC}.*$"
+    rf"|^[ \t]*{_FUNDING_TOPIC}[^\n]*\n[ \t]*([=\-~^*#])\1{{2,}}[ \t]*$", re.I | re.M)
+_NEXT_HEADING = re.compile(r"^\s{0,3}#{1,6}\s|^[^\n]+\n[ \t]*([=\-~^*#])\1{2,}[ \t]*$", re.M)
 
 # Contributors sampled for affiliation. The GitHub Users API is one call each,
 # so this is capped; top contributors carry most of the signal anyway.
@@ -74,9 +167,10 @@ class FundingCollector:
         logger.info(f"Collecting funding and institutional metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            tree = await RepoTree.fetch(client, self.forge, ref)
             results = await asyncio.gather(
-                self._find_funding_files(client, ref),
-                self._find_grant_references(client, ref),
+                self._find_funding_files(client, ref, tree),
+                self._find_grant_references(client, ref, tree),
                 self._get_affiliations(client, ref),
                 self._get_owner_type(client, owner),
                 return_exceptions=True,
@@ -122,20 +216,22 @@ class FundingCollector:
     # ------------------------------------------------------------------ fetch
 
     async def _find_funding_files(
-        self, client: httpx.AsyncClient, ref: str
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> Dict[str, Any]:
-        """Locate funding manifests and read the platforms they declare."""
+        """Locate funding manifests and read the platforms they declare.
+
+        Presence is resolved against a RepoTree (case-insensitive), rather
+        than probed one literal path at a time -- see METRIC_BLIND_SPOTS.md
+        class F1.
+        """
         found, platforms = [], []
-        saw_gap = False
-        for path in _FUNDING_FILES:
-            url = await self.forge.file_exists(client, ref, path)
-            if url is COLLECTION_GAP:
-                saw_gap = True
+        saw_gap = tree is COLLECTION_GAP
+        for path in ([] if saw_gap else _FUNDING_FILES):
+            real_path = tree.match([path])
+            if not real_path:
                 continue
-            if not url:
-                continue
-            found.append({"path": path, "url": url})
-            plats, plat_gap = await self._read_funding_platforms(client, ref, path)
+            found.append({"path": real_path, "url": tree.match_url([path])})
+            plats, plat_gap = await self._read_funding_platforms(client, ref, real_path)
             platforms.extend(plats)
             saw_gap = saw_gap or plat_gap
         # Preserve first-seen order while removing duplicates across files.
@@ -170,26 +266,72 @@ class FundingCollector:
         return [k for k, v in parsed.items() if v], False
 
     async def _find_grant_references(
-        self, client: httpx.AsyncClient, ref: str
+        self, client: httpx.AsyncClient, ref: str, tree=None
     ) -> tuple:
-        """Award and contract numbers acknowledged in the README.
+        """Award numbers and agency funding acknowledgments in the README,
+        root NOTICE / ACKNOWLEDGMENTS / FUNDING files, and the docs landing
+        and acknowledgments pages.
 
-        Returns (grants, saw_gap).
+        Returns (grants, saw_gap). Each entry is {"value", "kind"}; kind is
+        an award-number kind or "acknowledgment" (agency named in a funding
+        sentence, no number).
         """
+        texts, saw_gap = [], False
         text = await self.forge.readme(client, ref)
         if text is COLLECTION_GAP:
-            return [], True
-        if not text:
-            return [], False
+            saw_gap = True
+        elif text is not None:
+            texts.append(text)
+
+        if tree is COLLECTION_GAP:
+            saw_gap = True
+        elif tree is not None:
+            doc_pages = sorted(
+                (p for p in tree.find(_DOC_FUNDING_FILE)
+                 if not _VENDORED_DIR.search(p) and not _DOC_BUILD_DIR.search(p)),
+                key=lambda p: (p.count("/"), p))[:_MAX_DOC_FUNDING_FILES]
+            for path in [p for p in tree.find(_ACKNOWLEDGMENT_FILE) if "/" not in p] + doc_pages:
+                text = await self.forge.file_content(client, ref, path)
+                if text is COLLECTION_GAP:
+                    saw_gap = True
+                elif text is not None:
+                    texts.append(text)
 
         seen, grants = set(), []
-        for pattern, kind in _GRANT_PATTERNS:
-            for match in re.findall(pattern, text, flags=re.IGNORECASE):
-                value = match.strip()
-                if value.lower() not in seen:
-                    seen.add(value.lower())
-                    grants.append({"value": value, "kind": kind})
-        return grants, False
+        for text in texts:
+            for pattern, kind in _GRANT_PATTERNS:
+                for match in re.findall(pattern, text, flags=re.IGNORECASE):
+                    value = match.strip().rstrip(".,;:)")
+                    key = re.sub(r"[-\s]", "", value.lower())
+                    if key not in seen:
+                        seen.add(key)
+                        grants.append({"value": value, "kind": kind})
+        for agency in self._acknowledged_agencies("\n".join(texts)):
+            if agency not in seen:
+                seen.add(agency)
+                grants.append({"value": agency, "kind": "acknowledgment"})
+        return grants, saw_gap
+
+    @staticmethod
+    def _acknowledged_agencies(text: str) -> List[str]:
+        """Agencies named near a funding verb, or anywhere in a section headed
+        Acknowledgments / Funding (often a bare list of funders), in
+        first-seen order."""
+        windows = []
+        for m in _FUNDING_HEADING.finditer(text):
+            rest = text[m.end():].lstrip("\n")
+            nxt = _NEXT_HEADING.search(rest)
+            windows.append(rest[:nxt.start()] if nxt else rest[:2000])
+        # "U.S." would otherwise read as sentence ends inside the window.
+        flat = re.sub(r"\bU\.\s?S\.", "US", re.sub(r"\s+", " ", text))
+        for verb in re.finditer(_FUNDING_VERB, flat, re.IGNORECASE):
+            windows.append(flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0])
+        found: List[str] = []
+        for window in windows:
+            for agency, pattern in _AGENCIES:
+                if agency not in found and re.search(pattern, window, re.IGNORECASE):
+                    found.append(agency)
+        return found
 
     async def _get_affiliations(
         self, client: httpx.AsyncClient, ref: str
@@ -289,13 +431,17 @@ class FundingCollector:
         doc_parts = []
         if files:
             doc_parts.append(", ".join(f["path"] for f in files))
-        if grants:
-            doc_parts.append(f"{len(grants)} award reference(s)")
+        awards = [g for g in grants if g["kind"] != "acknowledgment"]
+        acknowledged = [g for g in grants if g["kind"] == "acknowledgment"]
+        if awards:
+            doc_parts.append(f"{len(awards)} award reference(s)")
+        if acknowledged:
+            doc_parts.append("funding acknowledged: " + ", ".join(g["value"] for g in acknowledged))
         doc_passing = bool(files or grants)
         doc_entry: Dict[str, Any] = {
             "label": "Enhanced Funding Documentation Analysis",
             "value": "; ".join(doc_parts) if doc_parts else "No funding documentation found",
-            "detail": ", ".join(g["value"] for g in grants) if grants else None,
+            "detail": ", ".join(g["value"] for g in awards) if awards else None,
             "passing": doc_passing,
         }
         if not doc_passing and (files_gap or grants_gap):
@@ -332,8 +478,12 @@ class FundingCollector:
             corp_entry["not_collected"] = True
         sub["corporate_sponsorship"] = corp_entry
 
-        # Distinct sources: each declared platform, plus each award reference.
-        source_count = len(platforms) + len(grants)
+        # Distinct sources: each declared platform, each award reference, and
+        # each acknowledged agency none of those awards already belongs to.
+        award_agencies = {_GRANT_AGENCY.get(g["kind"]) for g in awards}
+        source_count = len(platforms) + len(awards) + sum(
+            1 for g in acknowledged if g["value"] not in award_agencies
+        )
         portfolio_passing = source_count >= get_threshold("4.2.8", "Funding Portfolio Analysis")
         portfolio_entry: Dict[str, Any] = {
             "label": "Funding Portfolio Analysis",

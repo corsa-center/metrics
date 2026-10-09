@@ -1,15 +1,61 @@
 """Unit tests for CHAOSSGovernanceCollector pure computation methods."""
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from forge.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    # None: every test here exercises pure computation methods that never
-    # touch self.forge.
-    return CHAOSSGovernanceCollector(None)
+    return CHAOSSGovernanceCollector(GitHubForge())
+
+
+# ------------------------------------------------------------------ #
+# _get_documentation_usability                                         #
+# ------------------------------------------------------------------ #
+
+class TestDocumentationUsabilityTreeResolution:
+    """Contributing guide and docs folder are resolved against a RepoTree
+    (case-insensitive) -- see METRIC_BLIND_SPOTS.md class F1.
+    """
+
+    def _run(self, collector, tree, readme=None, has_wiki=False):
+        async def go():
+            with patch.object(collector, "_get_readme_content", new=AsyncMock(return_value=readme)), \
+                 patch.object(collector, "_check_wiki_enabled", new=AsyncMock(return_value=has_wiki)):
+                return await collector._get_documentation_usability(None, "o/r", tree)
+
+        return asyncio.run(go())
+
+    def test_gapped_tree_marks_whole_result_not_collected(self, collector):
+        result = self._run(collector, COLLECTION_GAP)
+        assert result["not_collected"] is True
+
+    def test_differently_cased_contributing_guide_found(self, collector):
+        # ADIOS2 names its guide Contributing.md.
+        tree = RepoTree(FakeForge(), "o/r", ["Contributing.md"], truncated=False)
+        result = self._run(collector, tree)
+        assert "contributing" in result["found"]
+        assert result["details"]["contributing"]["exists"] is True
+
+    def test_capitalized_docs_directory_found(self, collector):
+        # AMReX-Codes/amrex ships "Docs", superlu ships "DOC".
+        tree = RepoTree(FakeForge(), "o/r", ["Docs/index.rst"], truncated=False)
+        result = self._run(collector, tree)
+        assert "docs_folder" in result["found"]
+        assert result["details"]["docs_folder"]["path"] == "docs"
+
+    def test_confirmed_absence_is_not_a_gap(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        result = self._run(collector, tree)
+        assert "not_collected" not in result
+        assert result["details"]["contributing"]["exists"] is False
+        assert result["details"]["docs_folder"]["exists"] is False
 
 
 # ------------------------------------------------------------------ #
@@ -58,10 +104,12 @@ class TestAssessReadmeQuality:
 # ------------------------------------------------------------------ #
 
 class TestCalculateTimeToClose:
-    def test_empty_list(self, collector):
+    def test_empty_list_is_unmeasurable_not_the_slowest(self, collector):
+        # Nothing closed yet: scoring it 0 counted it as the slowest possible.
         result = collector._calculate_time_to_close([])
         assert result["count"] == 0
-        assert result["score"] == 0
+        assert result["not_collected"] is True
+        assert "score" not in result
 
     def test_fast_resolution(self, collector):
         issues = [
@@ -210,18 +258,28 @@ class TestGapPropagatesThroughAggregation:
     def test_time_to_close_gap_is_not_collected(self, collector):
         assert collector._calculate_time_to_close(COLLECTION_GAP) == {"not_collected": True}
 
-    def test_time_to_close_genuinely_empty_is_a_real_zero(self, collector):
+    def test_time_to_close_genuinely_empty_is_told_apart_from_a_gap(self, collector):
         result = collector._calculate_time_to_close([])
-        assert result.get("not_collected") is not True
         assert result["count"] == 0
+        assert result["reason"] == "no closed issues"
+        assert collector._calculate_time_to_close(COLLECTION_GAP) == {"not_collected": True}
 
     def test_issue_age_gap_is_not_collected(self, collector):
         assert collector._calculate_issue_age(COLLECTION_GAP) == {"not_collected": True}
 
-    def test_issue_age_genuinely_empty_is_a_real_zero(self, collector):
+    def test_no_open_issues_is_the_best_age_not_the_worst(self, collector):
         result = collector._calculate_issue_age([])
         assert result.get("not_collected") is not True
         assert result["count"] == 0
+        assert result["score"] == 100
+
+    def test_no_issues_at_all_drops_issue_age(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_get_closed_issues", new=AsyncMock(return_value=[])), \
+             patch.object(collector, "_get_open_issues", new=AsyncMock(return_value=[])):
+            m = asyncio.run(collector._get_issue_metrics(None, "o/r"))
+        assert m["issue_age"]["not_collected"] is True
+        assert m["time_to_close"]["not_collected"] is True
 
 
 # ------------------------------------------------------------------ #
@@ -245,3 +303,27 @@ class TestParseDate:
 
     def test_invalid_returns_none(self, collector):
         assert collector._parse_date("not-a-date") is None
+
+
+class TestNothingToMeasure:
+    def test_no_closed_prs_is_not_collected(self, collector):
+        with patch.object(collector, "_get_closed_pull_requests", new=AsyncMock(return_value=[])):
+            r = asyncio.run(collector._get_change_request_metrics(None, "o/r"))
+        assert r["closure_ratio"]["not_collected"] is True
+
+    def test_no_issues_inclusivity_is_not_collected(self, collector):
+        with patch.object(collector, "_get_recent_issues_with_comments", new=AsyncMock(return_value=[])):
+            r = asyncio.run(collector._get_issues_inclusivity(None, "o/r"))
+        assert r["not_collected"] is True
+
+
+class TestReleaseFrequencyFromTags:
+    def test_version_tags_count_when_there_are_no_releases(self, collector):
+        tags = [{"tag_name": "v5.0.11", "published_at": "2026-08-26T00:00:00Z", "from_tag": True},
+                {"tag_name": "v5.0.10", "published_at": "2026-02-01T00:00:00Z", "from_tag": True}]
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=[])), \
+             patch.object(collector.forge, "version_tags", new=AsyncMock(return_value=tags)):
+            r = asyncio.run(collector._get_release_frequency(None, "o/r"))
+        assert r["total_releases"] == 2
+        assert r["latest_release"]["tag"] == "v5.0.11"
+        assert r["score"] > 0

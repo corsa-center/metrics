@@ -1,4 +1,4 @@
-"""Unit tests for MetricsOrchestrator._resolve_forge.
+"""Unit tests for MetricsOrchestrator._resolve_forge / _forge_for_package.
 
 This replaced _is_known_non_github_repo (which only ever returned a bool
 gating collection on/off) with something that actually picks a Forge --
@@ -113,29 +113,27 @@ class TestExplicitRepoType:
 
 
 class TestForgeForPackage:
-    def test_reads_repo_type_from_attached_package_config(self, orchestrator):
-        package = {
-            "repository": "g/p",
-            "repo_url": "https://gitlab.example.org/g/p",
-            "package_config": {"repo_type": "gitlab"},
-        }
+    """The package file (metrics_data) carries repo_type directly."""
+
+    def test_reads_repo_type_from_the_package(self, orchestrator):
+        package = {"name": "p", "repo_type": "gitlab", "repo_url": "https://gitlab.example.org/g/p"}
         assert isinstance(orchestrator._forge_for_package(package), GitLabForge)
 
+    def test_github_package(self, orchestrator):
+        package = {"name": "hdf5", "repo_type": "github", "repo_url": "https://github.com/HDFGroup/hdf5"}
+        assert isinstance(orchestrator._forge_for_package(package), GitHubForge)
+
     def test_without_repo_type_falls_back_to_host_inference(self, orchestrator):
-        package = {
-            "repository": "g/p",
-            "repo_url": "https://gitlab.example.org/g/p",
-            "package_config": {},
-        }
+        package = {"name": "p", "repo_url": "https://gitlab.example.org/g/p"}
         assert orchestrator._forge_for_package(package) is None
 
 
 class TestSanitizeRepoType:
     def test_normalized_to_lowercase(self):
-        from orchestrator import _sanitize_metric_config
-        assert _sanitize_metric_config({"repo_type": " GitLab "})["repo_type"] == "gitlab"
+        from orchestrator import _sanitize_package_config
+        assert _sanitize_package_config({"repo_type": " GitLab "})["repo_type"] == "gitlab"
 
     @pytest.mark.parametrize("bad", [None, "", 3, ["gitlab"]])
     def test_bad_values_dropped(self, bad):
-        from orchestrator import _sanitize_metric_config
-        assert "repo_type" not in _sanitize_metric_config({"repo_type": bad})
+        from orchestrator import _sanitize_package_config
+        assert "repo_type" not in _sanitize_package_config({"repo_type": bad})

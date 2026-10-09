@@ -27,6 +27,7 @@ from typing import Dict, Any
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from collectors.impact.citation import CitationMetricCollector
+from forge.github import GitHubForge
 
 # Configure logging
 logging.basicConfig(
@@ -88,7 +89,10 @@ class CORSACitationGenerator:
             },
         }
 
-        self.collector = CitationMetricCollector(config)
+        # This script reads the GitHub-hosted CORSA catalog (repo_url is
+        # always github.com/<repo_name>), so a GitHub forge is correct here.
+        forge = GitHubForge(os.environ.get("GITHUB_TOKEN") or None)
+        self.collector = CitationMetricCollector(config, forge)
         logger.info("Citation collector initialized")
 
     async def collect_for_repository(

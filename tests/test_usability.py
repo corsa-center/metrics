@@ -1,51 +1,16 @@
 """Unit tests for UsabilityCollector (CASS Section 4.3.4)."""
 
-import asyncio
-import re
-
 import pytest
 
-from forge.base import COLLECTION_GAP
-from collectors.quality.usability import (
-    UsabilityCollector, _README_SECTIONS, _ATX_HEADING, _SETEXT_HEADING,
-)
-
-
-class FakeForge:
-    """Minimal stand-in for GitHubForge/GitLabForge."""
-
-    def __init__(self):
-        self.readme_result = None
-        self.file_results = {}
-        self.repo_info_result = {}
-
-    def extract_ref(self, repo_url):
-        return None if repo_url == "nope" else "o/r"
-
-    async def readme(self, client, ref):
-        return self.readme_result
-
-    async def file_exists(self, client, ref, path):
-        return self.file_results.get(path)
-
-    async def repo_info(self, client, ref):
-        return self.repo_info_result
-
-    def pages_url(self, ref):
-        return "https://o.github.io/r/"
-
-    def get_timestamp(self):
-        return "2026-01-01T00:00:00+00:00"
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
-def forge():
-    return FakeForge()
-
-
-@pytest.fixture
-def collector(forge):
-    return UsabilityCollector(forge)
+def collector():
+    return UsabilityCollector(GitHubForge())
 
 
 class TestScoring:
@@ -117,77 +82,154 @@ class TestScoring:
 
 
 class TestHeadingDetection:
-    def _sections(self, markdown):
+    def _sections(self, collector, markdown):
+        import re
+        from collectors.quality.usability import _ATX_HEADING, _SETEXT_HEADING
         headings = _ATX_HEADING.findall(markdown) + _SETEXT_HEADING.findall(markdown)
         return [
             label for label, pattern in _README_SECTIONS.items()
             if any(re.search(pattern, h, re.IGNORECASE) for h in headings)
         ]
 
-    def test_atx_headings(self):
-        assert "Installation" in self._sections("# Intro\n## Installation\ntext")
+    def test_atx_headings(self, collector):
+        assert "Installation" in self._sections(collector, "# Intro\n## Installation\ntext")
 
-    def test_setext_headings(self):
-        assert "Usage" in self._sections("Usage\n-----\nsome text")
+    def test_setext_headings(self, collector):
+        assert "Usage" in self._sections(collector, "Usage\n-----\nsome text")
 
-    def test_body_mentions_do_not_count(self):
+    def test_body_mentions_do_not_count(self, collector):
         # "install" in a paragraph isn't a documented installation section.
-        assert self._sections("# Intro\nYou can install it somehow.") == []
+        assert self._sections(collector, "# Intro\nYou can install it somehow.") == []
 
-    def test_synonyms_match(self):
-        assert "Installation" in self._sections("## Getting Started")
-        assert "Usage" in self._sections("## Quick Start")
+    def test_synonyms_match(self, collector):
+        assert "Installation" in self._sections(collector, "## Getting Started")
+        assert "Usage" in self._sections(collector, "## Quick Start")
 
 
 class TestEmptyResult:
     def test_invalid_url(self, collector):
+        import asyncio
         r = asyncio.run(collector.collect({"name": "x", "repo_url": "nope"}))
         assert r["readme"]["exists"] is False
         assert r["overall_score"]["score"] == 0
 
 
 class TestAnalyzeReadmeGapHandling:
-    def test_gap_is_not_collected_not_a_confirmed_missing_readme(self, collector, forge):
-        forge.readme_result = COLLECTION_GAP
-        result = asyncio.run(collector._analyze_readme(None, "o/r"))
+    def _run(self, collector, client):
+        import asyncio
+        return asyncio.run(collector._analyze_readme(client, "o/r"))
+
+    def test_gap_is_not_collected_not_a_confirmed_missing_readme(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+            result = self._run(collector, None)
         assert result["exists"] is False
         assert result["not_collected"] is True
 
-    def test_confirmed_404_is_a_real_negative(self, collector, forge):
-        forge.readme_result = None
-        result = asyncio.run(collector._analyze_readme(None, "o/r"))
+    def test_confirmed_404_is_a_real_negative(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=None)):
+            result = self._run(collector, None)
         assert result["exists"] is False
         assert "not_collected" not in result
 
 
-class TestFindDocDirectoryGapHandling:
-    def _run(self, collector, forge, responses):
-        forge.file_results = responses
-        return asyncio.run(collector._find_doc_directory(None, "o/r"))
+class TestFindDocDirectory:
+    """_find_doc_directory now takes a RepoTree (or COLLECTION_GAP) directly,
+    rather than probing paths one at a time -- see corsa-center/metrics#54 and
+    METRIC_BLIND_SPOTS.md class F1.
+    """
 
-    def test_gap_on_all_candidates_is_tracked(self, collector, forge):
-        path, saw_gap = self._run(collector, forge, {
-            "docs": COLLECTION_GAP, "doc": COLLECTION_GAP,
-            "documentation": COLLECTION_GAP, "Documentation": COLLECTION_GAP,
-        })
+    def test_gap_tree_is_tracked(self, collector):
+        path, saw_gap = collector._find_doc_directory(COLLECTION_GAP)
         assert path is None
         assert saw_gap is True
 
-    def test_found_directory_reports_no_gap(self, collector, forge):
-        path, saw_gap = self._run(collector, forge, {"docs": "http://x"})
+    def test_found_directory_reports_no_gap(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["docs/index.md"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
         assert path == "docs"
+        assert saw_gap is False
+
+    def test_capitalized_docs_directory_is_found(self, collector):
+        # AMReX-Codes/amrex ships "Docs" (capital D, lowercase rest); the
+        # waiver could never fire for it when case had to be enumerated.
+        # Reported in corsa-center/metrics#54.
+        tree = RepoTree(FakeForge(), "o/r", ["Docs/index.rst"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
+        assert path == "docs"
+        assert saw_gap is False
+
+    def test_screaming_case_doc_directory_is_found(self, collector):
+        # superlu/superlu_dist/superlu_mt ship DOC/, not doc/ or docs/.
+        tree = RepoTree(FakeForge(), "o/r", ["DOC/html/index.html"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
+        assert path == "doc"
+        assert saw_gap is False
+
+    def test_no_doc_directory_is_a_confirmed_absence(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["README.md", "src/main.c"], truncated=False)
+        path, saw_gap = collector._find_doc_directory(tree)
+        assert path is None
         assert saw_gap is False
 
 
 class TestFindDocumentationSiteGapHandling:
-    def test_gap_is_tracked_separately_from_confirmed_absence(self, collector, forge):
-        forge.repo_info_result = COLLECTION_GAP
-        site, saw_gap = asyncio.run(collector._find_documentation_site(None, "o/r"))
+    def _run(self, collector):
+        import asyncio
+        return asyncio.run(collector._find_documentation_site(None, "o/r"))
+
+    def test_gap_is_tracked_separately_from_confirmed_absence(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+            site, saw_gap = self._run(collector)
         assert site is None
         assert saw_gap is True
 
-    def test_confirmed_repo_with_no_homepage_or_pages_is_not_a_gap(self, collector, forge):
-        forge.repo_info_result = {"homepage": None, "has_pages": False}
-        site, saw_gap = asyncio.run(collector._find_documentation_site(None, "o/r"))
+    def test_confirmed_repo_with_no_homepage_or_pages_is_not_a_gap(self, collector):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value={"homepage": "", "has_pages": False})):
+            site, saw_gap = self._run(collector)
         assert site is None
         assert saw_gap is False
+
+
+class TestReadmeLinkSections:
+    def _sections(self, collector, markdown):
+        import asyncio, base64
+        from unittest.mock import AsyncMock, patch
+        data = {"content": base64.b64encode(markdown.encode()).decode()}
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._analyze_readme(None, "o/r"))["sections"]
+
+    def test_topics_covered_by_links_count(self, collector):
+        # Every topic a linked bullet under one heading.
+        md = ("# Pkg\n[Contact Us](https://x/support)\n### Documentation\n"
+              "- [Getting Started with Pkg](https://x/getting_started)\n")
+        assert set(self._sections(collector, md)) == {"Installation", "Support"}
+
+    def test_link_must_start_with_the_topic(self, collector):
+        # An install guide whose title merely contains "using" isn't Usage.
+        assert "Usage" not in self._sections(collector, "[Building Pkg using Spack](x)")
+
+    def test_badges_do_not_count(self, collector):
+        md = "[![Build and install status](https://x/badge.svg)](https://x/actions)"
+        assert self._sections(collector, md) == []
+
+
+class TestMoreReadmeShapes:
+    @pytest.mark.parametrize("text,label", [
+        ("### How do I get set up? ###\nbuild it\n", "Installation"),
+        ("### Who do I talk to? ###\nemail us\n", "Support"),
+        ("## Build TorchBraid: pip (recommended):\npip install .\n", "Installation"),
+        ("*************\nInstallation\n*************\n\npip install x\n", "Installation"),
+        ("Quick Start\n~~~~~~~~~~~\n\nrun it\n", "Usage"),
+        ("MAGMA README\n\n* Quick start (make)\n\n    make\n", "Usage"),
+    ])
+    def test_heading_found(self, text, label):
+        from collectors.quality.usability import readme_covers
+        assert readme_covers(text, label)
+
+    def test_markdown_bullets_are_not_headings(self):
+        from collectors.quality.usability import readme_covers
+        assert not readme_covers("# Tool\n\n* Examples of output\n\nmore\n", "Examples")

@@ -1,8 +1,10 @@
 """Unit tests for CollaborationCollector (CASS Section 4.2.7)."""
 
+import asyncio
 import pytest
 
 from collectors.ecosystem.collaboration import CollaborationCollector
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
@@ -10,7 +12,7 @@ def collector():
     # None: every test here exercises pure computation methods
     # (_merge/_calculate_score/_downloads_summary) that never touch
     # self.forge.
-    return CollaborationCollector(None)
+    return CollaborationCollector(FakeForge())
 
 
 def _pkg(ecosystem, name, deps=0, repos=0, install=None, downloads=0, downloads_period=None):
@@ -79,7 +81,10 @@ class TestScoring:
         assert "Not packaged" in s["sub_scores"]["advanced_dependency_analysis"]["value"]
 
     def test_three_submetrics_uncollected(self, collector):
+        # Plus the network row, unmeasured without a dependency-audit graph.
         sub = collector._calculate_score([])["sub_scores"]
+        assert sum(1 for v in sub.values() if v.get("not_collected")) == 4
+        sub = collector._calculate_score([], {"count": 0, "complete": True})["sub_scores"]
         assert sum(1 for v in sub.values() if v.get("not_collected")) == 3
 
     def test_max_score_excludes_the_4_3_4_row(self, collector):
@@ -88,7 +93,8 @@ class TestScoring:
             _pkg("conda", "x", deps=99, install="conda install x"),
             _pkg("spack", "x", install="spack install x"),
         ])
-        assert s["max_score"] == 5
+        # Only measured rows count; the three uncollected stubs aren't failures.
+        assert s["max_score"] == 2
         assert s["score"] == 2
         assert s["sub_scores"]["installation_success"]["passing"]
 
@@ -146,3 +152,181 @@ class TestDownloadsSummary:
 
     def test_empty_registries(self, collector):
         assert collector._downloads_summary([]) == {"total": 0, "by_registry": []}
+
+
+class TestDropSpuriousGoEntries:
+    """Go's decentralized module system lets any public repo be `go get`-ed
+    without the project ever intending to publish a Go module -- ecosyste.ms
+    indexes AMReX-Codes/amrex (a C++ library) under "go" with zero
+    dependents purely because some tool once resolved that path.
+    corsa-center/metrics#50.
+    """
+
+    def test_zero_dependent_go_entry_dropped_for_non_go_repo(self, collector):
+        registries = [_pkg("go", "github.com/AMReX-Codes/amrex"), _pkg("spack", "amrex", deps=2)]
+        result = collector._drop_spurious_go_entries(registries, "C++")
+        assert [r["ecosystem"] for r in result] == ["spack"]
+
+    def test_go_entry_with_real_dependents_kept(self, collector):
+        registries = [_pkg("go", "github.com/foo/bar", deps=5)]
+        result = collector._drop_spurious_go_entries(registries, "C++")
+        assert len(result) == 1
+
+    def test_go_entry_kept_for_a_real_go_project(self, collector):
+        # A genuinely young Go package can legitimately have zero
+        # dependents yet -- only drop the noise for non-Go repos.
+        registries = [_pkg("go", "github.com/foo/bar")]
+        result = collector._drop_spurious_go_entries(registries, "Go")
+        assert len(result) == 1
+
+    def test_unknown_primary_language_keeps_the_entry(self, collector):
+        # Absence of information isn't license to discard real data.
+        registries = [_pkg("go", "github.com/foo/bar")]
+        result = collector._drop_spurious_go_entries(registries, None)
+        assert len(result) == 1
+
+    def test_non_go_ecosystems_never_touched(self, collector):
+        registries = [_pkg("pypi", "foo")]
+        result = collector._drop_spurious_go_entries(registries, "C++")
+        assert len(result) == 1
+
+
+class _FakeJson:
+    """Stand-in for _get_json keyed by URL substring."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.urls = []
+
+    async def __call__(self, client, url):
+        self.urls.append(url)
+        for key, value in self.responses.items():
+            if key in url:
+                return value
+        return None
+
+
+class TestCondaForgeLookup:
+    AMREX = {"name": "amrex", "dev_url": "https://github.com/AMReX-Codes/amrex",
+             "home": "https://amrex-codes.github.io/amrex/", "source_git_url": None,
+             "html_url": "http://anaconda.org/conda-forge/amrex", "ndownloads": 1234}
+
+    def test_linked_package_is_credited(self, collector):
+        collector._get_json = _FakeJson({"conda-forge/amrex": self.AMREX})
+        rec = asyncio.run(collector._lookup_conda_forge(None, "AMReX-Codes", "amrex"))
+        assert rec["ecosystem"] == "conda"
+        assert rec["install_command"] == "conda install -c conda-forge amrex"
+        assert rec["downloads"] == 1234
+
+    def test_same_name_unrelated_package_is_not_credited(self, collector):
+        other = {**self.AMREX, "dev_url": "https://github.com/someone-else/amrex",
+                 "home": "https://example.org"}
+        collector._get_json = _FakeJson({"conda-forge/amrex": other})
+        assert asyncio.run(collector._lookup_conda_forge(None, "AMReX-Codes", "amrex")) is None
+
+    def test_absent_package(self, collector):
+        collector._get_json = _FakeJson({})
+        assert asyncio.run(collector._lookup_conda_forge(None, "o", "r")) is None
+
+    def test_points_at_normalizes_url_forms(self, collector):
+        t = "github.com/amrex-codes/amrex"
+        for link in ["https://github.com/AMReX-Codes/amrex", "http://www.github.com/amrex-codes/amrex/",
+                     "https://github.com/AMReX-Codes/amrex.git", "https://github.com/AMReX-Codes/amrex/tree/dev"]:
+            assert collector._points_at(link, t), link
+        assert not collector._points_at("https://github.com/AMReX-Codes/amrex-tutorials", t)
+
+
+class TestSpackDependents:
+    def test_spack_index_count_wins_when_higher(self, collector):
+        collector._get_json = _FakeJson({
+            "spack.io/packages/amrex": {"name": "amrex", "ecosystem": "spack",
+                                        "dependent_packages_count": 2},
+            "packages.spack.io/data/packages/amrex.json": {
+                "dependent_to": [{"name": n} for n in ["erf", "warpx", "py-amrex", "xsdk", "fastmath", "truchas-pbf"]]},
+        })
+        rec = asyncio.run(collector._lookup_spack(None, "amrex"))
+        assert rec["dependent_packages"] == 6
+
+    def test_ecosystems_count_kept_when_spack_index_unavailable(self, collector):
+        collector._get_json = _FakeJson({
+            "spack.io/packages/amrex": {"name": "amrex", "ecosystem": "spack",
+                                        "dependent_packages_count": 2},
+        })
+        assert asyncio.run(collector._lookup_spack(None, "amrex"))["dependent_packages"] == 2
+
+
+class TestSourceLevelDependents:
+    def test_audit_count_can_carry_the_network_row(self, collector):
+        s = collector._calculate_score([_pkg("spack", "amrex", deps=6)], {"count": 64, "complete": True})
+        row = s["sub_scores"]["collaboration_network"]
+        assert row["passing"] is True
+        assert row["value"] == "6 dependent packages, 64 dependent repositories"
+        assert row["detail"] == "64 source-level dependents found by dependency audit"
+
+    def test_without_an_audit_a_registry_shortfall_is_unmeasured(self, collector):
+        row = collector._calculate_score([_pkg("spack", "amrex", deps=6)])["sub_scores"]["collaboration_network"]
+        assert row["not_collected"] is True and row["unmeasured"] is True
+        assert row["value"].endswith("source-level dependents not audited")
+
+    def test_registry_pass_stands_without_an_audit(self, collector):
+        row = collector._calculate_score([_pkg("conda", "hdf5", deps=176)])["sub_scores"]["collaboration_network"]
+        assert row["passing"] is True and "not_collected" not in row
+
+    def _graph(self, collector, graph, owner="AMReX-Codes", repo="amrex"):
+        from unittest.mock import AsyncMock, patch
+        with patch.object(collector, "_get_json", new=AsyncMock(return_value=graph)):
+            return asyncio.run(collector._source_dependents(None, owner, repo))
+
+    def test_only_confident_external_depends_on_edges_count(self, collector):
+        e = lambda src, conf="high", rel="DEPENDS_ON": {"source": src, "target": "amrex-codes/amrex",
+                                                         "confidence": conf, "relationship": rel}
+        graph = {"meta": {"root": "amrex-codes/amrex", "completeness": {"complete": True}}, "edges": [
+            e("AMReX-Astro/Castro"), e("erf-model/ERF", "medium"), e("x/low", "low"),
+            e("x/vendored", rel="VENDORED"), e("x/mirror", rel="MIRROR"),
+            e("AMReX-Codes/amrex-tutorials")]}
+        assert self._graph(collector, graph)["count"] == 2
+
+    def test_unscored_graph_is_not_used(self, collector):
+        # Older audit output: no confidence, generic-name false positives.
+        graph = {"meta": {"root": "scorec/core"},
+                 "edges": [{"source": "torvalds/linux", "target": "scorec/core"}]}
+        assert self._graph(collector, graph, "SCOREC", "core") is None
+
+    def test_graph_for_another_repository_is_not_used(self, collector):
+        graph = {"meta": {"root": "someone/amrex"}, "edges": [
+            {"source": "a/b", "target": "someone/amrex", "confidence": "high", "relationship": "DEPENDS_ON"}]}
+        assert self._graph(collector, graph) is None
+
+
+class TestSpackByRepository:
+    def test_recipe_found_under_another_name(self, collector, monkeypatch):
+        import collectors.ecosystem.collaboration as collab
+        monkeypatch.setattr(collab, "_spack_by_repo", None)
+        collector._get_json = _FakeJson({
+            "repology.json": {"packages": {
+                "pumi": {"homepages": ["https://www.scorec.rpi.edu/pumi"],
+                         "version": [{"downloads": [["https://github.com/SCOREC/core.git"]]}]},
+                "omega-h": {"homepages": ["https://github.com/sandialabs/omega_h"]},
+            }},
+            "spack.io/packages/pumi": {"name": "pumi", "ecosystem": "spack", "dependent_packages_count": 3},
+        })
+        rec = asyncio.run(collector._lookup_spack(None, "core", "SCOREC"))
+        assert rec["name"] == "pumi"
+
+    def test_a_fork_is_not_credited_with_upstreams_recipe(self, collector, monkeypatch):
+        import collectors.ecosystem.collaboration as collab
+        monkeypatch.setattr(collab, "_spack_by_repo", None)
+        collector._get_json = _FakeJson({
+            "repology.json": {"packages": {"omega-h": {"homepages": ["https://github.com/sandialabs/omega_h"]}}},
+        })
+        assert asyncio.run(collector._lookup_spack(None, "omega_h", "SCOREC")) is None
+
+    def test_most_depended_on_recipe_wins(self, collector, monkeypatch):
+        import collectors.ecosystem.collaboration as collab
+        monkeypatch.setattr(collab, "_spack_by_repo", {"llvm/llvm-project": ["aotriton-llvm", "llvm"]})
+        collector._get_json = _FakeJson({
+            "data/packages/aotriton-llvm.json": {"dependent_to": [{"name": "aotriton"}]},
+            "data/packages/llvm.json": {"dependent_to": [{"name": n} for n in "abcdef"]},
+            "spack.io/packages/llvm": {"name": "llvm", "ecosystem": "spack", "dependent_packages_count": 6},
+        })
+        assert asyncio.run(collector._lookup_spack(None, "llvm-project", "llvm"))["name"] == "llvm"

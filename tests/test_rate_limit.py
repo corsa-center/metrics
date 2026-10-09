@@ -30,22 +30,50 @@ class _Client:
 
 
 class TestMinuteLimiter:
-    def test_allows_up_to_the_limit_without_waiting(self):
+    def _clock(self, monkeypatch):
+        """Fake monotonic clock that only advances when the limiter sleeps."""
+        now = {"t": 1000.0}
+        sleeps = []
+
+        async def fake_sleep(d):
+            sleeps.append(d)
+            now["t"] += d
+        monkeypatch.setattr("collectors.rate_limit.time.monotonic", lambda: now["t"])
+        monkeypatch.setattr("collectors.rate_limit.asyncio.sleep", fake_sleep)
+        return now, sleeps
+
+    def test_acquisitions_are_spaced_not_burst(self, monkeypatch):
+        # A minute's allowance released at once trips GitHub's secondary limit.
+        now, sleeps = self._clock(monkeypatch)
+        limiter = _MinuteLimiter(3)          # 20 s apart
+
         async def run():
-            limiter = _MinuteLimiter(3)
             for _ in range(3):
                 await limiter.acquire()
-            return len(limiter._times)
-        assert asyncio.run(asyncio.wait_for(run(), timeout=2)) == 3
+        asyncio.run(run())
+        assert [round(b - a) for a, b in zip(limiter._times, limiter._times[1:])] == [20, 20]
 
-    def test_old_acquisitions_expire(self):
+    def test_no_wait_once_the_interval_has_passed(self, monkeypatch):
+        now, sleeps = self._clock(monkeypatch)
+        limiter = _MinuteLimiter(3)
+
         async def run():
-            limiter = _MinuteLimiter(1)
             await limiter.acquire()
-            limiter._times = [limiter._times[0] - 61]   # age it past the window
+            now["t"] += 25
             await limiter.acquire()
-            return True
-        assert asyncio.run(asyncio.wait_for(run(), timeout=2))
+        asyncio.run(run())
+        assert sleeps == []
+
+    def test_old_acquisitions_expire(self, monkeypatch):
+        now, sleeps = self._clock(monkeypatch)
+        limiter = _MinuteLimiter(1)
+
+        async def run():
+            await limiter.acquire()
+            now["t"] += 61
+            await limiter.acquire()
+        asyncio.run(run())
+        assert sleeps == []
 
 
 class TestSearchGet:

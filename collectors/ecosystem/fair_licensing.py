@@ -19,14 +19,13 @@ project as unlicensed.
 import asyncio
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 import yaml
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ _UNCLASSIFIED = {None, "", "NOASSERTION", "Other", "unknown"}
 # License families recoverable from prose, ordered most specific first so
 # "3-clause BSD" is not swallowed by a bare "BSD" match.
 _LICENSE_TEXT_PATTERNS = [
-    ("BSD-3-Clause", r"\b(?:3[- ]clause BSD|BSD 3[- ]clause|new BSD|modified BSD)\b"),
+    ("BSD-3-Clause", r"\b(?:3[- ]clause BSD|BSD[- ]3(?:[- ]clause)?|new BSD|modified BSD)\b"),
     ("BSD-2-Clause", r"\b(?:2[- ]clause BSD|BSD 2[- ]clause|simplified BSD)\b"),
     ("Apache-2.0", r"\bApache Licen[sc]e,? Version 2\.0\b"),
     ("MIT", r"\bMIT Licen[sc]e\b"),
@@ -44,6 +43,48 @@ _LICENSE_TEXT_PATTERNS = [
     ("GPL", r"\bGNU General Public Licen[sc]e\b"),
     ("MPL-2.0", r"\bMozilla Public Licen[sc]e,? (?:Version )?2\.0\b"),
     ("BSD", r"\bBSD Licen[sc]e\b"),
+]
+
+# The operative clauses of the standard licences, for text that reproduces a
+# licence body without ever naming it. AMReX's LICENSE is verbatim
+# BSD-3-Clause with "(1)"-style numbering and never says "BSD", so GitHub
+# returns NOASSERTION and the name patterns above find nothing. Every phrase
+# in a family must appear (matched against whitespace-collapsed text, since
+# licences wrap mid-clause); ordered most specific first so BSD-3's extra
+# endorsement clause is checked before BSD-2's subset.
+_LICENSE_CLAUSE_FINGERPRINTS = [
+    ("BSD-3-Clause", [
+        r"redistributions of source code must retain the above copyright notice",
+        r"redistributions in binary form must reproduce the above copyright notice",
+        r"neither the name of .{1,200}? may be used to endorse or promote products derived",
+    ]),
+    ("BSD-2-Clause", [
+        r"redistributions of source code must retain the above copyright notice",
+        r"redistributions in binary form must reproduce the above copyright notice",
+    ]),
+    ("MIT", [
+        r"permission is hereby granted, free of charge, to any person obtaining a copy",
+        r"the above copyright notice and this permission notice shall be included",
+    ]),
+    ("ISC", [
+        r"permission to use, copy, modify, and(?:/or)? distribute this software for any purpose "
+        r"with or without fee is hereby granted",
+    ]),
+]
+
+# SPDX ids a project may declare in CITATION.cff, mapped to the family the
+# rest of the pipeline reasons about. Limited to OSI-approved licences: the
+# dashboard treats every resolved family as OSI-approved, so an unlisted or
+# LicenseRef-* declaration must stay unresolved rather than pass that row.
+_DECLARED_SPDX_FAMILIES = [
+    (r"BSD-3-Clause(?:-LBNL)?", "BSD-3-Clause"),
+    (r"BSD-2-Clause", "BSD-2-Clause"),
+    (r"Apache-2\.0", "Apache-2.0"),
+    (r"MIT", "MIT"),
+    (r"ISC", "ISC"),
+    (r"LGPL-(?:2\.1|3\.0)(?:-only|-or-later|\+)?", "LGPL"),
+    (r"GPL-(?:2\.0|3\.0)(?:-only|-or-later|\+)?", "GPL"),
+    (r"MPL-2\.0", "MPL-2.0"),
 ]
 
 # Markers that the licence carries terms beyond the standard grant.
@@ -65,6 +106,18 @@ _ZENODO_PATHS = [".zenodo.json", "zenodo.json"]
 # Fields a citation record needs before it is genuinely reusable metadata.
 _CITATION_FIELDS = ["title", "authors", "version", "license", "repository-code", "doi"]
 
+# Root-level citation files that may carry BibTeX instead of CFF
+# (CITATION.bib, CITATIONS.md with ```bibtex blocks, a bare CITATION file).
+_BIBTEX_CITATION_FILE = r"^(?:citations?|citing|cite)(?:\.(?:bib|md|txt|rst))?$"
+_BIBTEX_ENTRY = re.compile(r"@\w+\s*\{")
+_README_CITATION_HEADING = re.compile(
+    r"^\s{0,3}#{1,6}\s+(?:how to cite|citing|cite|citation|citations)\b.*$", re.I | re.M)
+_BIBTEX_FIELD = re.compile(r"(?i)(?<![\w-])(title|author|version|license|doi|url|repository)\s*=\s*[{\"]?([^,}\"\n]*)")
+_BIBTEX_TO_CITATION_FIELD = {
+    "title": "title", "author": "authors", "version": "version",
+    "license": "license", "doi": "doi",
+}
+
 
 class FairLicensingCollector:
     """Collects FAIR compliance and license-exception signals (Section 4.2.2)."""
@@ -82,21 +135,18 @@ class FairLicensingCollector:
         logger.info(f"Collecting FAIR and licensing detail for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            tree = await RepoTree.fetch(client, self.forge, ref)
             results = await asyncio.gather(
                 self._get_license(client, ref),
-                self._get_citation(client, ref),
-                self._any_exists(client, ref, _CODEMETA_PATHS),
-                self._any_exists(client, ref, _ZENODO_PATHS),
+                self._get_citation(client, ref, tree),
                 self._has_releases(client, ref),
                 return_exceptions=True,
             )
 
-        names = ["license", "citation", "codemeta", "zenodo", "releases"]
+        names = ["license", "citation", "releases"]
         defaults = [
             ({"spdx_id": None, "text": ""}, True),
             ({}, True),
-            (False, True),
-            (False, True),
             (False, True),
         ]
         unpacked = []
@@ -109,16 +159,22 @@ class FairLicensingCollector:
 
         (license_data, license_gap) = unpacked[0]
         (citation, citation_gap) = unpacked[1]
-        (has_codemeta, codemeta_gap) = unpacked[2]
-        (has_zenodo, zenodo_gap) = unpacked[3]
-        (releases, releases_gap) = unpacked[4]
+        (releases, releases_gap) = unpacked[2]
+        has_codemeta, codemeta_gap = self._any_exists(tree, _CODEMETA_PATHS)
+        has_zenodo, zenodo_gap = self._any_exists(tree, _ZENODO_PATHS)
 
-        exceptions = self._analyze_license_text(license_data, license_gap)
+        exceptions = self._analyze_license_text(
+            license_data, license_gap, declared=(citation or {}).get("license"),
+        )
         metadata = self._analyze_citation(citation, citation_gap)
         fair = self._assess_fair(
             exceptions, metadata, has_codemeta, has_zenodo, releases,
             codemeta_gap, zenodo_gap, releases_gap,
         )
+        bibtex = None
+        if not metadata.get("exists") and tree is not COLLECTION_GAP:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                bibtex = await self._get_bibtex_citation(client, ref, tree)
 
         return {
             "package_name": repo_name,
@@ -126,8 +182,9 @@ class FairLicensingCollector:
             "timestamp": self.forge.get_timestamp(),
             "license_exceptions": exceptions,
             "citation_metadata": metadata,
+            "bibtex_citation": bibtex,
             "fair": fair,
-            "overall_score": self._calculate_score(exceptions, metadata, fair),
+            "overall_score": self._calculate_score(exceptions, metadata, fair, bibtex),
         }
 
     # ------------------------------------------------------------------ fetch
@@ -148,67 +205,80 @@ class FairLicensingCollector:
         }, False
 
     async def _get_citation(
-        self, client: httpx.AsyncClient, ref: str
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> tuple:
         """Parsed CITATION.cff, or an empty dict if absent or unparseable.
 
-        Returns (citation, saw_gap).
+        Returns (citation, saw_gap). Resolved against a RepoTree first so a
+        differently-cased file (Lab-Notebooks/CodeScribe ships citation.cff,
+        not CITATION.cff) is still found -- see METRIC_BLIND_SPOTS.md class F1.
         """
-        saw_gap = False
-        for path in _CITATION_PATHS:
-            text = await self.forge.file_content(client, ref, path)
-            if text is COLLECTION_GAP:
-                saw_gap = True
-                continue
-            if text is None:
-                continue
-            try:
-                parsed = yaml.safe_load(text)
-                if isinstance(parsed, dict):
-                    return parsed, saw_gap
-            except Exception as e:
-                logger.debug(f"Could not parse {path}: {e}")
-        return {}, saw_gap
+        if tree is COLLECTION_GAP:
+            return {}, True
+        path = tree.match(_CITATION_PATHS)
+        if path is None:
+            return {}, False
+        text = await self.forge.file_content(client, ref, path)
+        if text is COLLECTION_GAP:
+            return {}, True
+        if text is None:
+            return {}, False
+        try:
+            parsed = yaml.safe_load(text)
+            if isinstance(parsed, dict):
+                return parsed, False
+        except Exception as e:
+            logger.debug(f"Could not parse {path}: {e}")
+        return {}, False
 
-    async def _any_exists(
-        self, client: httpx.AsyncClient, ref: str, paths: List[str]
-    ) -> tuple:
+    def _any_exists(self, tree, paths: List[str]) -> tuple:
         """Returns (found, saw_gap)."""
-        saw_gap = False
-        for path in paths:
-            result = await self.forge.file_exists(client, ref, path)
-            if result is COLLECTION_GAP:
-                saw_gap = True
-                continue
-            if result:
-                return True, saw_gap
-        return False, saw_gap
+        if tree is COLLECTION_GAP:
+            return False, True
+        return bool(tree.match(paths)), False
 
     async def _has_releases(
         self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
-        """Returns (has_releases, saw_gap)."""
+        """Returns (has_releases, saw_gap). Version tags count too: many
+        projects publish versions as tags without release objects."""
         data = await self.forge.releases(client, ref, per_page=1)
         if data is COLLECTION_GAP:
             return False, True
-        return bool(data), False
+        if data:
+            return True, False
+        tags = await self.forge.tags(client, ref, per_page=20)
+        if tags is COLLECTION_GAP:
+            return False, True
+        return any(re.search(r"\d+\.\d+", t.get("name", "")) for t in tags or []
+                   if isinstance(t, dict)), False
 
     # ---------------------------------------------------------------- analyze
 
     def _analyze_license_text(
-        self, license_data: Dict[str, Any], saw_gap: bool = False
+        self, license_data: Dict[str, Any], saw_gap: bool = False, declared: Any = None,
     ) -> Dict[str, Any]:
-        """Recover a license family the API could not name, and flag extra terms."""
+        """Recover a license family the API could not name, and flag extra terms.
+
+        Tried in order of how directly the evidence names the licence: a
+        licence named in its own text, then the standard clauses reproduced
+        without a name, then the SPDX id the project declares in CITATION.cff.
+        """
         spdx = license_data.get("spdx_id")
         text = license_data.get("text") or ""
         classified = spdx not in _UNCLASSIFIED
 
-        resolved = None
-        if not classified and text:
-            for name, pattern in _LICENSE_TEXT_PATTERNS:
-                if re.search(pattern, text, re.IGNORECASE):
-                    resolved = name
-                    break
+        resolved, resolved_via = None, None
+        if not classified:
+            if text:
+                resolved = self._license_named_in_text(text)
+                resolved_via = "text" if resolved else None
+            if not resolved and text:
+                resolved = self._license_from_clauses(text)
+                resolved_via = "clauses" if resolved else None
+            if not resolved:
+                resolved = self._license_from_declaration(declared)
+                resolved_via = "citation" if resolved else None
 
         markers = [
             label for label, pattern in _EXCEPTION_MARKERS
@@ -221,6 +291,7 @@ class FairLicensingCollector:
             "api_spdx": spdx,
             "api_classified": classified,
             "resolved_from_text": resolved,
+            "resolved_via": resolved_via,
             "exception_markers": markers,
             "identified": identified,
         }
@@ -230,6 +301,96 @@ class FairLicensingCollector:
         if not identified and saw_gap:
             result["not_collected"] = True
         return result
+
+    @staticmethod
+    def _license_named_in_text(text: str) -> Optional[str]:
+        for name, pattern in _LICENSE_TEXT_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                return name
+        return None
+
+    @staticmethod
+    def _license_from_clauses(text: str) -> Optional[str]:
+        flat = re.sub(r"\s+", " ", text).lower()
+        # "(1)" / "1." / "*" list markers sit between clauses, not inside
+        # them, so collapsing whitespace is enough for the phrases to match.
+        for name, phrases in _LICENSE_CLAUSE_FINGERPRINTS:
+            if all(re.search(p, flat) for p in phrases):
+                return name
+        return None
+
+    @staticmethod
+    def _license_from_declaration(declared: Any) -> Optional[str]:
+        # CITATION.cff allows a single id or a list; a list is an OR of
+        # licences, so any recognised entry is enough.
+        ids = declared if isinstance(declared, list) else [declared]
+        for spdx_id in ids:
+            if not isinstance(spdx_id, str):
+                continue
+            for pattern, family in _DECLARED_SPDX_FAMILIES:
+                if re.fullmatch(pattern, spdx_id.strip(), re.IGNORECASE):
+                    return family
+        return None
+
+    async def _get_bibtex_citation(
+        self, client: httpx.AsyncClient, ref: str, tree
+    ) -> Dict[str, Any]:
+        """Citation fields carried by BibTeX in a root-level citation file,
+        or None if there's no such file or it has no BibTeX entries.
+
+        Scored separately from CITATION.cff and not fed into FAIR4RS: the
+        entries usually cite papers, so their DOI identifies a paper rather
+        than the software.
+        """
+        paths = [p for p in tree.find(_BIBTEX_CITATION_FILE) if "/" not in p]
+        for path in paths:
+            text = await self.forge.file_content(client, ref, path)
+            if not text:
+                continue
+            if not _BIBTEX_ENTRY.search(text):
+                continue
+            return {"path": path, **self._analyze_bibtex(text, self._repo_ref(ref))}
+        return await self._readme_bibtex(client, ref)
+
+    def _repo_ref(self, ref: str) -> str:
+        """"host/owner/repo", as a BibTeX url field would contain it."""
+        return f"{self.forge.host}/{ref}".lower()
+
+    async def _readme_bibtex(self, client: httpx.AsyncClient, ref: str) -> Dict[str, Any]:
+        """BibTeX under the README's own citation heading ("Citation", "How to
+        cite", "Citing"), or None. Only that section is read: BibTeX elsewhere
+        in a README is usually related work, not how to cite this project."""
+        text = await self.forge.readme(client, ref)
+        if not text:
+            return None
+        m = _README_CITATION_HEADING.search(text)
+        if not m:
+            return None
+        section = text[m.end():]
+        nxt = re.search(r"^\s{0,3}#{1,6}\s", section, re.M)
+        section = section[:nxt.start()] if nxt else section
+        if not _BIBTEX_ENTRY.search(section):
+            return None
+        return {"path": "README citation section",
+                **self._analyze_bibtex(section, self._repo_ref(ref))}
+
+    @staticmethod
+    def _analyze_bibtex(text: str, repo_ref: str) -> Dict[str, Any]:
+        """Which _CITATION_FIELDS appear in any BibTeX entry. A url or
+        repository field counts as repository-code only if it points at
+        this repository."""
+        found = set()
+        for name, value in _BIBTEX_FIELD.findall(text):
+            name = name.lower()
+            if not value.strip():
+                continue
+            if name in ("url", "repository"):
+                if repo_ref in value.lower():
+                    found.add("repository-code")
+            else:
+                found.add(_BIBTEX_TO_CITATION_FIELD[name])
+        present = [f for f in _CITATION_FIELDS if f in found]
+        return {"present": present, "missing": [f for f in _CITATION_FIELDS if f not in found]}
 
     def _analyze_citation(
         self, citation: Dict[str, Any], saw_gap: bool = False
@@ -342,7 +503,7 @@ class FairLicensingCollector:
     # ---------------------------------------------------------------- scoring
 
     def _calculate_score(
-        self, exceptions: Dict, metadata: Dict, fair: Dict
+        self, exceptions: Dict, metadata: Dict, fair: Dict, bibtex: Dict = None
     ) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
 
@@ -363,8 +524,12 @@ class FairLicensingCollector:
         if exceptions.get("api_classified"):
             value = f"{exceptions['api_spdx']} recognised by the GitHub classifier"
         elif exceptions.get("resolved_from_text"):
+            source = {
+                "clauses": "licence clauses match",
+                "citation": "CITATION.cff declares",
+            }.get(exceptions.get("resolved_via"), "text identifies")
             value = (f"Reported as \"{exceptions.get('api_spdx') or 'none'}\"; "
-                     f"text identifies {exceptions['resolved_from_text']}")
+                     f"{source} {exceptions['resolved_from_text']}")
         else:
             value = "License could not be identified from the API or the text"
         exc_passing = exceptions.get("identified", False)
@@ -379,11 +544,18 @@ class FairLicensingCollector:
         sub["license_exception_handling"] = exc_entry
 
         present = metadata.get("present", [])
+        if metadata.get("exists"):
+            meta_value = f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present"
+        elif bibtex:
+            present = bibtex["present"]
+            meta_value = (f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present "
+                          f"(BibTeX in {bibtex['path']}; no CITATION.cff)")
+        else:
+            meta_value = "No CITATION.cff found"
         meta_passing = len(present) >= get_threshold("4.2.2", "FAIR Metadata Assessment")
         meta_entry: Dict[str, Any] = {
             "label": "FAIR Metadata Assessment",
-            "value": f"{len(present)}/{len(_CITATION_FIELDS)} citation fields present"
-                     if metadata.get("exists") else "No CITATION.cff found",
+            "value": meta_value,
             "detail": ", ".join(present) if present else None,
             "passing": meta_passing,
         }

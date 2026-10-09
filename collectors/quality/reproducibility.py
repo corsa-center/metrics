@@ -6,7 +6,8 @@ checking for:
   - Containers       : Dockerfile, docker-compose, Singularity / Apptainer
   - Dependency locks : pip lock files, Poetry, Conda-lock, Cargo, Go, etc.
   - FAIR4RS metadata : CITATION.cff, codemeta.json, .zenodo.json
-  - Semantic versioning: whether GitHub releases follow semver (x.y.z)
+  - Release versioning: whether GitHub releases follow semver (x.y.z) or
+                       calendar versioning (26.09, 2024.05)
 
 Semantic versioning is the one "Moderate" step — it requires a GitHub
 releases API call rather than a simple file-existence check.
@@ -16,14 +17,72 @@ import asyncio
 import httpx
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+import tomllib
+from typing import Any, Dict, List, Optional
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.quality.usability import readme_covers
+from collectors.ecosystem.base import (
+    COLLECTION_GAP, CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN, RepoTree, RetryingTransport,
+)
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
 _SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+
+# Calendar versioning (YY.MM or YYYY.MM, optional patch), which several CASS
+# projects release on -- AMReX tags 26.09 monthly on schedule. Strict
+# three-component semver read that as no versioning discipline at all.
+_CALVER_RE = re.compile(r"^v?(\d{2}|\d{4})\.(\d{1,2})(?:\.\d+)?(?:[-+].*)?$")
+
+# A compact all-numeric date tag (flang-compiler/flang: flang_20190329),
+# once the project-name prefix below has been stripped.
+_COMPACT_DATE_RE = re.compile(r"^\d{8}$")
+
+# Bare major.minor (OpenACCV-V: v3.0; CODARcode/Chimbuko: v7.0) -- a real,
+# deliberate versioning discipline, just without a patch component. Checked
+# last since it would also match the leading two components of a genuine
+# semver/calver tag if those didn't already match first.
+_MAJOR_MINOR_RE = re.compile(r"^\d+\.\d+$")
+
+# The version core of a tag: a run of digits and internal separators that
+# starts and ends on a digit (so a trailing non-numeric suffix like papi's
+# "-t" or "b2" pre-release marker is excluded), or a single digit run.
+_TAG_VERSION_CORE_RE = re.compile(r"\d[\d._-]*\d|\d+")
+
+
+def _normalize_tag(tag: str) -> str:
+    """Strip a project-name prefix and normalize hyphen/underscore-separated
+    numeric groups to dots, so a prefixed tag reads the same as a bare
+    version string.
+
+    A fixed list of exact-format regexes rejected any tag that wasn't
+    already bare digits-and-dots, which is the exception rather than the
+    rule in this portfolio: llvm tags llvmorg-23.1.1, Trilinos tags
+    trilinos-release-17-2-1 (hyphens as the version separator, not dots),
+    and papi tags papi-7-2-0-t (a trailing non-version suffix). All three
+    normalize to a recognizable scheme once the prefix is gone and hyphens
+    read as dots.
+    """
+    match = _TAG_VERSION_CORE_RE.search(tag)
+    if not match:
+        return tag
+    return re.sub(r"[-_]", ".", match.group(0))
+
+
+def _versioning_scheme(tag: str) -> Optional[str]:
+    """"semver", "calver", "major.minor", or None for a tag matching none."""
+    normalized = _normalize_tag(tag)
+    if _SEMVER_RE.match(normalized):
+        return "semver"
+    if _CALVER_RE.match(normalized):
+        return "calver"
+    if _COMPACT_DATE_RE.match(normalized):
+        return "calver"
+    if _MAJOR_MINOR_RE.match(normalized):
+        return "major.minor"
+    return None
+
 
 # File-presence categories: label -> candidate paths
 _FILE_CHECKS: Dict[str, Dict[str, List[str]]] = {
@@ -50,6 +109,7 @@ _FILE_CHECKS: Dict[str, Dict[str, List[str]]] = {
         "Cargo.lock": ["Cargo.lock"],
         "go.sum": ["go.sum"],
         "uv.lock / pdm.lock": ["uv.lock", "pdm.lock"],
+        "Other lockfile": ["Manifest.toml", "renv.lock", "pixi.lock"],
     },
     "fair4rs_metadata": {
         "CITATION.cff": ["CITATION.cff"],
@@ -77,6 +137,50 @@ _FILE_CHECKS: Dict[str, Dict[str, List[str]]] = {
         ],
     },
 }
+
+# Labels also searched across the whole tree when no candidate path matches.
+_TREE_PATTERNS = {
+    ("containers", "Dockerfile"): CONTAINER_FILE_PATTERNS["Docker"],
+    ("containers", "docker-compose"): CONTAINER_FILE_PATTERNS["docker-compose"],
+    ("containers", "Singularity / Apptainer"): CONTAINER_FILE_PATTERNS["Singularity / Apptainer"],
+    ("reproducibility_docs", "Environment specification"): ENVIRONMENT_SPEC_PATTERN,
+}
+
+# Dependency management shown by content rather than by a lockfile: a
+# manifest that constrains versions, or Dependabot keeping the software's own
+# dependencies current (not just CI actions or pre-commit hooks).
+_PEP508_VERSION = re.compile(r"(?:===?|>=|<=|~=|!=|<|>)\s*\d|\s@\s")
+_VERSION_SPEC = re.compile(r"^\s*(?:[<>=~^!]=?\s*)?\d")
+
+
+def _versioned_dependencies(name: str, text: str) -> bool:
+    """Whether a root manifest constrains any dependency's version."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return False
+    if name == "pyproject.toml":
+        # PEP 621 requirement strings ("numpy>=1.26"), and Poetry tables
+        # ({numpy = "^1.26"}); python itself isn't a dependency.
+        reqs = data.get("project", {}).get("dependencies", [])
+        if any(isinstance(r, str) and _PEP508_VERSION.search(r.split(";")[0]) for r in reqs):
+            return True
+        poetry = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
+        return any(k.lower() != "python" and _VERSION_SPEC.search(v if isinstance(v, str) else str(v.get("version", "")))
+                   for k, v in poetry.items() if isinstance(v, (str, dict)))
+    if name == "fpm.toml":
+        # A dependency pinned to a tag, revision or version.
+        return any(isinstance(v, dict) and ({"tag", "rev", "version"} & v.keys())
+                   for v in data.get("dependencies", {}).values())
+    if name == "Project.toml":
+        # Julia [compat] bounds other than julia itself.
+        return any(k != "julia" for k in data.get("compat", {}))
+    return False
+
+
+_VERSIONED_MANIFESTS = ["pyproject.toml", "fpm.toml", "Project.toml"]
+_DEPENDABOT_PATHS = [".github/dependabot.yml", ".github/dependabot.yaml"]
+_DEPENDABOT_CI_ONLY = {"github-actions", "pre-commit", "docker", "docker-compose", "devcontainers"}
 
 # Weights used to compute the overall percentage score.
 _WEIGHTS = {
@@ -106,12 +210,25 @@ class ReproducibilityCollector:
         logger.info(f"Collecting reproducibility metrics for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            file_results, semver = await asyncio.gather(
-                self._scan_files(client, ref),
+            tree, semver = await asyncio.gather(
+                RepoTree.fetch(client, self.forge, ref),
                 self._check_semantic_versioning(client, ref),
             )
-
-        categories = {**file_results, "semantic_versioning": semver}
+            categories = {**self._scan_files(tree), "semantic_versioning": semver}
+            pinning = categories["dependency_pinning"]
+            if tree is not COLLECTION_GAP and not pinning["found"]:
+                for label, path in await self._managed_dependencies(client, ref, tree):
+                    pinning["found"].append(label)
+                    pinning["details"][label] = {"exists": True, "file": path, "url": tree.url_for(path)}
+            docs = categories["reproducibility_docs"]
+            if tree is not COLLECTION_GAP and "Install / build guide" in docs["missing"]:
+                readme = await self._readme_install_section(client, ref)
+                if readme:
+                    docs["missing"].remove("Install / build guide")
+                    docs["found"].append("Install / build guide")
+                    docs["details"]["Install / build guide"] = {"exists": True, **readme}
+                    docs["count_found"] = len(docs["found"])
+                    docs["percentage"] = round(len(docs["found"]) / docs["count_total"] * 100, 1)
         overall = self._compute_overall(categories)
 
         return {
@@ -131,9 +248,14 @@ class ReproducibilityCollector:
     # File scanning                                                        #
     # ------------------------------------------------------------------ #
 
-    async def _scan_files(
-        self, client: httpx.AsyncClient, ref: str
-    ) -> Dict[str, Any]:
+    def _scan_files(self, tree) -> Dict[str, Any]:
+        """Resolved against a RepoTree (or COLLECTION_GAP) rather than probed
+        one literal path at a time -- see METRIC_BLIND_SPOTS.md class F2.
+        A candidate list can only match spellings someone thought to write
+        down; matching against the whole tree, case-insensitively, catches
+        e.g. AMReX's GNUmakefile.in and the 23/20 portfolio repos whose
+        dependency-pinning/container files sit at an unenumerated path.
+        """
         results: Dict[str, Any] = {}
 
         for category, items in _FILE_CHECKS.items():
@@ -142,33 +264,25 @@ class ReproducibilityCollector:
             not_collected: List[str] = []
             details: Dict[str, Any] = {}
 
-            async def check_item(label: str, paths: List[str]) -> Tuple[str, str, Optional[str], bool]:
-                saw_gap = False
-                for path in paths:
-                    html_url = await self.forge.file_exists(client, ref, path)
-                    if html_url is COLLECTION_GAP:
-                        saw_gap = True
-                        continue
-                    if html_url:
-                        return label, path, html_url, saw_gap
-                return label, paths[0], None, saw_gap
-
-            hits = await asyncio.gather(
-                *[check_item(label, paths) for label, paths in items.items()]
-            )
-
-            for label, matched_path, html_url, saw_gap in hits:
-                if html_url:
+            for label, paths in items.items():
+                if tree is COLLECTION_GAP:
+                    not_collected.append(label)
+                    details[label] = {"not_collected": True}
+                    continue
+                matched_path = tree.match(paths)
+                url = tree.match_url(paths) if matched_path else None
+                pattern = _TREE_PATTERNS.get((category, label))
+                if not matched_path and pattern:
+                    matched_path = tree.find_owned(pattern)
+                    url = tree.url_for(matched_path) if matched_path else None
+                if matched_path:
                     found.append(label)
                     details[label] = {
                         "exists": True,
                         "file": matched_path,
-                        "url": html_url,
+                        "url": url,
                     }
                     logger.debug(f"  {category}/{label}: {matched_path}")
-                elif saw_gap:
-                    not_collected.append(label)
-                    details[label] = {"not_collected": True}
                 else:
                     missing.append(label)
                     details[label] = {"exists": False}
@@ -185,6 +299,43 @@ class ReproducibilityCollector:
             }
 
         return results
+
+    async def _managed_dependencies(
+        self, client: httpx.AsyncClient, ref: str, tree
+    ) -> List[tuple]:
+        """(label, path) for root manifests that constrain dependency
+        versions, and for Dependabot configured for the software's own
+        package ecosystem."""
+        found = []
+        for name in _VERSIONED_MANIFESTS:
+            path = tree.match([name])
+            if path:
+                text = await self._file_text(client, ref, path)
+                if text and _versioned_dependencies(name, text):
+                    found.append(("Versioned dependency manifest", path))
+                    break
+        path = tree.match(_DEPENDABOT_PATHS)
+        if path:
+            text = await self._file_text(client, ref, path) or ""
+            ecosystems = set(re.findall(r"package-ecosystem:\s*[\"']?([\w-]+)", text))
+            if ecosystems - _DEPENDABOT_CI_ONLY:
+                found.append(("Dependabot dependency updates", path))
+        return found
+
+    async def _file_text(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
+        text = await self.forge.file_content(client, ref, path)
+        return text or None
+
+    async def _readme_install_section(
+        self, client: httpx.AsyncClient, ref: str
+    ) -> Optional[Dict[str, str]]:
+        """The README's installation section, if it has one: build
+        instructions often live there rather than in a separate INSTALL file."""
+        text = await self.forge.readme(client, ref)
+        if text and readme_covers(text, "Installation"):
+            return {"file": "README (installation section)",
+                    "url": f"https://{self.forge.host}/{ref}"}
+        return None
 
     # ------------------------------------------------------------------ #
     # Semantic versioning (GitHub releases API)                           #
@@ -205,15 +356,7 @@ class ReproducibilityCollector:
             return await self._check_tags(client, ref, sample)
 
         tags = [r.get("tag_name", "") for r in releases]
-        semver_tags = [t for t in tags if _SEMVER_RE.match(t)]
-        uses_semver = len(semver_tags) > 0
-
-        return {
-            "uses_semver": uses_semver,
-            "releases_checked": len(tags),
-            "semver_count": len(semver_tags),
-            "example_tags": tags[:3],
-        }
+        return self._summarize_tags(tags)
 
     async def _check_tags(
         self, client: httpx.AsyncClient, ref: str, sample: int
@@ -226,12 +369,22 @@ class ReproducibilityCollector:
             }
 
         tags = [t.get("name", "") for t in tags_data or []]
-        semver_tags = [t for t in tags if _SEMVER_RE.match(t)]
+        return self._summarize_tags(tags)
 
+    @staticmethod
+    def _summarize_tags(tags: List[str]) -> Dict[str, Any]:
+        """Whether the tags follow a recognized release-versioning scheme.
+
+        The `uses_semver`/`semver_count` keys are kept as-is for the
+        dashboard, but now count calendar versioning too; `scheme` says which
+        one was actually seen.
+        """
+        schemes = [s for s in (_versioning_scheme(t) for t in tags) if s]
         return {
-            "uses_semver": len(semver_tags) > 0,
+            "uses_semver": len(schemes) > 0,
             "releases_checked": len(tags),
-            "semver_count": len(semver_tags),
+            "semver_count": len(schemes),
+            "scheme": schemes[0] if schemes else None,
             "example_tags": tags[:3],
         }
 

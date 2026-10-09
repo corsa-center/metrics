@@ -4,8 +4,8 @@
 # Based on CASS Sustainability Metrics Report v3 (3 dimensions):
 #   4.1 Impact, 4.2 Ecosystem, 4.3 Quality
 
-# Dashboard catalog URL (served via GitHub Pages)
-dashboard_base_url: "https://corsa.center/dashboard"
+# Location of catalog
+catalog_url: "https://api.github.com/repos/corsa-center/metrics_data/contents/package_config"
 output_path: "./output"              # Local output directory (published to GitHub Pages)
 
 # Enable/disable CASS dimension collectors
@@ -33,13 +33,6 @@ ecosystem_collectors:
   collaboration: true       # 4.2.7 Ecosystem reach + 4.3.4 install paths
   funding: true             # 4.2.8 Financial + 4.2.9 Institutional Support
 
-# Per-project self-service metric control (docs/PROJECT_CONFIG.md). When
-# enabled, each package's own .corsa/metrics.yaml is fetched from its repo and
-# may narrow (never widen) the toggles above for that package only. Disabling
-# this only stops the fetch -- package_config/ overrides still apply.
-project_config:
-  enabled: true
-
 quality_collectors:
   test_coverage: true       # 4.3.1 Test Coverage Excellence (Codecov)
   static_analysis: true     # 4.3.1 Enhanced Security Analysis (CodeQL)
@@ -57,12 +50,11 @@ quality_collectors:
 api_credentials:
   github:
     token: ${GITHUB_TOKEN}  # Set via environment variable
-  # GitLab, keyed by host. gitlab.com is recognized even without an entry
-  # here (an absent token still works for public repos); a self-hosted
-  # instance (e.g. gitlab.kitware.com) has no way to self-identify as
-  # GitLab from its hostname alone, so it must be listed here explicitly --
-  # being listed is itself what makes orchestrator.py._resolve_forge treat
-  # that host as GitLab, not a separate allowlist. See docs/PROJECT_CONFIG.md.
+  # GitLab tokens, keyed by host. A package's repo_type: gitlab (see
+  # docs/PACKAGE_CONFIG.md) works on any host without an entry here -- an
+  # absent token still works for public projects, at GitLab's lower
+  # unauthenticated rate limit. For a package with no repo_type, being
+  # listed here is also what makes a self-hosted host count as GitLab.
   gitlab:
     gitlab.com:
       token: ${GITLAB_TOKEN}

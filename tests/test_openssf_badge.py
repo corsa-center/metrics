@@ -1,40 +1,17 @@
 """Unit tests for OpenSSFBadgeCollector pure computation methods."""
 
-import asyncio
 from unittest.mock import patch
 
 import pytest
 
-from forge.base import COLLECTION_GAP
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
-
-
-class FakeForge:
-    """Minimal stand-in for GitHubForge/GitLabForge."""
-
-    host = "github.com"
-
-    def __init__(self):
-        self.file_results = {}
-
-    def extract_ref(self, repo_url):
-        return None if repo_url == "not-a-url" else "o/r"
-
-    async def file_exists(self, client, ref, path):
-        return self.file_results.get(path)
-
-    def get_timestamp(self):
-        return "2026-01-01T00:00:00+00:00"
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
-def forge():
-    return FakeForge()
-
-
-@pytest.fixture
-def collector(forge):
-    return OpenSSFBadgeCollector(forge)
+def collector():
+    return OpenSSFBadgeCollector(FakeForge())
 
 
 # ------------------------------------------------------------------ #
@@ -151,62 +128,83 @@ class TestCollectWithBadge:
 class TestScanFilesGapHandling:
     """The no-badge path is already an admitted proxy ("estimated": True),
     but a gap is a different kind of uncertainty than that estimate and
-    must not be silently folded into "missing".
+    must not be silently folded into "missing". _scan_files now takes a
+    RepoTree (or COLLECTION_GAP) directly -- see METRIC_BLIND_SPOTS.md
+    class F1.
     """
 
-    def _run(self, collector, forge, file_map, responses):
-        forge.file_results = responses
-        return asyncio.run(collector._scan_files(None, "o/r", file_map))
-
-    def test_gapped_criterion_is_not_collected_not_missing(self, collector, forge):
+    def test_gapped_tree_is_not_collected_not_missing(self, collector):
         file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
-        result = self._run(collector, forge, file_map, {"CODE_OF_CONDUCT.md": COLLECTION_GAP})
+        result = collector._scan_files(COLLECTION_GAP, file_map)
         assert result["missing"] == []
         assert result["not_collected"] == ["code_of_conduct"]
 
-    def test_confirmed_absent_is_still_a_real_miss(self, collector, forge):
+    def test_confirmed_absent_is_still_a_real_miss(self, collector):
         file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
-        result = self._run(collector, forge, file_map, {"CODE_OF_CONDUCT.md": None})
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        result = collector._scan_files(tree, file_map)
         assert result["missing"] == ["code_of_conduct"]
         assert result["not_collected"] == []
 
-    def test_all_gapped_reports_no_percentage(self, collector, forge):
+    def test_differently_cased_governance_doc_found(self, collector):
+        # AMReX-Codes/amrex ships GOVERNANCE.rst.
+        tree = RepoTree(FakeForge(), "o/r", ["GOVERNANCE.rst"], truncated=False)
+        result = collector._scan_files(tree, collector.GOVERNANCE_FILES)
+        assert "governance" in result["found"]
+
+    def test_all_gapped_reports_no_percentage(self, collector):
         file_map = {"a": ["A.md"], "b": ["B.md"]}
-        result = self._run(collector, forge, file_map, {"A.md": COLLECTION_GAP, "B.md": COLLECTION_GAP})
+        result = collector._scan_files(COLLECTION_GAP, file_map)
         assert result["percentage"] is None
         assert result["count_total"] == 0
 
-    def test_mixed_gap_and_confirmed_renormalizes_percentage(self, collector, forge):
-        file_map = {"found_one": ["F.md"], "gapped": ["G.md"]}
-        result = self._run(collector, forge, file_map, {"F.md": "http://x", "G.md": COLLECTION_GAP})
-        # gapped criterion excluded from the denominator entirely
-        assert result["count_total"] == 1
-        assert result["percentage"] == 100.0
+    def test_mixed_confirmed_and_missing_computes_percentage(self, collector):
+        file_map = {"found_one": ["F.md"], "missing_one": ["G.md"]}
+        tree = RepoTree(FakeForge(), "o/r", ["F.md"], truncated=False)
+        result = collector._scan_files(tree, file_map)
+        assert result["count_total"] == 2
+        assert result["percentage"] == 50.0
 
 
 class TestCollectWithoutBadgeGapHandling:
     def test_one_category_fully_gapped_renormalizes_overall(self, collector):
-        async def go():
-            async def fake_scan(client, ref, file_map):
-                if file_map is collector.GOVERNANCE_FILES:
-                    return {"percentage": None}  # totally gapped
-                return {"percentage": 100.0}
+        def fake_scan(tree, file_map):
+            if file_map is collector.GOVERNANCE_FILES:
+                return {"percentage": None}  # totally gapped
+            return {"percentage": 100.0}
 
-            with patch.object(collector, "_scan_files", side_effect=fake_scan):
-                return await collector._collect_without_badge(None, "Pkg", "o/r")
-
-        result = asyncio.run(go())
+        with patch.object(collector, "_scan_files", side_effect=fake_scan):
+            result = collector._collect_without_badge("Pkg", "o/r", None)
         # If the gap silently counted as 0%, this would be 60% (0.3+0.3 of 100).
         assert result["overall_score"]["percentage"] == 100.0
 
     def test_everything_gapped_reports_not_collected_status(self, collector):
-        async def go():
-            async def fake_scan(client, ref, file_map):
-                return {"percentage": None}
+        def fake_scan(tree, file_map):
+            return {"percentage": None}
 
-            with patch.object(collector, "_scan_files", side_effect=fake_scan):
-                return await collector._collect_without_badge(None, "Pkg", "o/r")
-
-        result = asyncio.run(go())
+        with patch.object(collector, "_scan_files", side_effect=fake_scan):
+            result = collector._collect_without_badge("Pkg", "o/r", None)
         assert result["overall_score"]["score"] is None
         assert result["overall_score"]["status"] == "not_collected"
+
+
+class TestUnstartedBadge:
+    def _collect(self, collector, badge_data):
+        import asyncio
+        from unittest.mock import AsyncMock
+        tree = RepoTree(FakeForge(), "o/r", ["CODE_OF_CONDUCT.md", "SECURITY.md"], truncated=False)
+        with patch.object(collector, "_search_badge", new=AsyncMock(return_value=badge_data)), \
+             patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)):
+            return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+
+    def test_zero_percent_badge_falls_back_to_repository_scan(self, collector):
+        # Registered but nothing answered: its criteria aren't "not met".
+        result = self._collect(collector, {"id": 14262, "badge_percentage_0": 0, "badge_level": "in_progress"})
+        assert result["assessment_method"] == "repository_scan"
+        assert result["governance_criteria"]["count_found"] >= 1
+        assert result["badge_status"]["level"] == "registered, not started"
+        assert result["badge_status"]["url"].endswith("/14262")
+
+    def test_started_badge_still_uses_the_badge(self, collector):
+        result = self._collect(collector, {"id": 7, "badge_percentage_0": 40, "badge_level": "in_progress"})
+        assert result["assessment_method"] == "openssf_badge_api"

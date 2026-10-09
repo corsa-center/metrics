@@ -173,3 +173,24 @@ class RetryingTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._wrapped.aclose()
+
+
+# A tag naming a version (v5.0.11, name-7-2-0, checkpoint.1.14.0), and the
+# pre-release suffixes that shouldn't count as a release on their own.
+_VERSION_TAG = re.compile(r"\d+[._-]\d+")
+# "<consumer>-YYYY-MM-DD" marks a snapshot known to work with another project
+# (e.g. "downstream-2026-03-21"), not a release.
+_SNAPSHOT_TAG = re.compile(r"^(?!release)[a-z][\w.]*[-_]\d{4}-\d{2}-\d{2}$", re.I)
+_PRE_RELEASE_TAG = re.compile(
+    r"(?<![a-z])(?:rc|alpha|beta|pre|dev)(?:[._-]?\d+)?(?![a-z])|\d(?:a|b)\d+", re.I)
+
+
+def is_release_tag(name: str) -> bool:
+    """Whether a tag name marks a real release: a version number that isn't
+    a pre-release or a dated compatibility snapshot. Shared by every forge's
+    version_tags() so GitHub and GitLab count releases the same way."""
+    return bool(
+        _VERSION_TAG.search(name)
+        and not _PRE_RELEASE_TAG.search(name)
+        and not _SNAPSHOT_TAG.search(name)
+    )

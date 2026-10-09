@@ -6,7 +6,7 @@ Provides access to comprehensive academic metadata from OpenAlex.
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import httpx
 from integrations.base import BaseAPIClient
 
@@ -82,6 +82,41 @@ class OpenAlexClient(BaseAPIClient):
         except Exception as e:
             self.logger.error(f"Error fetching OpenAlex data: {e}")
             return {"cited_by_count": 0}
+
+    async def count_citing_works(self, dois: List[str]) -> Optional[int]:
+        """Number of distinct works citing any of the given DOIs.
+
+        A project usually asks to be cited through several records (a JOSS
+        paper, a later journal paper, the Zenodo software DOI), and a paper
+        often cites more than one of them, so summing per-DOI counts would
+        double count. OpenAlex's `cites:` filter ORs work ids and counts
+        each citing work once.
+
+        Returns None if no DOI resolved or a request failed, so the caller
+        can fall back rather than read a failure as zero citations.
+        """
+        ids = []
+        for doi in dois:
+            work = await self.get_work_citations(doi)
+            if work.get("openalex_id"):
+                ids.append(work["openalex_id"].rsplit("/", 1)[-1])
+        if not ids:
+            return None
+
+        await self._check_rate_limit()
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.BASE_URL}/works",
+                    headers=self.headers,
+                    params={"filter": f"cites:{'|'.join(ids)}", "per-page": 1},
+                )
+                if response.status_code == 200:
+                    return response.json().get("meta", {}).get("count")
+                self.logger.warning(f"OpenAlex cites: query failed: {response.status_code}")
+        except Exception as e:
+            self.logger.error(f"Error counting citing works: {e}")
+        return None
 
     async def search_works(self, query: str, limit: int = 10) -> list:
         """

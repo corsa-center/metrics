@@ -45,7 +45,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
-from forge.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP, is_release_tag
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -749,6 +749,39 @@ class GitLabForge(Forge):
         (percentages, not byte counts -- see GitHubForge's caveat)."""
         return await self._gitlab_get(client, f"/projects/{self._project_path(ref)}/languages")
 
+    def raw_url(self, ref: str, path: str) -> str:
+        return f"https://{self.host}/{ref}/-/raw/HEAD/{path}"
+
+    def web_url(self, ref: str, path: str, kind: str = "blob") -> str:
+        return f"https://{self.host}/{ref}/-/{kind}/HEAD/{path}"
+
+    async def version_tags(self, client: httpx.AsyncClient, ref: str) -> List[Dict[str, Any]]:
+        """See Forge.version_tags. GitLab's Tags API lists tags with dates
+        directly (annotated-tag `created_at`, else the commit's date), so no
+        token is needed, unlike GitHub's GraphQL route."""
+        data = await self._gitlab_get(
+            client, f"/projects/{self._project_path(ref)}/repository/tags",
+            params={"order_by": "updated", "sort": "desc", "per_page": 50},
+        )
+        if not isinstance(data, list):
+            return []
+        tags = []
+        for t in data:
+            name = t.get("name", "")
+            if not is_release_tag(name):
+                continue
+            commit = t.get("commit") or {}
+            date = t.get("created_at") or commit.get("committed_date") or commit.get("created_at")
+            if date:
+                tags.append({"tag_name": name, "published_at": date, "from_tag": True})
+        return tags
+
+    async def wiki_has_content(self, client: httpx.AsyncClient, ref: str) -> bool:
+        """See Forge.wiki_has_content. The wikis endpoint lists pages; it
+        403s/404s when the wiki feature is disabled."""
+        data = await self._gitlab_get(client, f"/projects/{self._project_path(ref)}/wikis")
+        return isinstance(data, list) and len(data) > 0
+
     def pages_url(self, ref: str) -> str:
         """Best-effort Pages URL -- see module docstring's caveat about
         self-hosted instances. GitLab's documented pattern for a
@@ -846,6 +879,64 @@ class GitLabForge(Forge):
         )
         if data is COLLECTION_GAP or data is None:
             return data
+        members = await self._project_members(client, ref)
+        return [self._normalize_issue_like(i, members) for i in data]
+
+    async def issues_opened_between(
+        self, client: httpx.AsyncClient, ref: str, start: str, end: str, *, per_page: int = 100
+    ) -> Optional[Dict[str, Any]]:
+        """See Forge.issues_opened_between. The total comes from GitLab's
+        X-Total header, which GitLab omits for very large result sets; the
+        answer is then unknown (None) rather than a page-sized undercount."""
+        url = f"{self.api_base}/projects/{self._project_path(ref)}/issues"
+        params = {
+            "created_after": f"{start}T00:00:00Z", "created_before": f"{end}T23:59:59Z",
+            "order_by": "created_at", "sort": "desc", "per_page": per_page,
+        }
+        try:
+            resp = await client.get(url, headers=self.headers, params=params)
+        except Exception as e:
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
+            return None
+        if resp.status_code != 200 or not resp.headers.get("X-Total"):
+            return None
+        members = await self._project_members(client, ref)
+        return {
+            "total_count": int(resp.headers["X-Total"]),
+            "items": [self._normalize_issue_like(i, members) for i in resp.json()],
+        }
+
+    async def issues_closed_between(
+        self, client: httpx.AsyncClient, ref: str, start: str, end: str
+    ) -> Optional[int]:
+        """Not available: GitLab's issues API can't filter by close date, so
+        this is always None (not collected), never a guessed count."""
+        return None
+
+    async def labels(
+        self, client: httpx.AsyncClient, ref: str, *, page: int = 1, per_page: int = 100
+    ):
+        """See Forge.labels. Includes labels inherited from parent groups."""
+        data = await self._gitlab_get(
+            client, f"/projects/{self._project_path(ref)}/labels",
+            params={"per_page": per_page, "page": page, "include_ancestor_groups": "true"},
+        )
+        if data is COLLECTION_GAP or data is None:
+            return data
+        return [{"name": l.get("name", "")} for l in data if isinstance(l, dict)]
+
+    async def recent_issues(
+        self, client: httpx.AsyncClient, ref: str, since: str, *, page: int = 1, per_page: int = 100
+    ):
+        """See Forge.recent_issues. GitLab's issues endpoint never returns
+        merge requests and filters by creation date server-side."""
+        data = await self._gitlab_get(
+            client, f"/projects/{self._project_path(ref)}/issues",
+            params={"created_after": f"{since}T00:00:00Z", "order_by": "created_at",
+                    "sort": "desc", "per_page": per_page, "page": page},
+        )
+        if not isinstance(data, list):
+            return None
         members = await self._project_members(client, ref)
         return [self._normalize_issue_like(i, members) for i in data]
 

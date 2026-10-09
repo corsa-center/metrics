@@ -13,25 +13,65 @@ handled elsewhere (ci_cd.py and the OpenSSF badge respectively).
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Any, Dict, List
 
 import httpx
 
-from forge.base import COLLECTION_GAP, RetryingTransport
+from collectors.ecosystem.base import (
+    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
+)
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
 # Test layout and framework configuration, grouped so any variant counts once.
+# Matched case-insensitively against a RepoTree (see base.py), so a single
+# casing per candidate is enough -- AMReX-Codes/amrex's top-level "Tests"
+# and superlu's "TESTING" both match "tests"/"testing" without every casing
+# enumerated here (METRIC_BLIND_SPOTS.md class F1).
 _TESTING_PATHS = {
     "Test suite directory": ["test", "tests", "testing", "src/test"],
-    "CTest / CMake testing": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
-    "pytest configuration": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
-    "Test framework vendored": [
+    "Build-system test target": ["CTestConfig.cmake", "cmake/CTestConfig.cmake"],
+    "pytest": ["pytest.ini", "tox.ini", "conftest.py", "setup.cfg"],
+    "Unit-test framework": [
         "test/googletest", "extern/googletest", "third_party/googletest",
         "test/catch2", "extern/Catch2",
     ],
+}
+
+# Most projects declare testing inside a build or config file rather than
+# with a dedicated one, so path matching alone found only SUNDIALS's test/
+# directory (1/4) although it runs CTest (`include(CTest)` in
+# cmake/SundialsSetupTesting.cmake), pytest (`[tool.pytest.ini_options]` in
+# pyproject.toml) and GoogleTest (FetchContent). These labels fall back to
+# the tree and then to the contents of a few build/config files.
+_FRAMEWORK_DIR = r"(?:^|/)(?:googletest|gtest|catch2?|doctest|cmocka|pfunit)(?:/|$)"
+_CONFTEST = r"(?:^|/)conftest\.py$"
+_NESTED_TEST_DIR = r"(?:^|/)(?:tests?|testing|unit_?tests?)/"
+_CONTENT_MARKERS = {
+    # CTest, or an automake check target.
+    "Build-system test target": re.compile(
+        r"^\s*(?:enable_testing\s*\(|include\s*\(\s*CTest\b|(?-i:TESTS)\s*\+?=|check-local\s*:)", re.M | re.I),
+    "pytest": re.compile(r"^\[tool(?:\.|:)pytest", re.M),
+    "Unit-test framework": re.compile(
+        r"FetchContent_Declare\s*\(\s*(?:googletest|catch2|doctest)\b"
+        r"|find_package\s*\(\s*(?:GTest|Catch2|doctest)\b",
+        re.I,
+    ),
+}
+# CMake modules whose name mentions testing, read after the root CMakeLists.
+_TEST_CMAKE_FILE = r"(?:^|/)[^/]*test[^/]*\.cmake$"
+_MAX_TEST_CMAKE_FILES = 3
+_CONFIG_FILES = ["CMakeLists.txt", "pyproject.toml", "setup.cfg", "Makefile.am"]
+# Test runners a project's CI invokes: evidence of the framework in use even
+# where no config file declares it (a CMake helper module calling
+# enable_testing, pytest run with defaults).
+_CI_FILES = r"^(?:\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.ya?ml|\.gitlab/.+\.ya?ml|azure-pipelines\.ya?ml)$"
+_MAX_CI_FILES = 10
+_CI_TEST_RUNNERS = {
+    "Build-system test target": re.compile(r"\bctest\b|\bmake\s+(?:-\S+\s+)*(?:check|test)\b|\bfpm\s+test\b", re.I),
+    "pytest": re.compile(r"\bpytest\b(?![-_.])", re.I),
 }
 
 # Tooling that enforces consistency without a human in the loop.
@@ -48,6 +88,30 @@ _TOOLING_PATHS = {
 
 # Tooling groups whose paths also include the forge's platform_paths(kind).
 _PLATFORM_PATH_KINDS = {"Dependency automation": "dependency_automation"}
+
+# Formatter and linter configs kept anywhere in the project's own tree (a
+# component's src/.clang-format, a subproject's .clang-tidy), in more tools
+# than the root list names.
+_TOOLING_TREE = {
+    # A git hook committed to the repository (installed with core.hooksPath
+    # or a setup script), or husky's.
+    "Pre-commit hooks": r"(?:^|/)(?:\.?githooks|\.husky|hooks)/pre-commit$",
+    "Code formatter config": (
+        r"(?:^|/)(?:[._]clang-format|\.cmake-format(?:\.ya?ml|\.json|\.py)?|\.gersemirc"
+        r"|\.fprettify\.rc|\.style\.yapf|\.prettierrc[\w.]*|\.?rustfmt\.toml|\.JuliaFormatter\.toml"
+        r"|[\w.-]*\.?astylerc|uncrustify[\w.-]*\.cfg)$"
+    ),
+    "Linter config": (
+        r"(?:^|/)(?:\.clang-tidy|\.flake8|\.?pylintrc|\.?ruff\.toml|\.?mypy\.ini"
+        r"|\.eslintrc[\w.]*|\.lintr|CPPLINT\.cfg|\.cppcheck)$"
+    ),
+}
+# The same tools configured in a Python project's shared config files.
+_TOOLING_SECTIONS = {
+    "Code formatter config": re.compile(r"^\[tool\.(?:black|isort|yapf|ruff\.format)\]", re.M),
+    "Linter config": re.compile(r"^\[(?:tool\.(?:ruff|pylint|mypy|flake8)|flake8|mypy|pylint)[\].]", re.M),
+}
+_TOOLING_CONFIG_FILES = ["pyproject.toml", "setup.cfg", "tox.ini"]
 
 # How many recently-closed PRs to sample for review coverage.
 _PR_SAMPLE_SIZE = 50
@@ -69,20 +133,26 @@ class DevToolingCollector:
         logger.info(f"Collecting development tooling metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            testing, tooling, review = await asyncio.gather(
-                self._scan(client, ref, _TESTING_PATHS),
-                self._scan(client, ref, _TOOLING_PATHS),
+            tree, review = await asyncio.gather(
+                RepoTree.fetch(client, self.forge, ref),
                 self._analyze_review_coverage(client, ref),
                 return_exceptions=True,
             )
 
-        empty_scan = {"found": [], "missing": [], "not_collected": [], "details": {}}
-        if isinstance(testing, Exception):
-            logger.warning(f"COLLECTION-GAP category=testing reason=exception:{testing!r}")
-            testing = empty_scan
-        if isinstance(tooling, Exception):
-            logger.warning(f"COLLECTION-GAP category=tooling reason=exception:{tooling!r}")
-            tooling = empty_scan
+        if isinstance(tree, Exception):
+            logger.warning(f"COLLECTION-GAP category=testing,tooling reason=exception:{tree!r}")
+            tree = COLLECTION_GAP
+        testing = self._scan(tree, _TESTING_PATHS)
+        if tree is not COLLECTION_GAP and testing["missing"]:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                testing = await self._refine_testing(client, ref, tree, testing)
+        tooling = self._scan(tree, {
+            label: paths + self.forge.platform_paths(_PLATFORM_PATH_KINDS.get(label, ""))
+            for label, paths in _TOOLING_PATHS.items()
+        })
+        if tree is not COLLECTION_GAP and any(l in tooling["missing"] for l in _TOOLING_TREE):
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                tooling = await self._refine_tooling(client, ref, tree, tooling)
         if isinstance(review, Exception):
             logger.warning(f"COLLECTION-GAP category=code_review reason=exception:{review!r}")
             review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
@@ -97,38 +167,131 @@ class DevToolingCollector:
             "overall_score": self._calculate_score(testing, tooling, review),
         }
 
-    async def _scan(
-        self, client: httpx.AsyncClient, ref: str, groups: Dict[str, List[str]]
-    ) -> Dict[str, Any]:
-        """Check each group, recording the first matching path."""
-
-        async def check(label: str, paths: List[str]) -> Tuple[str, Optional[str], bool]:
-            saw_gap = False
-            for path in paths:
-                url = await self.forge.file_exists(client, ref, path)
-                if url is COLLECTION_GAP:
-                    saw_gap = True
-                    continue
-                if url:
-                    return label, url, saw_gap
-            return label, None, saw_gap
-
-        results = await asyncio.gather(*[
-            check(l, p + self.forge.platform_paths(_PLATFORM_PATH_KINDS.get(l, "")))
-            for l, p in groups.items()
-        ])
+    def _scan(self, tree, groups: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Check each group against a RepoTree (or COLLECTION_GAP), recording
+        the first matching path -- case-insensitively, and as either a file
+        or a directory, since candidates like "test/googletest" name a
+        vendored subdirectory (METRIC_BLIND_SPOTS.md class F1).
+        """
         found, missing, not_collected, details = [], [], [], {}
-        for label, url, saw_gap in results:
+        for label, paths in groups.items():
+            if tree is COLLECTION_GAP:
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+                continue
+            url = tree.match_url(paths)
             if url:
                 found.append(label)
                 details[label] = {"exists": True, "url": url}
-            elif saw_gap:
-                not_collected.append(label)
-                details[label] = {"not_collected": True}
             else:
                 missing.append(label)
                 details[label] = {"exists": False}
         return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+
+    async def _refine_testing(
+        self, client: httpx.AsyncClient, ref: str, tree, testing: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Resolve testing labels the fixed paths missed, from the tree and
+        then from build/config file contents. A label still missing after a
+        read gapped is recorded as not collected rather than absent."""
+        found, missing = list(testing["found"]), list(testing["missing"])
+        not_collected, details = list(testing["not_collected"]), dict(testing["details"])
+
+        def mark(label: str, path: str):
+            missing.remove(label)
+            found.append(label)
+            details[label] = {"exists": True, "url": tree.url_for(path), "file": path}
+
+        # Tree-only evidence first; a vendored copy of a test framework is
+        # itself the signal, so that one isn't restricted to owned paths.
+        if "Unit-test framework" in missing:
+            dirs = {p[:m.end()].rstrip("/") for p in tree.find(_FRAMEWORK_DIR)
+                    if (m := re.search(_FRAMEWORK_DIR, p, re.I))}
+            if dirs:
+                mark("Unit-test framework", min(dirs, key=lambda p: (p.count("/"), p)))
+        if "Test suite directory" in missing:
+            # A suite kept beside the package it tests rather than at the root.
+            # Hidden trees (.github/, .agents/) hold tooling, not the suite.
+            hits = [p for p in tree.find(_NESTED_TEST_DIR)
+                    if not _VENDORED_DIR.search(p) and not re.search(r"(?:^|/)\.", p)]
+            if hits:
+                path = min(hits, key=lambda p: (p.count("/"), p))
+                m = re.search(_NESTED_TEST_DIR, path, re.I)
+                mark("Test suite directory", path[:m.end()].rstrip("/"))
+        if "pytest" in missing:
+            path = tree.find_owned(_CONFTEST)
+            if path:
+                mark("pytest", path)
+        if "Build-system test target" in missing:
+            # fpm builds and runs everything under test/ with `fpm test`.
+            fpm = tree.match(["fpm.toml"])
+            if fpm and tree.has_dir("test"):
+                mark("Build-system test target", fpm)
+
+        wanted = [label for label in list(_CONTENT_MARKERS) + list(_CI_TEST_RUNNERS)
+                  if label in missing]
+        wanted = list(dict.fromkeys(wanted))
+        if not wanted:
+            return {**testing, "found": found, "missing": missing, "details": details}
+
+        cmake_modules = sorted(
+            (p for p in tree.find(_TEST_CMAKE_FILE) if not _VENDORED_DIR.search(p)),
+            key=lambda p: (p.count("/"), p),
+        )[:_MAX_TEST_CMAKE_FILES]
+        paths = [p for p in (tree.match([c]) for c in _CONFIG_FILES) if p] + cmake_modules
+        ci_paths = tree.find(_CI_FILES)[:_MAX_CI_FILES]
+
+        async def read(path: str):
+            text = await self.forge.file_content(client, ref, path)
+            if text is COLLECTION_GAP:
+                return COLLECTION_GAP
+            return text or ""
+
+        texts = await asyncio.gather(*[read(p) for p in paths + ci_paths])
+        for label in wanted:
+            for i, (path, text) in enumerate(zip(paths + ci_paths, texts)):
+                marker = _CONTENT_MARKERS.get(label) if i < len(paths) else _CI_TEST_RUNNERS.get(label)
+                if i >= len(paths) and text and text is not COLLECTION_GAP:
+                    text = re.sub(r"(?m)^\s*#.*$", "", text)  # a comment isn't a step
+                if text and text is not COLLECTION_GAP and marker and marker.search(text):
+                    mark(label, path)
+                    break
+        if any(t is COLLECTION_GAP for t in texts):
+            for label in [l for l in wanted if l in missing]:
+                missing.remove(label)
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+
+    async def _refine_tooling(
+        self, client: httpx.AsyncClient, ref: str, tree, tooling: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Formatter and linter configs outside the root list: anywhere in
+        the project's own tree, then as sections of root Python config files."""
+        found, missing, details = list(tooling["found"]), list(tooling["missing"]), dict(tooling["details"])
+
+        def mark(label: str, path: str):
+            missing.remove(label)
+            found.append(label)
+            details[label] = {"exists": True, "url": tree.url_for(path), "file": path}
+
+        for label, pattern in _TOOLING_TREE.items():
+            if label in missing:
+                path = tree.find_owned(pattern)
+                if path:
+                    mark(label, path)
+        wanted = [l for l in _TOOLING_SECTIONS if l in missing]
+        for path in [p for p in (tree.match([c]) for c in _TOOLING_CONFIG_FILES) if p]:
+            if not wanted:
+                break
+            text = await self.forge.file_content(client, ref, path)
+            if not text:
+                continue
+            for label in list(wanted):
+                if _TOOLING_SECTIONS[label].search(text):
+                    mark(label, path)
+                    wanted.remove(label)
+        return {**tooling, "found": found, "missing": missing, "details": details}
 
     async def _analyze_review_coverage(
         self, client: httpx.AsyncClient, ref: str
@@ -196,6 +359,10 @@ class DevToolingCollector:
         }
         if review.get("not_collected"):
             review_entry["not_collected"] = True
+        elif cov is None:
+            # Review coverage of zero pull requests is undefined, and the
+            # project may review changes somewhere other than GitHub.
+            review_entry.update(value="No merged pull requests to sample", unmeasured=True)
         sub["code_review_quality"] = review_entry
 
         tool_found = tooling.get("found", [])
@@ -210,7 +377,7 @@ class DevToolingCollector:
             tooling_entry["not_collected"] = True
         sub["dev_tool_integration"] = tooling_entry
 
-        scorable = {k: v for k, v in sub.items() if not v.get("not_collected")}
+        scorable = {k: v for k, v in sub.items() if not (v.get("not_collected") or v.get("unmeasured"))}
         score = sum(1 for s in scorable.values() if s["passing"])
         max_score = len(scorable)
         if not max_score:
