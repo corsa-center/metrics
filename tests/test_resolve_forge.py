@@ -79,3 +79,63 @@ class TestRefExtractionRoundTrip:
         url = "https://gitlab.kitware.com/vtk/vtk-m"
         forge = orchestrator._resolve_forge(url)
         assert forge.extract_ref(url) == "vtk/vtk-m"
+
+
+class TestExplicitRepoType:
+    """package_config/<owner>_<repo>.yaml's repo_type overrides host inference."""
+
+    def test_gitlab_type_recognizes_unlisted_self_hosted_host(self, orchestrator):
+        forge = orchestrator._resolve_forge("https://gitlab.example.org/g/p", "gitlab")
+        assert isinstance(forge, GitLabForge)
+        assert forge.api_base == "https://gitlab.example.org/api/v4"
+        assert forge.extract_ref("https://gitlab.example.org/g/p") == "g/p"
+
+    def test_gitlab_type_uses_listed_host_token(self, orchestrator):
+        orchestrator.config.setdefault("api_credentials", {}).setdefault("gitlab", {})[
+            "gitlab.kitware.com"
+        ] = {"token": "tok"}
+        forge = orchestrator._resolve_forge("https://gitlab.kitware.com/vtk/vtk-m", "gitlab")
+        assert isinstance(forge, GitLabForge)
+        assert forge.headers["PRIVATE-TOKEN"] == "tok"
+
+    def test_github_type_on_github_com(self, orchestrator):
+        forge = orchestrator._resolve_forge("https://github.com/HDFGroup/hdf5", "github")
+        assert isinstance(forge, GitHubForge)
+
+    def test_github_type_on_other_host_is_refused(self, orchestrator):
+        assert orchestrator._resolve_forge("https://github.example.org/o/r", "github") is None
+
+    def test_unknown_type_is_refused(self, orchestrator):
+        assert orchestrator._resolve_forge("https://github.com/o/r", "bitbucket") is None
+
+    def test_gitlab_type_without_url_is_refused(self, orchestrator):
+        assert orchestrator._resolve_forge("", "gitlab") is None
+
+
+class TestForgeForPackage:
+    def test_reads_repo_type_from_attached_package_config(self, orchestrator):
+        package = {
+            "repository": "g/p",
+            "repo_url": "https://gitlab.example.org/g/p",
+            "package_config": {"repo_type": "gitlab"},
+        }
+        assert isinstance(orchestrator._forge_for_package(package), GitLabForge)
+
+    def test_without_repo_type_falls_back_to_host_inference(self, orchestrator):
+        package = {
+            "repository": "g/p",
+            "repo_url": "https://gitlab.example.org/g/p",
+            "package_config": {},
+        }
+        assert orchestrator._forge_for_package(package) is None
+
+
+class TestSanitizeRepoType:
+    def test_normalized_to_lowercase(self):
+        from orchestrator import _sanitize_metric_config
+        assert _sanitize_metric_config({"repo_type": " GitLab "})["repo_type"] == "gitlab"
+
+    @pytest.mark.parametrize("bad", [None, "", 3, ["gitlab"]])
+    def test_bad_values_dropped(self, bad):
+        from orchestrator import _sanitize_metric_config
+        assert "repo_type" not in _sanitize_metric_config({"repo_type": bad})

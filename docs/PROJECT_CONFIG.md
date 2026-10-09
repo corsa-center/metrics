@@ -62,6 +62,30 @@ operator has over a project's `collectors:` choice is the global kill switch
 below (`project_config.enabled: false`), which stops reading the project's
 file at all.
 
+## Code-hosting platform (`repo_type`)
+
+By default the platform is inferred from the repo URL's hostname: github.com
+is GitHub, gitlab.com and every host listed under `api_credentials.gitlab` in
+`config/orchestrator.yaml` are GitLab, and anything else is skipped.
+
+A maintainer can set it explicitly in `package_config/<owner>_<repo>.yaml`:
+
+```yaml
+package: vtk/vtk-m
+repo_type: gitlab   # github | gitlab
+```
+
+- **`gitlab`** uses the GitLab API on the repo URL's own host. This works for
+  a self-hosted instance even when it isn't listed under
+  `api_credentials.gitlab`. An unlisted host is queried without a token.
+- **`github`** is accepted only for github.com. GitHub Enterprise hosts are
+  skipped because the GitHub forge talks to api.github.com only.
+- Any other value is logged and the package is skipped.
+
+`repo_type` is read only from `package_config/`, never from the project's
+own `.corsa/metrics.yaml`. That file is fetched *through* the forge, so it
+can't be the thing that chooses the forge.
+
 ## Fails open
 
 If `.corsa/metrics.yaml` is missing, unreachable, not valid YAML, declares an

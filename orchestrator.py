@@ -30,6 +30,7 @@ import yaml
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.github import GitHubForge
+from forge.interface import Forge
 from forge.gitlab import GitLabForge
 
 # Setup logging
@@ -125,6 +126,12 @@ def _sanitize_metric_config(data: Dict) -> Dict:
         }
     else:
         result.pop("overrides", None)
+
+    repo_type = result.get("repo_type")
+    if isinstance(repo_type, str) and repo_type.strip():
+        result["repo_type"] = repo_type.strip().lower()
+    else:
+        result.pop("repo_type", None)
 
     return result
 
@@ -243,7 +250,7 @@ class MetricsOrchestrator:
         repo_name = package["repository"]
 
         try:
-            forge = self._resolve_forge(package.get("repo_url", ""))
+            forge = self._forge_for_package(package)
             if forge is None:
                 return {}
             ref = forge.extract_ref(package.get("repo_url", ""))
@@ -428,7 +435,7 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Impact dimension for {package['name']}")
 
-        forge = self._resolve_forge(package.get("repo_url", ""))
+        forge = self._forge_for_package(package)
         if forge is None:
             logger.info(
                 f"Skipping impact collection for {package['name']}: "
@@ -517,7 +524,17 @@ class MetricsOrchestrator:
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
         return token if token else None
 
-    def _resolve_forge(self, repo_url: str):
+    def _forge_for_package(self, package: Dict) -> Optional[Forge]:
+        """Resolve the Forge for a package, honoring its package_config
+        repo_type (see _resolve_forge). Falls back to reading
+        package_config/ directly when the package dict doesn't carry it yet."""
+        pkg_config = package.get("package_config")
+        if pkg_config is None and package.get("repository"):
+            pkg_config = self._load_package_config(package["repository"])
+        repo_type = (pkg_config or {}).get("repo_type")
+        return self._resolve_forge(package.get("repo_url", ""), repo_type)
+
+    def _resolve_forge(self, repo_url: str, repo_type: Optional[str] = None) -> Optional[Forge]:
         """Return a Forge instance for repo_url, or None if the host isn't a
         recognized code-hosting platform -- the same protective gate
         _is_known_non_github_repo used to provide (skip a package entirely
@@ -537,7 +554,20 @@ class MetricsOrchestrator:
         A missing/empty repo_url is *not* treated as unrecognized -- callers
         that don't pass one (prepare_package_list's own fallback, some
         tests) get the same "assume GitHub" behavior collection already had.
+
+        repo_type (from package_config/<owner>_<repo>.yaml, see
+        docs/PROJECT_CONFIG.md) overrides the hostname inference above:
+          * "gitlab" -- GitLabForge for repo_url's host, even a self-hosted
+            instance not listed under api_credentials.gitlab (it then runs
+            unauthenticated; a listed host still gets its token).
+          * "github" -- GitHubForge, only for github.com. GitHubForge talks
+            to api.github.com, so GitHub Enterprise hosts are refused (None)
+            rather than silently queried against the wrong API.
+          * anything else -- unsupported; logged and treated as
+            unrecognized (None).
         """
+        if repo_type:
+            return self._resolve_forge_by_type(repo_url, repo_type)
         if not repo_url:
             return GitHubForge(self._get_github_token())
         host = urlparse(repo_url).netloc
@@ -551,6 +581,27 @@ class MetricsOrchestrator:
             return GitLabForge(token=None, api_base="https://gitlab.com/api/v4")
         return None
 
+    def _resolve_forge_by_type(self, repo_url: str, repo_type: str) -> Optional[Forge]:
+        """_resolve_forge's explicit-repo_type branch (see its docstring)."""
+        host = urlparse(repo_url).netloc if repo_url else ""
+        if repo_type == "github":
+            if host in ("", "github.com"):
+                return GitHubForge(self._get_github_token())
+            logger.warning(
+                f"repo_type 'github' given for {repo_url}, but only github.com is "
+                f"supported (no GitHub Enterprise API base); skipping"
+            )
+            return None
+        if repo_type == "gitlab":
+            if not host:
+                logger.warning("repo_type 'gitlab' given without a repo_url; skipping")
+                return None
+            host_cfg = self.config.get("api_credentials", {}).get("gitlab", {}).get(host) or {}
+            token = host_cfg.get("token") or None
+            return GitLabForge(token=token, api_base=f"https://{host}/api/v4")
+        logger.warning(f"Unsupported repo_type {repo_type!r} for {repo_url}; skipping")
+        return None
+
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
 
@@ -561,7 +612,7 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Ecosystem dimension for {package['name']}")
 
-        forge = self._resolve_forge(package.get("repo_url", ""))
+        forge = self._forge_for_package(package)
         if forge is None:
             logger.info(
                 f"Skipping ecosystem collection for {package['name']}: "
@@ -749,7 +800,7 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Quality dimension for {package['name']}")
 
-        forge = self._resolve_forge(package.get("repo_url", ""))
+        forge = self._forge_for_package(package)
         if forge is None:
             logger.info(
                 f"Skipping quality collection for {package['name']}: "

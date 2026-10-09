@@ -102,6 +102,12 @@ A package's `repo_url` host determines which forge collects it:
   protective behavior as before GitLab support existed, rather than a
   false negative from hitting the wrong API shape.
 
+A maintainer can override this per package with `repo_type: github|gitlab`
+in `package_config/<owner>_<repo>.yaml` -- see `docs/PROJECT_CONFIG.md`.
+Collectors only ever see the platform-neutral `Forge` interface
+(`forge/interface.py`); `MetricsOrchestrator._resolve_forge` is the one
+place a concrete forge is chosen.
+
 GitLab-hosted packages get the same 3-dimension coverage as GitHub ones,
 with a few metrics GitLab genuinely cannot supply -- these render as "not
 yet collected", never as a zero or a failing result, so don't mistake them
