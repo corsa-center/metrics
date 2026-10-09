@@ -38,7 +38,7 @@ def test_forge_cannot_be_instantiated_directly():
 
 def _module_level_imports(path: Path):
     tree = ast.parse(path.read_text())
-    for node in tree.body:
+    for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             yield node.module
         elif isinstance(node, ast.Import):
@@ -48,9 +48,12 @@ def _module_level_imports(path: Path):
 
 @pytest.mark.parametrize(
     "path",
-    sorted((REPO_ROOT / "collectors").rglob("*.py")),
+    sorted((REPO_ROOT / "collectors").rglob("*.py"))
+    + [REPO_ROOT / "orchestrator.py", REPO_ROOT / "package_report.py"]
+    + sorted((REPO_ROOT / "tools").glob("*.py"))
+    + sorted((REPO_ROOT / "scripts").glob("*.py")),
     ids=lambda p: str(p.relative_to(REPO_ROOT)),
 )
-def test_collectors_do_not_import_a_concrete_forge(path):
+def test_nothing_outside_forge_imports_a_concrete_forge(path):
     concrete = {"forge.github", "forge.gitlab"}
     assert not concrete & set(_module_level_imports(path))

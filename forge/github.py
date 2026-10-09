@@ -1,20 +1,11 @@
-"""GitHub-flavored forge: shared GitHub REST API utilities for collectors.
+"""GitHub implementation of forge.interface.Forge, against GitHub's REST API
+(plus one GraphQL query for version tags).
 
-Two generations of methods live here during the collector migration:
-
-- The legacy ones (`_extract_owner_repo`, `_github_get`, `_check_file_exists`)
-  are collectors/ecosystem/base.py's former `GitHubCollectorBase`, moved here
-  unchanged. Collectors not yet migrated still inherit `GitHubForge` and use
-  these directly, hardcoding `api.github.com` URLs themselves.
-- The semantic ones (`extract_ref`, `repo_info`, `file_exists`, ...) are the
-  platform-normalized interface migrated collectors use instead, via
-  composition (`self.forge = GitHubForge(token)`) rather than inheritance --
-  so the same collector code can run against `forge/gitlab.py`'s
-  `GitLabForge` unchanged once that lands. A method is added here only when
-  a collector migration actually needs it, not speculatively.
-
-Once every collector has migrated, the legacy methods and the inheritance
-usage go away, leaving only the semantic interface.
+Get one through `Forge.for_repo(...)` rather than constructing it directly.
+The private helpers (`_github_get`, `_check_file_exists`) are the former
+`GitHubCollectorBase` HTTP plumbing; the public methods are the
+platform-normalized interface collectors use, and this class's docstrings
+are the reference for the normalized shapes GitLabForge matches.
 """
 
 import asyncio

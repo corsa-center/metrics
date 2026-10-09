@@ -110,7 +110,7 @@ GitLab; anything else is skipped.
 
 Collectors only ever see the platform-neutral `Forge` interface
 (`forge/interface.py`), implemented by `forge/github.py` and
-`forge/gitlab.py`. `MetricsOrchestrator._resolve_forge` is the one place a
+`forge/gitlab.py`. `Forge.for_repo` is the one place a
 concrete forge is chosen.
 
 GitLab-hosted packages get the same 3-dimension coverage as GitHub ones,

@@ -30,8 +30,6 @@ import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
-from forge.gitlab import GitLabForge
 from forge.interface import Forge
 from package_report import render_package_report
 
@@ -529,64 +527,12 @@ class MetricsOrchestrator:
         return token if token else None
 
     def _forge_for_package(self, package: Dict) -> Optional[Forge]:
-        """The Forge for a package, chosen by its repo_type (see _resolve_forge)."""
-        return self._resolve_forge(package.get("repo_url", ""), package.get("repo_type"))
-
-    def _resolve_forge(self, repo_url: str, repo_type: Optional[str] = None) -> Optional[Forge]:
-        """Return a Forge instance for repo_url, or None if it isn't on a
-        supported code-hosting platform. None makes the caller skip the
-        package entirely rather than let every collector query the wrong
-        host and report a false "not found".
-
-        repo_type comes from the package file (see docs/PACKAGE_CONFIG.md):
-          * "github" -- GitHubForge, only for github.com. GitHubForge talks
-            to api.github.com, so GitHub Enterprise hosts are refused rather
-            than silently queried against the wrong API.
-          * "gitlab" -- GitLabForge for repo_url's own host, so gitlab.com
-            and any self-hosted instance work. A host listed under
-            api_credentials.gitlab.<host> in config/orchestrator.yaml gets
-            its token; an unlisted one runs unauthenticated.
-          * anything else -- unsupported; logged and refused.
-
-        Without a repo_type the platform is inferred from the hostname:
-        github.com (or no URL at all) is GitHub; gitlab.com and hosts listed
-        under api_credentials.gitlab are GitLab; anything else is refused.
-        """
-        if repo_type:
-            return self._resolve_forge_by_type(repo_url, str(repo_type).strip().lower())
-        if not repo_url:
-            return GitHubForge(self._get_github_token())
-        host = urlparse(repo_url).netloc
-        if not host or host == "github.com":
-            return GitHubForge(self._get_github_token())
-        gitlab_hosts = self.config.get("api_credentials", {}).get("gitlab", {}) or {}
-        if host in gitlab_hosts or host == "gitlab.com":
-            return self._gitlab_forge(host)
-        return None
-
-    def _resolve_forge_by_type(self, repo_url: str, repo_type: str) -> Optional[Forge]:
-        """_resolve_forge's explicit-repo_type branch (see its docstring)."""
-        host = urlparse(repo_url).netloc if repo_url else ""
-        if repo_type == "github":
-            if host in ("", "github.com"):
-                return GitHubForge(self._get_github_token())
-            logger.warning(
-                f"repo_type 'github' given for {repo_url}, but only github.com is "
-                f"supported (no GitHub Enterprise API base); skipping"
-            )
-            return None
-        if repo_type == "gitlab":
-            if not host:
-                logger.warning("repo_type 'gitlab' given without a repo_url; skipping")
-                return None
-            return self._gitlab_forge(host)
-        logger.warning(f"Unsupported repo_type {repo_type!r} for {repo_url}; skipping")
-        return None
-
-    def _gitlab_forge(self, host: str) -> GitLabForge:
-        host_cfg = (self.config.get("api_credentials", {}).get("gitlab", {}) or {}).get(host) or {}
-        token = host_cfg.get("token") or None
-        return GitLabForge(token=token, api_base=f"https://{host}/api/v4")
+        """The Forge for a package, chosen by its repo_type (see Forge.for_repo)."""
+        return Forge.for_repo(
+            package.get("repo_type"),
+            package.get("repo_url", ""),
+            self.config.get("api_credentials", {}),
+        )
 
     async def _confirm_repo_exists(self, forge: Forge, repo_url: str) -> bool:
         """Whether repo_url resolves to a real, accessible repository on its

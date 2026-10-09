@@ -450,10 +450,8 @@ async def main():
         "repo_url": "https://github.com/numpy/numpy",
     }
 
-    # Collect metrics (this standalone demo targets a GitHub package)
-    from forge.github import GitHubForge
-
-    forge = GitHubForge(config["api_credentials"]["github"]["token"])
+    # Collect metrics
+    forge = Forge.for_repo("github", package["repo_url"], config["api_credentials"])
     collector = CitationMetricCollector(config, forge)
     results = await collector.collect(package)
 

@@ -1,8 +1,9 @@
 """The platform-neutral contract every forge (GitHub, GitLab, ...) implements.
 
-Collectors type against `Forge` and never import a concrete forge module, so
-the code-hosting platform a package lives on is chosen in exactly one place
-(MetricsOrchestrator._resolve_forge) and nowhere else.
+Nothing outside this package imports a concrete forge module: callers get a
+forge from `Forge.for_repo(repo_type, repo_url, credentials)`, so the
+code-hosting platform a package lives on is chosen, and its forge set up,
+in exactly one place.
 
 Shared conventions for every method below:
 
@@ -23,6 +24,7 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -31,6 +33,70 @@ logger = logging.getLogger(__name__)
 
 class Forge(ABC):
     """Abstract code-hosting platform used by every collector."""
+
+    @classmethod
+    def for_repo(
+        cls,
+        repo_type: Optional[str],
+        repo_url: str,
+        credentials: Optional[Dict[str, Any]] = None,
+    ) -> Optional["Forge"]:
+        """The forge for a repository, or None if it isn't on a supported
+        platform. None means skip the package, rather than let every
+        collector query the wrong host and report a false "not found".
+
+        repo_type comes from the package file (docs/PACKAGE_CONFIG.md):
+          * "github" -- github.com only. The GitHub forge talks to
+            api.github.com, so GitHub Enterprise hosts are refused rather
+            than silently queried against the wrong API.
+          * "gitlab" -- repo_url's own host, so gitlab.com and any
+            self-hosted instance work.
+          * anything else -- unsupported; logged and refused.
+
+        Without a repo_type the platform is inferred from the hostname:
+        github.com (or no URL at all) is GitHub; gitlab.com and hosts listed
+        under credentials["gitlab"] are GitLab; anything else is refused.
+
+        `credentials` is config/orchestrator.yaml's api_credentials block:
+        credentials["github"]["token"], and credentials["gitlab"][<host>]
+        ["token"] per GitLab host. A host without a token is queried
+        unauthenticated (public projects, lower rate limit).
+        """
+        # Imported here: both modules import this one.
+        from forge.github import GitHubForge
+        from forge.gitlab import GitLabForge
+
+        credentials = credentials or {}
+        github_token = (credentials.get("github") or {}).get("token") or None
+        gitlab_hosts = credentials.get("gitlab") or {}
+
+        def gitlab(host: str) -> "Forge":
+            token = (gitlab_hosts.get(host) or {}).get("token") or None
+            return GitLabForge(token=token, api_base=f"https://{host}/api/v4")
+
+        host = urlparse(repo_url).netloc if repo_url else ""
+        kind = str(repo_type).strip().lower() if repo_type else ""
+        if kind == "github":
+            if host in ("", "github.com"):
+                return GitHubForge(github_token)
+            logger.warning(
+                f"repo_type 'github' given for {repo_url}, but only github.com is "
+                f"supported (no GitHub Enterprise API base); skipping"
+            )
+            return None
+        if kind == "gitlab":
+            if not host:
+                logger.warning("repo_type 'gitlab' given without a repo_url; skipping")
+                return None
+            return gitlab(host)
+        if kind:
+            logger.warning(f"Unsupported repo_type {repo_type!r} for {repo_url}; skipping")
+            return None
+        if host in ("", "github.com"):
+            return GitHubForge(github_token)
+        if host in gitlab_hosts or host == "gitlab.com":
+            return gitlab(host)
+        return None
 
     #: Short platform identifier ("github", "gitlab") that some external
     #: services (e.g. Codecov) key their own URLs by.
