@@ -23,7 +23,7 @@ from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def _bracket_score(value: float, brackets: list, default: int) -> int:
 class CHAOSSGovernanceCollector:
     """Collects CHAOSS-defined activity health indicators (Section 4.2.4)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

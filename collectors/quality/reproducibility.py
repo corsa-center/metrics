@@ -19,7 +19,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ _WEIGHTS = {
 class ReproducibilityCollector:
     """Collects reproducibility indicators (CASS Report Section 4.3.3)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

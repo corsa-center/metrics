@@ -14,7 +14,7 @@ from integrations.semantic_scholar import SemanticScholarClient
 from integrations.openalex import OpenAlexClient
 from integrations.zenodo import ZenodoClient
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 
 class CitationMetricCollector:
@@ -28,13 +28,13 @@ class CitationMetricCollector:
     - Download/usage statistics
     """
 
-    def __init__(self, config: Dict[str, Any], forge: GitHubForge):
+    def __init__(self, config: Dict[str, Any], forge: Forge):
         """
         Initialize citation collector
 
         Args:
             config: Configuration dict with API credentials and weights
-            forge: Forge instance (GitHubForge/GitLabForge) for this package's host
+            forge: Forge for this package's host (see forge/interface.py)
         """
         self.config = config
         self.forge = forge
@@ -360,7 +360,9 @@ async def main():
         "repo_url": "https://github.com/numpy/numpy",
     }
 
-    # Collect metrics
+    # Collect metrics (this standalone demo targets a GitHub package)
+    from forge.github import GitHubForge
+
     forge = GitHubForge(config["api_credentials"]["github"]["token"])
     collector = CitationMetricCollector(config, forge)
     results = await collector.collect(package)

@@ -21,7 +21,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ _GITHUB_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 class CICDMetricsCollector:
     """Collects CI/CD development-practice metrics from GitHub (Section 4.3.2)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     # ------------------------------------------------------------------ #

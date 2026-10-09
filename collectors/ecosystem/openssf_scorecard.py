@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from forge.base import RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ _SCORECARD_API = "https://api.securityscorecards.dev/projects/{host}/{ref}"
 class OpenSSFScorecardCollector:
     """Collects OpenSSF Scorecard metrics via the public Scorecard API."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

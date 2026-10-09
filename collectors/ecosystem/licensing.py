@@ -15,7 +15,7 @@ import logging
 from typing import Dict, Any, Optional, List
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class LicensingCollector:
     """Collects licensing metrics from GitHub repositories"""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     # Common license file patterns

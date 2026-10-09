@@ -257,6 +257,30 @@ class TestReleasesAndTags:
         result = asyncio.run(forge.releases(client, "g/p"))
         assert result[0]["published_at"] == "2026-01-01T00:00:00Z"
 
+    def test_release_asset_links_reshaped_to_github_list(self, forge):
+        client = _client([{
+            "tag_name": "v1.0",
+            "assets": {
+                "count": 3,
+                "sources": [{"format": "zip", "url": "https://x/src.zip"}],
+                "links": [
+                    {"name": "sbom.spdx.json", "url": "https://x/l1",
+                     "direct_asset_url": "https://x/d1"},
+                    {"name": "app.tar.gz", "url": "https://x/l2"},
+                ],
+            },
+        }])
+        result = asyncio.run(forge.releases(client, "g/p"))
+        assert result[0]["assets"] == [
+            {"name": "sbom.spdx.json", "browser_download_url": "https://x/d1"},
+            {"name": "app.tar.gz", "browser_download_url": "https://x/l2"},
+        ]
+
+    def test_release_without_assets_gets_empty_list(self, forge):
+        client = _client([{"tag_name": "v1.0"}])
+        result = asyncio.run(forge.releases(client, "g/p"))
+        assert result[0]["assets"] == []
+
     def test_tags_pass_through(self, forge):
         client = _client([{"name": "v1.0"}])
         result = asyncio.run(forge.tags(client, "g/p"))
@@ -492,3 +516,11 @@ class TestContributorWeeklyStats:
         client = _client([])
         result = asyncio.run(forge.contributor_weekly_stats(client, "g/p"))
         assert result == []
+
+
+class TestFileMetadataDownloadUrl:
+    def test_download_url_is_raw_route_not_html_page(self, forge):
+        client = _client({"ref": "main", "size": 42})
+        result = asyncio.run(forge.file_metadata(client, "g/p", "CODE_OF_CONDUCT.md"))
+        assert result["html_url"] == "https://gitlab.example.com/g/p/-/blob/main/CODE_OF_CONDUCT.md"
+        assert result["download_url"] == "https://gitlab.example.com/g/p/-/raw/main/CODE_OF_CONDUCT.md"

@@ -28,6 +28,7 @@ from urllib.parse import quote
 
 from collectors.rate_limit import search_get
 from forge.base import COLLECTION_GAP
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def _is_bot_login(login: str) -> bool:
     return login.endswith("[bot]") or login.endswith("-bot")
 
 
-class GitHubForge:
+class GitHubForge(Forge):
     """Provides shared GitHub API utilities for ecosystem/quality collectors."""
 
     #: Short platform identifier some external services (Codecov) key their

@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
 from forge.base import COLLECTION_GAP
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-class GitLabForge:
+class GitLabForge(Forge):
     """Provides shared GitLab API v4 utilities for ecosystem/quality collectors."""
 
     #: Short platform identifier some external services (Codecov) key their
@@ -207,11 +208,10 @@ class GitLabForge:
 
     async def file_metadata(self, client: httpx.AsyncClient, ref: str, path: str):
         """Like GitHubForge.file_metadata. GitLab's Files API returns
-        base64 content directly (no separate download_url) -- download_url
-        is set to the same html_url here so callers that only check
-        truthiness still work, but a caller that actually fetches
-        download_url as a raw URL (rather than through file_content()) will
-        get an HTML page, not raw text. No current caller does that.
+        base64 content directly (no separate download_url), so download_url
+        is built from GitLab's raw-file route (/-/raw/<ref>/<path>), the
+        equivalent of GitHub's raw.githubusercontent.com URL. Callers such
+        as community_health fetch it directly for a content preview.
         """
         data = await self._gitlab_get(
             client,
@@ -222,11 +222,12 @@ class GitLabForge:
             return COLLECTION_GAP
         if data is None:
             return None
-        html_url = f"https://{self.host}/{ref}/-/blob/{data.get('ref', 'HEAD')}/{path}"
+        branch = data.get('ref', 'HEAD')
+        html_url = f"https://{self.host}/{ref}/-/blob/{branch}/{path}"
         return {
             "html_url": html_url,
             "size": data.get("size", 0),
-            "download_url": html_url,
+            "download_url": f"https://{self.host}/{ref}/-/raw/{branch}/{path}",
         }
 
     async def license(self, client: httpx.AsyncClient, ref: str):
@@ -310,6 +311,13 @@ class GitLabForge:
         `published_at`) -- `published_at` is added as an alias here so
         every caller that reads GitHub's field name keeps working
         unchanged, same normalize-once principle as everywhere else.
+
+        `assets` is reshaped too: GitLab returns a dict
+        ({count, sources, links}) where GitHub returns a list of uploaded
+        files. Only `links` (attached release files) correspond to GitHub's
+        assets -- `sources` are the auto-generated source archives, which
+        GitHub's assets list also omits -- so each link becomes a
+        {name, browser_download_url} item.
         """
         data = await self._gitlab_get(
             client, f"/projects/{self._project_path(ref)}/releases",
@@ -319,7 +327,24 @@ class GitLabForge:
             return data
         for r in data:
             r.setdefault("published_at", r.get("released_at"))
+            r["assets"] = self._normalize_release_assets(r.get("assets"))
         return data
+
+    @staticmethod
+    def _normalize_release_assets(assets: Any) -> List[Dict[str, Any]]:
+        """Map GitLab's release `assets` dict onto GitHub's list shape."""
+        if isinstance(assets, list):
+            return assets
+        if not isinstance(assets, dict):
+            return []
+        return [
+            {
+                "name": link.get("name"),
+                "browser_download_url": link.get("direct_asset_url") or link.get("url", ""),
+            }
+            for link in assets.get("links") or []
+            if isinstance(link, dict)
+        ]
 
     async def tags(
         self, client: httpx.AsyncClient, ref: str, *, per_page: int = 30, page: int = 1

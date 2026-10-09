@@ -15,7 +15,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ _MAX_WORKFLOWS_TO_SCAN = 25
 class StaticAnalysisCollector:
     """Detects CodeQL / static analysis security scanning (Section 4.3.1)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

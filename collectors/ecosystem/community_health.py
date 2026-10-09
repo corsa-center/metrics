@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ class CommunityHealthCollector:
     # Keyword groups needed before the documented process counts as substantive.
     MIN_KEYWORD_GROUPS = 2
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
@@ -428,9 +428,10 @@ class CommunityHealthCollector:
     ) -> str:
         """Get preview of file content.
 
-        Served from raw.githubusercontent.com, not api.github.com, so it
-        isn't subject to the same secondary rate limit -- a plain best-effort
-        fetch is fine here; a missing preview isn't reported as anything.
+        download_url is the forge's raw-file URL (raw.githubusercontent.com
+        on GitHub, /-/raw/ on GitLab), not its REST API, so it isn't subject
+        to the API's secondary rate limit -- a plain best-effort fetch is
+        fine here; a missing preview isn't reported as anything.
         """
         if not download_url:
             return ""

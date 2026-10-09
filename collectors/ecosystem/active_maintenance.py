@@ -19,7 +19,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
 from forge.base import RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ _CHANNEL_PATTERNS = {
 class ActiveMaintenanceCollector:
     """Collects active maintenance metrics from GitHub repositories"""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

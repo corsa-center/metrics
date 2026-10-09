@@ -19,7 +19,7 @@ import logging
 from typing import Any, Dict, List
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ _CHECKS: Dict[str, Dict[str, List[str]]] = {
 class AccessibilityCollector:
     """Detects portable build systems and container configs (Section 4.3.5)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

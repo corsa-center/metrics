@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class OpenSSFBadgeCollector:
 
     BADGE_SEARCH_URL = "https://bestpractices.coreinfrastructure.org/projects.json"
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     # File patterns checked when no badge exists.

@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ _MAX_COMMIT_PAGES = 10
 class OutreachCollector:
     """Collects contributor-growth metrics (Section 4.2.5)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

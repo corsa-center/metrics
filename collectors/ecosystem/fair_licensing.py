@@ -25,7 +25,7 @@ import httpx
 import yaml
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ _CITATION_FIELDS = ["title", "authors", "version", "license", "repository-code",
 class FairLicensingCollector:
     """Collects FAIR compliance and license-exception signals (Section 4.2.2)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

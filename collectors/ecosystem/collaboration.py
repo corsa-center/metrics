@@ -33,7 +33,7 @@ from urllib.parse import quote
 
 import httpx
 
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ _RATE_LIMIT_PAUSE_SECONDS = 2
 class CollaborationCollector:
     """Collects ecosystem integration metrics (Section 4.2.7)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

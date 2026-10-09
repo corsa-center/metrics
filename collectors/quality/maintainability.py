@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Set
 import httpx
 
 from forge.base import RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ _COMMIT_PAGES = 3
 class MaintainabilityCollector:
     """Collects maintainability and understandability signals (Section 4.3.6)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:

@@ -26,7 +26,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ _RELEASES_SAMPLE = 5
 class SupplyChainCollector:
     """Collects supply-chain transparency indicators (CASS Report Section 4.3.8)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,10 +126,9 @@ class SupplyChainCollector:
         an empty list here says nothing trustworthy about SBOM/provenance
         presence.
 
-        Reads GitHub's release "assets" field directly (browser_download_url
-        etc.) -- forge.releases() intentionally doesn't reshape this (see its
-        docstring); GitLab's release asset shape differs and will need its
-        own mapping when GitLabForge lands.
+        Reads each release's "assets" list ({name, browser_download_url}).
+        That is GitHub's native shape; GitLabForge.releases() maps GitLab's
+        release links onto it.
         """
         releases = await self.forge.releases(client, ref, per_page=_RELEASES_SAMPLE)
         if releases is COLLECTION_GAP:

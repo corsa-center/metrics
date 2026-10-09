@@ -22,7 +22,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from forge.base import COLLECTION_GAP, RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ def _hours(a: Optional[datetime], b: Optional[datetime]) -> Optional[float]:
 class EngagementCollector:
     """Collects engagement metrics from GitHub issues and PRs (§4.2.4)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
@@ -113,7 +113,7 @@ class EngagementCollector:
         PR-heavy repository — HDF5's most recent 30 entries are 26 PRs and 4
         issues, which is far too small a sample for a median to mean
         anything. Pages of 100 are pulled until _SAMPLE issues are in hand.
-        (GitHubForge.issues already excludes pull requests.)
+        (forge.issues() already excludes pull requests on every forge.)
         """
         issues: List[Dict] = []
         for page in range(1, _MAX_ISSUE_PAGES + 1):

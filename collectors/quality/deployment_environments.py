@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from forge.base import RetryingTransport
-from forge.github import GitHubForge
+from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ _MAX_WORKFLOW_FILES = 25
 class DeploymentEnvironmentCollector:
     """Detects the OS families a project's CI exercises (Section 4.3.5)."""
 
-    def __init__(self, forge: GitHubForge):
+    def __init__(self, forge: Forge):
         self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
