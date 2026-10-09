@@ -40,6 +40,7 @@ import asyncio
 import base64
 import httpx
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
@@ -70,6 +71,12 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+_GITLAB_CI_FILE = ".gitlab-ci.yml"
+
+# `- local: path.yml` / `local: "/path.yml"` entries in an include: block.
+_LOCAL_INCLUDE_RE = re.compile(r"""\blocal:\s*["']?([^"'\s#]+\.ya?ml)""")
+
+
 class GitLabForge(Forge):
     """Provides shared GitLab API v4 utilities for ecosystem/quality collectors."""
 
@@ -80,6 +87,18 @@ class GitLabForge(Forge):
     #: some of their older docs use) -- test_coverage.py's Codecov call for
     #: a real GitLab package should confirm this before relying on it.
     platform = "gitlab"
+
+    display_name = "GitLab"
+
+    PLATFORM_PATHS = {
+        "codeowners": [".gitlab/CODEOWNERS"],
+        "issue_templates": [".gitlab/issue_templates"],
+        "change_request_templates": [".gitlab/merge_request_templates"],
+        "dependency_automation": [".gitlab/renovate.json"],
+        # GitLab SAST is enabled by an include inside .gitlab-ci.yml rather
+        # than a dedicated file, so it is found by scanning CI content.
+        "security_scan_workflows": [],
+    }
 
     def __init__(self, token: Optional[str] = None, api_base: str = "https://gitlab.com/api/v4"):
         self.api_base = api_base.rstrip("/")
@@ -443,6 +462,38 @@ class GitLabForge(Forge):
             for e in data
         ]
 
+    async def ci_config_files(self, client: httpx.AsyncClient, ref: str):
+        """.gitlab-ci.yml plus the local files it includes (see Forge).
+
+        Large projects split CI across included files -- ParaView keeps its
+        OS-specific jobs in .gitlab/os-linux.yml etc. -- so a scan of the root
+        file alone misses most of it. Only `local:` includes are followed, one
+        level deep; wildcard includes are skipped.
+        """
+        root = await self.file_content(client, ref, _GITLAB_CI_FILE)
+        if root is COLLECTION_GAP:
+            return COLLECTION_GAP
+        if root is None:
+            return []
+
+        def entry(path: str, primary: bool) -> Dict[str, Any]:
+            return {
+                "name": path.rsplit("/", 1)[-1],
+                "path": path,
+                "html_url": f"https://{self.host}/{ref}/-/blob/HEAD/{path}",
+                "primary": primary,
+            }
+
+        files = [entry(_GITLAB_CI_FILE, True)]
+        seen = {_GITLAB_CI_FILE}
+        for match in _LOCAL_INCLUDE_RE.finditer(root):
+            path = match.group(1).lstrip("/")
+            if "*" in path or path in seen:
+                continue
+            seen.add(path)
+            files.append(entry(path, False))
+        return files
+
     async def contributors(
         self, client: httpx.AsyncClient, ref: str, *, per_page: int = 100, page: int = 1
     ):
@@ -709,13 +760,27 @@ class GitLabForge(Forge):
         return f"https://{group}.gitlab.io/{rest_path}/" if rest_path else f"https://{group}.gitlab.io/"
 
     async def file_exists(self, client: httpx.AsyncClient, ref: str, path: str):
-        """Same contract as GitHubForge.file_exists."""
+        """Same contract as GitHubForge.file_exists, including directories.
+
+        GitLab's Files API 404s for a directory, where GitHub's Contents API
+        returns a listing. So a 404 falls back to the tree API, which lists a
+        real directory and 404s for a missing path. Without this, checks like
+        "tests/" or ".gitlab/issue_templates" were always confirmed absent.
+        """
         data = await self.file_metadata(client, ref, path)
         if data is COLLECTION_GAP:
             return COLLECTION_GAP
-        if data is None:
-            return None
-        return data["html_url"]
+        if data is not None:
+            return data["html_url"]
+        tree = await self._gitlab_get(
+            client, f"/projects/{self._project_path(ref)}/repository/tree",
+            params={"path": path, "per_page": 1},
+        )
+        if tree is COLLECTION_GAP:
+            return COLLECTION_GAP
+        if isinstance(tree, list) and tree:
+            return f"https://{self.host}/{ref}/-/tree/HEAD/{path}"
+        return None
 
     def get_timestamp(self) -> str:
         """Return current UTC timestamp in ISO format."""

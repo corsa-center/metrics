@@ -2,7 +2,8 @@
 Deployment Environment Collector (CASS Report Section 4.3.5 — Accessibility)
 
 Fills the three CI- and documentation-derived sub-metrics of section 4.3.5 by
-reading the workflow definitions once:
+reading the CI definitions once (GitHub workflows, or .gitlab-ci.yml and
+its local includes):
 
   - Deployment Environment Testing    : which OS families CI builds on
   - Architecture Compatibility Analysis : which CPU architectures CI covers
@@ -32,18 +33,27 @@ from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
-_WORKFLOWS_DIR = ".github/workflows"
-
 # Runner label prefixes that GitHub-hosted and common self-hosted runners use,
 # mapped to the OS family they represent.
 # The version suffix matters: matching any word after the family name sweeps up
 # job names like "macos-clang" and "linux-oneapi", which are toolchain labels
 # rather than runners and make the reported detail wrong.
+#
+# GitLab runners are named by tags and container images instead of GitHub's
+# hosted-runner labels: an OS plus an architecture ("linux-x86_64",
+# "windows-x86_64", "macos-arm64", "os:macos-arm") or a distro image
+# ("ubuntu:22.04", "ci-fedora44"). An architecture suffix is as specific as a
+# version suffix, so it is accepted too; a distro name may also be followed by
+# ':' or directly by its version number.
 _RUNNER_SUFFIX = r"(?:latest|\d+(?:\.\d+)?)"
+_ARCH_SUFFIX = r"(?:x86_64|amd64|arm64|aarch64|arm)"
+_DISTROS = r"(?:ubuntu|debian|fedora|rhel|centos|rockylinux|almalinux)"
 _RUNNER_FAMILIES = {
-    "Linux": re.compile(rf"\b(?:ubuntu|debian|fedora|rhel|centos)-{_RUNNER_SUFFIX}\b", re.I),
-    "Windows": re.compile(rf"\bwindows-{_RUNNER_SUFFIX}\b", re.I),
-    "macOS": re.compile(rf"\bmacos-{_RUNNER_SUFFIX}\b", re.I),
+    "Linux": re.compile(
+        rf"\b(?:{_DISTROS}[-:]?{_RUNNER_SUFFIX}|(?:{_DISTROS}|linux)-{_ARCH_SUFFIX})\b", re.I
+    ),
+    "Windows": re.compile(rf"\bwindows-(?:{_RUNNER_SUFFIX}|{_ARCH_SUFFIX})\b", re.I),
+    "macOS": re.compile(rf"\bmacos-(?:{_RUNNER_SUFFIX}|{_ARCH_SUFFIX})\b", re.I),
 }
 
 # Explicit CPU architecture tokens. x86-64 is not listed: it is the implicit
@@ -143,15 +153,11 @@ class DeploymentEnvironmentCollector:
     async def _list_workflows(
         self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict[str, str]]:
-        """Workflow definition files in .github/workflows."""
-        entries = await self.forge.dir_listing(client, ref, _WORKFLOWS_DIR)
+        """CI definition files (GitHub workflows, .gitlab-ci.yml and its includes)."""
+        entries = await self.forge.ci_config_files(client, ref)
         if not entries:
             return []
-        return [
-            {"name": e["name"], "path": e["path"]}
-            for e in entries
-            if e.get("name", "").endswith((".yml", ".yaml"))
-        ]
+        return [{"name": e["name"], "path": e["path"]} for e in entries]
 
     async def _read_workflow(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
         """Fetch a workflow file's raw text."""

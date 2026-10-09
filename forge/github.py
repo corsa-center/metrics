@@ -59,6 +59,25 @@ class GitHubForge(Forge):
     #: api_base rather than deriving one from the other.
     host = "github.com"
 
+    display_name = "GitHub"
+
+    PLATFORM_PATHS = {
+        "codeowners": [".github/CODEOWNERS"],
+        "issue_templates": [".github/ISSUE_TEMPLATE", ".github/ISSUE_TEMPLATE.md"],
+        "change_request_templates": [
+            ".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
+        ],
+        "dependency_automation": [
+            ".github/dependabot.yml", ".github/dependabot.yaml", ".github/renovate.json",
+        ],
+        "security_scan_workflows": [
+            ".github/workflows/codeql.yml",
+            ".github/workflows/codeql.yaml",
+            ".github/workflows/codeql-analysis.yml",
+            ".github/workflows/codeql-analysis.yaml",
+        ],
+    }
+
     def __init__(self, github_token: Optional[str] = None):
         if github_token:
             self.github_headers = {
@@ -366,6 +385,18 @@ class GitHubForge(Forge):
                 "type": e.get("type"),
             }
             for e in data
+        ]
+
+    async def ci_config_files(self, client: httpx.AsyncClient, ref: str):
+        """GitHub Actions workflow files in .github/workflows (see Forge)."""
+        entries = await self.dir_listing(client, ref, ".github/workflows")
+        if entries is COLLECTION_GAP:
+            return COLLECTION_GAP
+        return [
+            {"name": e["name"], "path": e["path"], "html_url": e.get("html_url", ""),
+             "primary": False}
+            for e in entries
+            if e.get("name", "").endswith((".yml", ".yaml"))
         ]
 
     async def contributors(

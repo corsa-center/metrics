@@ -42,10 +42,12 @@ _TOOLING_PATHS = {
         ".flake8", ".pylintrc", "ruff.toml", ".eslintrc.json",
         ".clang-tidy", ".editorconfig",
     ],
-    "Dependency automation": [
-        ".github/dependabot.yml", ".github/dependabot.yaml", "renovate.json",
-    ],
+    # Plus the forge's own config locations (Dependabot on GitHub).
+    "Dependency automation": ["renovate.json"],
 }
+
+# Tooling groups whose paths also include the forge's platform_paths(kind).
+_PLATFORM_PATH_KINDS = {"Dependency automation": "dependency_automation"}
 
 # How many recently-closed PRs to sample for review coverage.
 _PR_SAMPLE_SIZE = 50
@@ -111,7 +113,10 @@ class DevToolingCollector:
                     return label, url, saw_gap
             return label, None, saw_gap
 
-        results = await asyncio.gather(*[check(l, p) for l, p in groups.items()])
+        results = await asyncio.gather(*[
+            check(l, p + self.forge.platform_paths(_PLATFORM_PATH_KINDS.get(l, "")))
+            for l, p in groups.items()
+        ])
         found, missing, not_collected, details = [], [], [], {}
         for label, url, saw_gap in results:
             if url:

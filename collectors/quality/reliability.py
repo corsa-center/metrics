@@ -199,13 +199,14 @@ class ReliabilityCollector:
         """Text of the workflows whose names suggest they run analysis, and
         whether the directory listing (or any candidate read) gapped.
         """
-        entries = await self.forge.dir_listing(client, ref, ".github/workflows")
+        entries = await self.forge.ci_config_files(client, ref)
         if entries is COLLECTION_GAP:
             return [], True
+        # A platform's root CI file (.gitlab-ci.yml) holds most of the jobs
+        # whatever its name, so it is always read.
         candidates = [
             e for e in entries
-            if e.get("name", "").endswith((".yml", ".yaml"))
-            and _ANALYSIS_WORKFLOW_HINT.search(e["name"])
+            if e.get("primary") or _ANALYSIS_WORKFLOW_HINT.search(e["name"])
         ][:_MAX_ANALYSIS_WORKFLOWS]
 
         async def read(path: str) -> Optional[str]:

@@ -37,6 +37,24 @@ class Forge(ABC):
     #: used by external services (e.g. OpenSSF Scorecard) keyed by it.
     host: str
 
+    #: Human-readable platform name for rendered output ("GitHub", "GitLab").
+    display_name: str
+
+    #: Where this platform expects its own special files, keyed by purpose.
+    #: Collectors combine these with their platform-neutral paths (repo root,
+    #: docs/) via platform_paths(), so a GitHub run never probes .gitlab/ and
+    #: vice versa. Keys:
+    #:   codeowners                -- code-owner file locations
+    #:   issue_templates           -- issue template file or directory
+    #:   change_request_templates  -- pull/merge request template
+    #:   dependency_automation     -- dependency-update bot config
+    #:   security_scan_workflows   -- dedicated code-scanning CI files
+    PLATFORM_PATHS: Dict[str, List[str]] = {}
+
+    def platform_paths(self, kind: str) -> List[str]:
+        """This platform's own paths for `kind` (see PLATFORM_PATHS)."""
+        return list(self.PLATFORM_PATHS.get(kind, []))
+
     # ------------------------------------------------------------------ #
     # Identity / helpers
     # ------------------------------------------------------------------ #
@@ -162,6 +180,16 @@ class Forge(ABC):
     # ------------------------------------------------------------------ #
     # CI/CD and deployments
     # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    async def ci_config_files(self, client: httpx.AsyncClient, ref: str):
+        """CI definition files, or COLLECTION_GAP.
+
+        Each entry: {name, path, html_url, primary}. `primary` marks the
+        platform's root CI file (.gitlab-ci.yml); GitHub has no single root
+        file, so every workflow is primary=False. An empty list means the
+        repo has no CI configuration on this platform.
+        """
 
     @abstractmethod
     async def ci_runs(

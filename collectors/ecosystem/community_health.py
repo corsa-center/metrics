@@ -84,8 +84,10 @@ class CommunityHealthCollector:
         ],
     }
 
+    # Platform-neutral locations; the forge adds its own (.github/ or
+    # .gitlab/) via platform_paths("codeowners").
     CODEOWNERS_PATHS = [
-        "CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS",
+        "CODEOWNERS", "docs/CODEOWNERS",
     ]
 
     # Some projects keep governance material in a dedicated sibling repo
@@ -225,7 +227,7 @@ class CommunityHealthCollector:
         ]
 
         has_codeowners = False
-        for path in self.CODEOWNERS_PATHS:
+        for path in self.CODEOWNERS_PATHS + self.forge.platform_paths("codeowners"):
             if (await self._check_file_exists(client, ref, path)).get("exists"):
                 has_codeowners = True
                 break

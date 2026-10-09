@@ -33,22 +33,24 @@ logger = logging.getLogger(__name__)
 _NEWCOMER_LABELS = ["good first issue", "help wanted", "good-first-issue", "newcomer"]
 
 # Onboarding resources, grouped so a project gets credit for any variant.
+# These are the platform-neutral paths; _PLATFORM_PATH_KINDS adds each
+# forge's own locations (.github/ISSUE_TEMPLATE vs .gitlab/issue_templates).
 _ONBOARDING_PATHS = {
     "Contributing guide": [
         "CONTRIBUTING.md", "CONTRIBUTING.rst", "CONTRIBUTING",
         ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md",
     ],
-    "Issue templates": [
-        ".github/ISSUE_TEMPLATE", ".github/ISSUE_TEMPLATE.md",
-    ],
-    "Pull request template": [
-        ".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
-        "PULL_REQUEST_TEMPLATE.md",
-    ],
+    "Issue templates": [],
+    "Pull request template": ["PULL_REQUEST_TEMPLATE.md"],
     "Getting-started guide": [
         "docs/getting-started.md", "docs/getting_started.md", "docs/quickstart.md",
         "doc/getting-started.md", "GETTING_STARTED.md", "docs/source/getting_started.rst",
     ],
+}
+
+_PLATFORM_PATH_KINDS = {
+    "Issue templates": "issue_templates",
+    "Pull request template": "change_request_templates",
 }
 
 # Window for "new" contributors and recent commit activity.
@@ -225,7 +227,10 @@ class OutreachCollector:
             return label, None, saw_gap
 
         results = await asyncio.gather(
-            *[check(label, paths) for label, paths in _ONBOARDING_PATHS.items()]
+            *[
+                check(label, paths + self.forge.platform_paths(_PLATFORM_PATH_KINDS.get(label, "")))
+                for label, paths in _ONBOARDING_PATHS.items()
+            ]
         )
         found, missing, not_collected, details = [], [], [], {}
         for label, url, saw_gap in results:
