@@ -4,11 +4,15 @@ import asyncio
 import pytest
 
 from collectors.ecosystem.collaboration import CollaborationCollector
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    return CollaborationCollector()
+    # None: every test here exercises pure computation methods
+    # (_merge/_calculate_score/_downloads_summary) that never touch
+    # self.forge.
+    return CollaborationCollector(FakeForge())
 
 
 def _pkg(ecosystem, name, deps=0, repos=0, install=None, downloads=0, downloads_period=None):

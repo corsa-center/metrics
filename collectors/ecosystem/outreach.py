@@ -21,12 +21,11 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
 
 import httpx
 
-from collectors.rate_limit import search_get
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
+from forge.interface import Forge
 from collectors.ecosystem.community_health import _DEEP_DOC_PATTERNS, readme_contributing_section
 from collectors.quality.usability import readme_mentions
 
@@ -55,12 +54,9 @@ _CONTRIBUTING_PATHS = [
     "CONTRIBUTING.md", "CONTRIBUTING.rst", "CONTRIBUTING",
     ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md",
 ]
-_ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
-_ISSUE_TEMPLATE_FILES = [".github/ISSUE_TEMPLATE.md"]
-_PR_TEMPLATE_PATHS = [
-    ".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
-    "PULL_REQUEST_TEMPLATE.md",
-]
+# Platform-neutral template locations; each forge adds its own
+# (.github/ISSUE_TEMPLATE vs .gitlab/issue_templates) via platform_paths().
+_PR_TEMPLATE_PATHS = ["PULL_REQUEST_TEMPLATE.md"]
 # A getting-started guide, under whatever name and location it actually has --
 # six enumerated spellings missed 16 of 65 portfolio repos, AMReX's
 # Docs/sphinx_documentation/source/GettingStarted.rst among them
@@ -81,32 +77,27 @@ _MAX_CONTRIBUTOR_PAGES = 5
 _MAX_COMMIT_PAGES = 10
 
 
-def _label_query(labels: List[str]) -> str:
-    """Labels for one label: qualifier. Comma-separated values are ORed, so
-    all labels take one search per state; a label with a space or colon must
-    be quoted or the parser splits it."""
-    return ",".join(f'"{l}"' if re.search(r"[\s:]", l) else l for l in labels)
-
-
-class OutreachCollector(GitHubCollectorBase):
+class OutreachCollector:
     """Collects contributor-growth metrics (Section 4.2.5)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting outreach metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
-                self._get_contributors(client, owner, repo),
-                self._get_recent_commit_authors(client, owner, repo),
-                self._get_newcomer_issues(client, owner, repo),
-                RepoTree.fetch(client, self.github_headers, owner, repo),
+                self._get_contributors(client, ref),
+                self._get_recent_commit_authors(client, ref),
+                self._get_newcomer_issues(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
                 return_exceptions=True,
             )
 
@@ -135,7 +126,7 @@ class OutreachCollector(GitHubCollectorBase):
         onboarding = self._check_onboarding(tree)
         if onboarding["missing"]:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                readme = await self._get_readme_text(client, owner, repo)
+                readme = await self.forge.readme(client, ref)
             if readme:
                 self._credit_readme(onboarding, readme)
 
@@ -143,8 +134,8 @@ class OutreachCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "contributor_growth": growth,
             "newcomer_issues": newcomer_issues,
             "onboarding": onboarding,
@@ -155,32 +146,7 @@ class OutreachCollector(GitHubCollectorBase):
 
     # ------------------------------------------------------------------ fetch
 
-    async def _get_page(
-        self, client: httpx.AsyncClient, url: str, params: Optional[dict] = None
-    ) -> tuple:
-        """GET a paginated GitHub endpoint.
-
-        Returns (items, next_url) on success (items is [] and next_url is
-        None once pagination is confirmed exhausted), or (COLLECTION_GAP,
-        None) if this page couldn't actually be fetched.
-        """
-        try:
-            response = await client.get(url, headers=self.github_headers, params=params)
-        except Exception as e:
-            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
-            return COLLECTION_GAP, None
-        if response.status_code == 404:
-            return [], None
-        if response.status_code != 200:
-            return COLLECTION_GAP, None
-        page = response.json()
-        if not isinstance(page, list):
-            return [], None
-        return page, self._next_link(response.headers.get("Link"))
-
-    async def _get_contributors(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> tuple:
+    async def _get_contributors(self, client: httpx.AsyncClient, ref: str) -> tuple:
         """All-time contributors with their total contribution counts.
 
         Returns (contributors, saw_gap). A gap partway through pagination
@@ -188,71 +154,58 @@ class OutreachCollector(GitHubCollectorBase):
         tells the caller the list may be incomplete.
         """
         contributors: List[Dict] = []
-        url = f"https://api.github.com/repos/{owner}/{repo}/contributors"
-        params: Optional[dict] = {"per_page": 100}
         saw_gap = False
-        for _ in range(_MAX_CONTRIBUTOR_PAGES):
-            page, next_url = await self._get_page(client, url, params)
-            if page is COLLECTION_GAP:
+        for page in range(1, _MAX_CONTRIBUTOR_PAGES + 1):
+            batch = await self.forge.contributors(client, ref, per_page=100, page=page)
+            if batch is COLLECTION_GAP:
                 saw_gap = True
                 break
-            if not page:
+            if not batch:
                 break
-            contributors.extend(page)
-            if not next_url:
+            contributors.extend(batch)
+            if len(batch) < 100:
                 break
-            url, params = next_url, None
         return contributors, saw_gap
 
-    async def _get_recent_commit_authors(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> tuple:
+    async def _get_recent_commit_authors(self, client: httpx.AsyncClient, ref: str) -> tuple:
         """Commit counts per author over the recent window.
 
         Returns (counts, saw_gap, truncated); truncated means the page cap
         ended the walk before the window did.
         """
         since = (datetime.now(timezone.utc) - timedelta(days=_RECENT_DAYS)).isoformat()
-        url = f"https://api.github.com/repos/{owner}/{repo}/commits"
-        params: Optional[dict] = {"since": since, "per_page": 100}
         counts: Dict[str, int] = {}
         saw_gap = truncated = False
-        for page_no in range(_MAX_COMMIT_PAGES):
-            page, next_url = await self._get_page(client, url, params)
-            if page is COLLECTION_GAP:
+        for page in range(1, _MAX_COMMIT_PAGES + 1):
+            batch = await self.forge.commits(client, ref, since=since, per_page=100, page=page)
+            if batch is COLLECTION_GAP:
                 saw_gap = True
                 break
-            if not page:
+            if not batch:
                 break
-            for commit in page:
-                login = (commit.get("author") or {}).get("login")
-                if login:
-                    counts[login] = counts.get(login, 0) + 1
-            if not next_url:
+            for commit in batch:
+                identity = commit.get("author_identity")
+                if identity:
+                    counts[identity] = counts.get(identity, 0) + 1
+            if len(batch) < 100:
                 break
-            if page_no == _MAX_COMMIT_PAGES - 1:
+            if page == _MAX_COMMIT_PAGES:
                 truncated = True
-            url, params = next_url, None
         return counts, saw_gap, truncated
 
-    async def _get_newcomer_issues(
-        self, client: httpx.AsyncClient, owner: str, repo: str
-    ) -> Dict[str, Any]:
+    async def _get_newcomer_issues(self, client: httpx.AsyncClient, ref: str) -> Dict[str, Any]:
         """Open and closed counts for each newcomer-friendly label.
 
-        Uses the search API rather than paginating /issues, so each label costs
-        two requests and returns an exact total instead of a page count.
+        Uses issue search rather than paginating issues, so all labels cost
+        two requests and return an exact total instead of a page count.
         """
-        queried = await self._newcomer_labels(client, owner, repo)
-        labels = _label_query(queried)
+        queried = await self._newcomer_labels(client, ref)
 
         async def count(state: str) -> tuple:
-            q = f'repo:{owner}/{repo} is:issue state:{state} label:{labels}'
-            url = f"https://api.github.com/search/issues?q={quote(q)}&per_page=1"
-            resp = await search_get(client, url, self.github_headers)
-            if resp is None:
+            total = await self.forge.count_issues(client, ref, state=state, labels=queried)
+            if total is None:
                 return 0, True
-            return resp.json().get("total_count", 0), False
+            return total, False
 
         (open_count, open_gap), (closed_count, closed_gap) = await asyncio.gather(
             count("open"), count("closed"),
@@ -270,20 +223,17 @@ class OutreachCollector(GitHubCollectorBase):
             result["not_collected"] = True
         return result
 
-    async def _newcomer_labels(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
+    async def _newcomer_labels(self, client: httpx.AsyncClient, ref: str) -> List[str]:
         """The repository's own newcomer-style labels, or the common names
         when its labels can't be read."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/labels"
-        params: Optional[dict] = {"per_page": 100}
         names: List[str] = []
-        for _ in range(_MAX_LABEL_PAGES):
-            page, next_url = await self._get_page(client, url, params)
-            if page is COLLECTION_GAP:
+        for page in range(1, _MAX_LABEL_PAGES + 1):
+            batch = await self.forge.labels(client, ref, page=page, per_page=100)
+            if batch is COLLECTION_GAP:
                 return list(_NEWCOMER_LABELS)
-            names += [l.get("name", "") for l in page or []]
-            if not next_url:
+            names += [l.get("name", "") for l in batch or []]
+            if not batch or len(batch) < 100:
                 break
-            url, params = next_url, None
         own = [n for n in names if _NEWCOMER_LABEL_PATTERN.search(n) and "," not in n]
         return own or list(_NEWCOMER_LABELS)
 
@@ -298,16 +248,17 @@ class OutreachCollector(GitHubCollectorBase):
                 "details": {label: {"not_collected": True} for label in _ONBOARDING_LABELS},
             }
 
-        issue_templates_url = tree.match_url(_ISSUE_TEMPLATE_FILES)
-        if not issue_templates_url and tree.has_dir(_ISSUE_TEMPLATE_DIR):
-            issue_templates_url = f"https://github.com/{tree.owner}/{tree.repo}/tree/HEAD/{_ISSUE_TEMPLATE_DIR}"
+        # match_url() matches files and directories alike, so a template
+        # directory (.github/ISSUE_TEMPLATE, .gitlab/issue_templates) counts.
+        issue_templates_url = tree.match_url(self.forge.platform_paths("issue_templates"))
 
         deep_contributing = tree.find_owned(_DEEP_DOC_PATTERNS["contributing_guidelines"])
         urls = {
             "Contributing guide": tree.match_url(_CONTRIBUTING_PATHS) or (
                 tree.url_for(deep_contributing) if deep_contributing else None),
             "Issue templates": issue_templates_url,
-            "Pull request template": tree.match_url(_PR_TEMPLATE_PATHS),
+            "Pull request template": tree.match_url(
+                _PR_TEMPLATE_PATHS + self.forge.platform_paths("change_request_templates")),
             "Getting-started guide": tree.find_url(_GETTING_STARTED_PATTERN),
         }
         found = [label for label in _ONBOARDING_LABELS if urls[label]]
@@ -332,25 +283,6 @@ class OutreachCollector(GitHubCollectorBase):
         onboarding["found"] = [l for l in _ONBOARDING_LABELS if onboarding["details"][l].get("exists")]
         onboarding["missing"] = [l for l in _ONBOARDING_LABELS
                                  if l not in onboarding["found"] and l not in onboarding["not_collected"]]
-
-    async def _get_readme_text(self, client: httpx.AsyncClient, owner: str, repo: str) -> str:
-        try:
-            resp = await client.get(f"https://api.github.com/repos/{owner}/{repo}/readme",
-                                    headers={**self.github_headers, "Accept": "application/vnd.github.raw"})
-        except httpx.HTTPError:
-            return ""
-        return resp.text if resp.status_code == 200 else ""
-
-    @staticmethod
-    def _next_link(link_header: Optional[str]) -> Optional[str]:
-        """Parse the `next` URL out of a GitHub Link pagination header."""
-        if not link_header:
-            return None
-        for part in link_header.split(","):
-            segment = part.strip()
-            if 'rel="next"' in segment:
-                return segment.split(";")[0].strip().strip("<>")
-        return None
 
     # ---------------------------------------------------------------- analyze
 
@@ -386,9 +318,9 @@ class OutreachCollector(GitHubCollectorBase):
             }
 
         totals = {
-            c["login"]: c.get("contributions", 0)
+            c["identity"]: c.get("commit_count", 0)
             for c in contributors
-            if c.get("login")
+            if c.get("identity")
         }
 
         unlisted = [login for login in recent_counts if login not in totals]
@@ -450,7 +382,7 @@ class OutreachCollector(GitHubCollectorBase):
         incomplete = list_truncated or growth.get("commit_window_truncated", False)
         if list_truncated:
             why = (f"not measurable: {growth.get('unlisted_recent_authors', 0)} recent authors "
-                   "are beyond GitHub's contributor list")
+                   "are beyond the forge's contributor list")
         else:
             why = (f"not measurable: the last {_MAX_COMMIT_PAGES * 100} commits "
                    f"don't reach back {_RECENT_DAYS} days")
@@ -497,7 +429,7 @@ class OutreachCollector(GitHubCollectorBase):
             # contributors, so the split can't be read from what's there.
             lifecycle_entry.update(
                 value=f"Not measurable: {growth.get('unlisted_recent_authors', 0)} recent authors "
-                      "are beyond GitHub's contributor list",
+                      "are beyond the forge's contributor list",
                 unmeasured=True, passing=False)
         sub["contributor_lifecycle"] = lifecycle_entry
 
@@ -553,7 +485,7 @@ class OutreachCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "contributor_growth": {},
             "newcomer_issues": {},
             "onboarding": {"found": [], "missing": [], "not_collected": [], "details": {}},

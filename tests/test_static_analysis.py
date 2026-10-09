@@ -1,15 +1,33 @@
 """Unit tests for StaticAnalysisCollector."""
 
 import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from collectors.ecosystem.base import COLLECTION_GAP
+
+from forge.base import COLLECTION_GAP
 from collectors.quality.static_analysis import StaticAnalysisCollector
+from tests.fakes import FakeForge, gitlab_fake
+
+_URL = "https://github.com/owner/repo"
+_CODEQL_PROBES = [
+    ".github/workflows/codeql.yml", ".github/workflows/codeql.yaml",
+    ".github/workflows/codeql-analysis.yml", ".github/workflows/codeql-analysis.yaml",
+]
 
 
 @pytest.fixture
-def collector():
-    return StaticAnalysisCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return StaticAnalysisCollector(forge)
+
+
+def _collect(collector):
+    return asyncio.run(collector.collect({"name": "MyPkg", "repo_url": _URL}))
 
 
 class TestEmptyResult:
@@ -22,162 +40,127 @@ class TestEmptyResult:
 
 class TestCollect:
     def test_collect_invalid_url(self, collector):
-        result = asyncio.run(
-            collector.collect({"name": "Bad", "repo_url": "not-a-url"})
-        )
+        result = asyncio.run(collector.collect({"name": "Bad", "repo_url": "not-a-url"}))
         assert result["has_codeql"] is False
         assert result["repository"] == "unknown"
 
-    def test_finds_codeql_workflow(self, collector, monkeypatch):
-        async def fake_check_file_exists(client, owner, repo, path):
-            if path == ".github/workflows/codeql.yml":
-                return f"https://github.com/{owner}/{repo}/blob/main/{path}"
-            return None
-
-        monkeypatch.setattr(collector, "_check_file_exists", fake_check_file_exists)
-
-        result = asyncio.run(
-            collector.collect({"name": "MyPkg", "repo_url": "https://github.com/owner/repo"})
-        )
+    def test_finds_codeql_workflow(self, collector, forge):
+        forge.files = {".github/workflows/codeql.yml": "name: CodeQL"}
+        result = _collect(collector)
         assert result["has_codeql"] is True
+        assert result["scanner"] == "CodeQL"
         assert result["workflow_file"] == ".github/workflows/codeql.yml"
         assert result["workflow_url"]
 
-    def test_no_codeql_workflow_found(self, collector, monkeypatch):
-        async def fake_check_file_exists(client, owner, repo, path):
-            return None
-
-        monkeypatch.setattr(collector, "_check_file_exists", fake_check_file_exists)
-        monkeypatch.setattr(collector, "_github_get", AsyncMock(return_value=None))
-
-        result = asyncio.run(
-            collector.collect({"name": "MyPkg", "repo_url": "https://github.com/owner/repo"})
-        )
+    def test_no_codeql_workflow_found(self, collector):
+        result = _collect(collector)
         assert result["has_codeql"] is False
         assert result["workflow_file"] is None
+        assert result["scanners_checked"] == "CodeQL"
         assert "not_collected" not in result
 
-    def test_filename_probe_gap_with_no_find_is_not_collected(self, collector, monkeypatch):
-        monkeypatch.setattr(collector, "_check_file_exists", AsyncMock(return_value=COLLECTION_GAP))
-        monkeypatch.setattr(collector, "_github_get", AsyncMock(return_value=None))
-
-        result = asyncio.run(
-            collector.collect({"name": "MyPkg", "repo_url": "https://github.com/owner/repo"})
-        )
+    def test_filename_probe_gap_with_no_find_is_not_collected(self, collector, forge):
+        forge.gap_paths = set(_CODEQL_PROBES)
+        result = _collect(collector)
         assert result["has_codeql"] is False
         assert result["not_collected"] is True
 
-    def test_found_workflow_survives_a_directory_listing_gap_elsewhere(self, collector, monkeypatch):
+    def test_found_workflow_survives_a_listing_gap_elsewhere(self, collector, forge):
         # The direct filename probes find it before the fallback scan (which
         # would have gapped) is even reached.
-        async def fake_check_file_exists(client, owner, repo, path):
-            if path == ".github/workflows/codeql.yml":
-                return f"https://github.com/{owner}/{repo}/blob/main/{path}"
-            return None
-
-        monkeypatch.setattr(collector, "_check_file_exists", fake_check_file_exists)
-        monkeypatch.setattr(collector, "_github_get", AsyncMock(return_value=COLLECTION_GAP))
-
-        result = asyncio.run(
-            collector.collect({"name": "MyPkg", "repo_url": "https://github.com/owner/repo"})
-        )
+        forge.files = {".github/workflows/codeql.yml": "name: CodeQL"}
+        forge.gaps = {"ci_config_files", "ci_workflows"}
+        result = _collect(collector)
         assert result["has_codeql"] is True
         assert "not_collected" not in result
 
+    def test_codeql_bundled_in_another_workflow_is_found_by_content(self, collector, forge):
+        # ADIOS2 runs CodeQL from everything.yml.
+        forge.files = {".github/workflows/everything.yml": "- uses: github/codeql-action/init@v3"}
+        result = _collect(collector)
+        assert result["has_codeql"] is True
+        assert result["workflow_file"] == ".github/workflows/everything.yml"
+
 
 class TestFindDefaultSetup:
-    def _run(self, collector, data):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
-                return await collector._find_default_setup(MagicMock(), "o", "r")
-        return asyncio.run(go())
+    def _run(self, collector, workflows):
+        collector.forge.workflows = workflows
+        return asyncio.run(collector._find_default_setup(None, "o/r"))
 
     def test_active_default_setup_found(self, collector):
-        data = {"workflows": [{
+        url, gap = self._run(collector, [{
             "path": "dynamic/github-code-scanning/codeql", "state": "active",
             "html_url": "https://github.com/o/r/actions/workflows/github-code-scanning/codeql",
-        }]}
-        url, gap = self._run(collector, data)
+        }])
         assert url == "https://github.com/o/r/actions/workflows/github-code-scanning/codeql"
         assert gap is False
 
     def test_disabled_default_setup_not_counted(self, collector):
-        data = {"workflows": [{"path": "dynamic/github-code-scanning/codeql", "state": "disabled_manually"}]}
-        assert self._run(collector, data) == (None, False)
+        assert self._run(collector, [
+            {"path": "dynamic/github-code-scanning/codeql", "state": "disabled_manually"}
+        ]) == (None, False)
 
     def test_other_dynamic_workflows_not_counted(self, collector):
-        data = {"workflows": [{"path": "dynamic/dependabot/dependabot-updates", "state": "active"}]}
-        assert self._run(collector, data) == (None, False)
+        assert self._run(collector, [
+            {"path": "dynamic/dependabot/dependabot-updates", "state": "active"}
+        ]) == (None, False)
 
     def test_gap_is_tracked(self, collector):
-        assert self._run(collector, COLLECTION_GAP) == (None, True)
+        collector.forge.gaps = {"ci_workflows"}
+        assert asyncio.run(collector._find_default_setup(None, "o/r")) == (None, True)
 
     def test_collect_reports_default_setup(self, collector, monkeypatch):
-        monkeypatch.setattr(collector, "_check_file_exists", AsyncMock(return_value=None))
         monkeypatch.setattr(collector, "_find_default_setup", AsyncMock(return_value=("https://x", False)))
-        result = asyncio.run(
-            collector.collect({"name": "MyPkg", "repo_url": "https://github.com/owner/repo"})
-        )
+        result = _collect(collector)
         assert result["has_codeql"] is True
         assert result["workflow_file"] == "CodeQL default setup"
         assert result["workflow_url"] == "https://x"
 
 
 class TestScanWorkflowsForCodeqlGapHandling:
-    def test_directory_listing_gap_is_tracked(self, collector):
-        async def go():
-            client = MagicMock()
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._scan_workflows_for_codeql(client, "o", "r")
-
-        found, saw_gap = asyncio.run(go())
+    def test_listing_gap_is_tracked(self, collector, forge):
+        forge.gaps = {"ci_config_files"}
+        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is None
         assert saw_gap is True
 
-    def test_confirmed_no_workflows_dir_is_not_a_gap(self, collector):
-        async def go():
-            client = MagicMock()
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=None)):
-                return await collector._scan_workflows_for_codeql(client, "o", "r")
-
-        found, saw_gap = asyncio.run(go())
+    def test_confirmed_no_workflows_is_not_a_gap(self, collector):
+        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is None
         assert saw_gap is False
 
-    def test_content_fetch_failure_on_a_candidate_is_a_gap(self, collector):
-        entries = [{"name": "ci.yml", "download_url": "http://x/ci.yml", "html_url": "http://h"}]
-
-        async def go():
-            client = AsyncMock()
-            client.get = AsyncMock(side_effect=ConnectionError("boom"))
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=entries)):
-                return await collector._scan_workflows_for_codeql(client, "o", "r")
-
-        found, saw_gap = asyncio.run(go())
+    def test_read_failure_on_a_candidate_is_a_gap(self, collector, forge):
+        forge.files = {".github/workflows/ci.yml": "x"}
+        forge.gap_paths = {".github/workflows/ci.yml"}
+        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is None
         assert saw_gap is True
 
-    def test_match_found_despite_a_gap_on_another_candidate(self, collector):
-        entries = [
-            {"name": "broken.yml", "download_url": "http://x/broken.yml", "html_url": "http://b"},
-            {"name": "codeql.yml", "download_url": "http://x/codeql.yml", "html_url": "http://c"},
-        ]
-
-        async def go():
-            client = AsyncMock()
-
-            async def fake_get(url, *a, **kw):
-                resp = MagicMock()
-                if "broken" in url:
-                    raise ConnectionError("boom")
-                resp.status_code = 200
-                resp.text = "uses: github/codeql-action/analyze@v2"
-                return resp
-
-            client.get = fake_get
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=entries)):
-                return await collector._scan_workflows_for_codeql(client, "o", "r")
-
-        found, saw_gap = asyncio.run(go())
+    def test_match_found_despite_a_gap_on_another_candidate(self, collector, forge):
+        forge.files = {
+            ".github/workflows/broken.yml": "x",
+            ".github/workflows/codeql.yml": "uses: github/codeql-action/analyze@v2",
+        }
+        forge.gap_paths = {".github/workflows/broken.yml"}
+        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is not None
         assert found["file"].endswith("codeql.yml")
+
+
+class TestGitLab:
+    def _collect(self, ci_text):
+        forge = gitlab_fake(files={".gitlab-ci.yml": ci_text}, ci_files=[
+            {"name": ".gitlab-ci.yml", "path": ".gitlab-ci.yml", "html_url": "u", "primary": True},
+        ])
+        return asyncio.run(StaticAnalysisCollector(forge).collect(
+            {"name": "p", "repo_url": "https://gitlab.example.com/g/p"}))
+
+    def test_sast_template_include_counts(self):
+        result = self._collect("include:\n  - template: Jobs/SAST.gitlab-ci.yml\n")
+        assert result["has_codeql"] is True
+        assert result["scanner"] == "GitLab SAST"
+
+    def test_no_scanner_names_both_options(self):
+        result = self._collect("build:\n  script: make\n")
+        assert result["has_codeql"] is False
+        assert result["scanners_checked"] == "CodeQL or GitLab SAST"

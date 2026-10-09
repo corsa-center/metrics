@@ -15,15 +15,19 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
 
-class OpenSSFBadgeCollector(GitHubCollectorBase):
+class OpenSSFBadgeCollector:
     """Collects OpenSSF Best Practices Badge metrics (Section 4.2.5)."""
 
     BADGE_SEARCH_URL = "https://bestpractices.coreinfrastructure.org/projects.json"
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     # File patterns checked when no badge exists.
     # These overlap intentionally with CommunityHealthCollector — OpenSSF uses
@@ -96,24 +100,22 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
 
         logger.info(f"Collecting OpenSSF Badge metrics for {repo_name}")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            badge_data = await self._search_badge(client, owner, repo, repo_url)
+            badge_data = await self._search_badge(client, ref, repo_url)
             # A registered badge with nothing answered yet (0%) says nothing
             # about the criteria, so it gets the repository scan like no
             # badge at all -- otherwise every criterion reads "not met".
             if badge_data and badge_data.get("badge_percentage_0", 0) > 0:
                 logger.info(f"Badge found — level: {badge_data.get('badge_level')}, progress: {badge_data.get('badge_percentage_0', 0)}%")
-                return self._collect_with_badge(repo_name, owner, repo, badge_data)
+                return self._collect_with_badge(repo_name, ref, badge_data)
             logger.info("No started badge — scanning repository for requirements")
-            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
-            result = self._collect_without_badge(repo_name, owner, repo, tree)
+            tree = await RepoTree.fetch(client, self.forge, ref)
+            result = self._collect_without_badge(repo_name, ref, tree)
             if badge_data:
                 result["badge_status"].update({
                     "level": "registered, not started",
@@ -127,7 +129,7 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ #
 
     def _collect_with_badge(
-        self, repo_name: str, owner: str, repo: str, badge_data: Dict[str, Any]
+        self, repo_name: str, ref: str, badge_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         badge_level = self._get_badge_level(badge_data)
         badge_percentage = badge_data.get("badge_percentage_0", 0)
@@ -136,8 +138,8 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "badge_exists": True,
             "badge_status": {
                 "level": badge_level,
@@ -160,7 +162,7 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
         }
 
     def _collect_without_badge(
-        self, repo_name: str, owner: str, repo: str, tree
+        self, repo_name: str, ref: str, tree
     ) -> Dict[str, Any]:
         governance = self._scan_files(tree, self.GOVERNANCE_FILES)
         security = self._scan_files(tree, self.SECURITY_FILES)
@@ -180,8 +182,8 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "badge_exists": False,
             "badge_status": {
                 "level": "none",
@@ -210,7 +212,7 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ #
 
     async def _search_badge(
-        self, client: httpx.AsyncClient, owner: str, repo: str, repo_url: str
+        self, client: httpx.AsyncClient, ref: str, repo_url: str
     ) -> Optional[Dict[str, Any]]:
         headers = {"Accept": "application/json", "User-Agent": "CASS-Metrics-Collector"}
         try:
@@ -220,11 +222,11 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
                 if results:
                     return results[0]
 
-            for query in [f"github.com/{owner}/{repo}", f"{owner}/{repo}"]:
+            for query in [f"{self.forge.host}/{ref}", ref]:
                 response = await client.get(self.BADGE_SEARCH_URL, params={"q": query}, headers=headers, follow_redirects=True)
                 if response.status_code == 200:
                     for result in response.json():
-                        if f"{owner}/{repo}".lower() in result.get("repo_url", "").lower():
+                        if ref.lower() in result.get("repo_url", "").lower():
                             return result
         except Exception as e:
             logger.debug(f"Error searching for badge: {e}")
@@ -330,7 +332,7 @@ class OpenSSFBadgeCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "badge_exists": False,
             "badge_status": {"level": "none", "id": None, "url": None, "progress_percentage": 0, "in_progress": False, "started": False},
             "governance_criteria": {"found": [], "missing": [], "percentage": 0},

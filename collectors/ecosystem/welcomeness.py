@@ -12,16 +12,15 @@ about maintainers, and stay uncollected.
 """
 
 import asyncio
-import base64
 import logging
 from typing import Any, Dict, List
 
 import httpx
 
 from collectors.ecosystem.base import (
-    COLLECTION_GAP, PUBLIC_CHANNEL_PATTERNS, GitHubCollectorBase, RepoTree, RetryingTransport,
-    get_threshold, wiki_has_content,
+    COLLECTION_GAP, PUBLIC_CHANNEL_PATTERNS, RepoTree, RetryingTransport, get_threshold,
 )
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +49,11 @@ _DECISION_PATTERNS = {
 }
 
 # Repository features that expose discussion and documentation publicly.
+# "{forge}" is the platform's name (GitHub, GitLab).
 _PUBLIC_CHANNELS = {
-    "has_discussions": "GitHub Discussions",
+    "has_discussions": "{forge} Discussions",
     "has_wiki": "Wiki",
-    "has_pages": "GitHub Pages",
+    "has_pages": "{forge} Pages",
 }
 
 # README-linked venues where a community can see decisions being made --
@@ -62,23 +62,25 @@ _PUBLIC_CHANNELS = {
 _README_CHANNELS = ("Mailing list", "Forum", "Chat (Slack/Discord/Matrix)")
 
 
-class WelcomenessCollector(GitHubCollectorBase):
+class WelcomenessCollector:
     """Collects decision-making visibility signals (Section 4.2.6)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting welcomeness metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
-                self._get_public_channels(client, owner, repo),
-                RepoTree.fetch(client, self.github_headers, owner, repo),
+                self._get_public_channels(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
                 return_exceptions=True,
             )
 
@@ -95,15 +97,15 @@ class WelcomenessCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "public_channels": channels,
             "decision_documents": documents,
             "overall_score": self._calculate_score(channels, documents, channels_gap),
         }
 
     async def _get_public_channels(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Discussions / wiki / pages flags off the repository object, plus
         channels the README links to.
@@ -115,22 +117,19 @@ class WelcomenessCollector(GitHubCollectorBase):
 
         Returns (channels, saw_gap).
         """
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        data = await self.forge.repo_info(client, ref)
         if data is COLLECTION_GAP:
             return [], True
         if data is None:
             return [], False
         flags = dict(data)
         if flags.get("has_wiki"):
-            flags["has_wiki"] = await wiki_has_content(owner, repo)
-        channels = [label for flag, label in _PUBLIC_CHANNELS.items() if flags.get(flag)]
+            flags["has_wiki"] = await self.forge.wiki_has_content(client, ref)
+        channels = [label.format(forge=self.forge.display_name)
+                    for flag, label in _PUBLIC_CHANNELS.items() if flags.get(flag)]
 
-        readme = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
-        if isinstance(readme, dict):
-            try:
-                text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")
-            except Exception:
-                text = ""
+        text = await self.forge.readme(client, ref)
+        if text:
             channels += [label for label in _README_CHANNELS
                          if PUBLIC_CHANNEL_PATTERNS[label].search(text)]
         return channels, False
@@ -219,7 +218,7 @@ class WelcomenessCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "public_channels": [],
             "decision_documents": {"found": [], "not_collected": [], "details": {}},
             "overall_score": self._calculate_score([], {"found": []}),

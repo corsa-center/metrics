@@ -8,7 +8,9 @@ from collectors.quality.maintainability import MaintainabilityCollector, _REFACT
 
 @pytest.fixture
 def collector():
-    return MaintainabilityCollector()
+    # None: every test here exercises pure computation methods
+    # (_analyze_tree/_calculate_score) that never touch self.forge.
+    return MaintainabilityCollector(None)
 
 
 def _f(path, size=1000):

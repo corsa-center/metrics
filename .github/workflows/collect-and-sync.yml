@@ -110,6 +110,14 @@ jobs:
           # depends on, so it's an accepted limitation rather than a reason
           # to keep routine runs on an elevated token.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GitLab tokens, one per configured host (config/orchestrator.yaml's
+          # api_credentials.gitlab). Both are optional -- an unset secret
+          # resolves to an empty string, and GitLabForge treats that the
+          # same as GitHubForge treats no token: works for public repos,
+          # just at GitLab's lower unauthenticated rate limit. Must be
+          # added as repo secrets separately; nothing here creates them.
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_KITWARE_TOKEN: ${{ secrets.GITLAB_KITWARE_TOKEN }}
           SEMANTIC_SCHOLAR_KEY: ${{ secrets.SEMANTIC_SCHOLAR_KEY }}
           OPENALEX_EMAIL: ${{ secrets.OPENALEX_EMAIL }}
         run: |

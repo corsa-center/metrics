@@ -21,6 +21,19 @@ default_branch: develop
 primary_language: C
 ```
 
+`repo_type` selects the code-hosting platform the metrics are collected
+from:
+
+- `github` -- repositories on github.com (GitHub Enterprise is not
+  supported).
+- `gitlab` -- gitlab.com or any self-hosted GitLab instance; the host is
+  taken from `repo_url`. Add a token for a self-hosted host under
+  `api_credentials.gitlab.<host>` in `config/orchestrator.yaml` to raise
+  its rate limit or reach a private project.
+
+Any other value is logged and the package is skipped, so it shows as "not
+yet collected" rather than with false negatives.
+
 It is expected that some of these fields will be automatically generated when the package file is created (TBD),
 but some will, by necessity, be manually entered. e.g. `description` and `default_branch` can probably be obtained
 from the GitHub repository, however the `name`, `published` and `repo_url` fields will need to be supplied manually.

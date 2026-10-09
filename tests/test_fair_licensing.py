@@ -8,11 +8,13 @@ from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.fair_licensing import (
     FairLicensingCollector, _CITATION_FIELDS, _CODEMETA_PATHS,
 )
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return FairLicensingCollector()
+    return FairLicensingCollector(GitHubForge())
 
 
 HDF5_LICENSE = """Copyright Notice and License Terms for HDF5
@@ -354,33 +356,33 @@ class TestScoringGapHandling:
 class TestFetchGapHandling:
     def test_get_license_gap_is_tracked(self, collector):
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_license(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_license(None, "o/r")
 
         data, saw_gap = asyncio.run(go())
         assert saw_gap is True
 
     def test_get_citation_gapped_tree_is_tracked(self, collector):
-        citation, saw_gap = asyncio.run(collector._get_citation(None, "o", "r", COLLECTION_GAP))
+        citation, saw_gap = asyncio.run(collector._get_citation(None, "o/r", COLLECTION_GAP))
         assert citation == {}
         assert saw_gap is True
 
     def test_get_citation_resolves_case_insensitively(self, collector):
         # Lab-Notebooks/CodeScribe ships citation.cff, not CITATION.cff.
-        tree = RepoTree("o", "r", ["citation.cff"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["citation.cff"], truncated=False)
         data = {"content": "dGl0bGU6IEZvbw=="}  # base64 "title: Foo"
 
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
-                return await collector._get_citation(None, "o", "r", tree)
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._get_citation(None, "o/r", tree)
 
         citation, saw_gap = asyncio.run(go())
         assert citation == {"title": "Foo"}
         assert saw_gap is False
 
     def test_get_citation_confirmed_absent_is_not_a_gap(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
-        citation, saw_gap = asyncio.run(collector._get_citation(None, "o", "r", tree))
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        citation, saw_gap = asyncio.run(collector._get_citation(None, "o/r", tree))
         assert citation == {}
         assert saw_gap is False
 
@@ -390,15 +392,15 @@ class TestFetchGapHandling:
         assert saw_gap is True
 
     def test_any_exists_found_does_not_need_gap_flag(self, collector):
-        tree = RepoTree("o", "r", _CODEMETA_PATHS, truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", _CODEMETA_PATHS, truncated=False)
         found, saw_gap = collector._any_exists(tree, _CODEMETA_PATHS)
         assert found is True
         assert saw_gap is False
 
     def test_has_releases_gap_is_tracked(self, collector):
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._has_releases(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._has_releases(None, "o/r")
 
         has_releases, saw_gap = asyncio.run(go())
         assert has_releases is False
@@ -409,8 +411,8 @@ class TestReleasesFromTags:
     def _run(self, collector, releases, tags):
         async def get(client, url, params=None):
             return releases if url.endswith("/releases") else tags
-        collector._github_get = get
-        return asyncio.run(collector._has_releases(None, "o", "r"))
+        collector.forge._github_get = get
+        return asyncio.run(collector._has_releases(None, "o/r"))
 
     def test_version_tags_count_without_release_objects(self, collector):
         assert self._run(collector, [], [{"name": "v9.17.2"}]) == (True, False)
@@ -446,7 +448,7 @@ class TestBibtexCitation:
 """
 
     def test_paper_entries_give_title_authors_doi(self, collector):
-        result = collector._analyze_bibtex(self.PAPER, "LLNL", "sundials")
+        result = collector._analyze_bibtex(self.PAPER, "github.com/llnl/sundials")
         assert result["present"] == ["title", "authors", "doi"]
 
     def test_software_entry_can_carry_version_and_repository(self, collector):
@@ -456,12 +458,12 @@ class TestBibtexCitation:
   url = {https://github.com/LLNL/sundials},
   doi = {10.5281/zenodo.1}
 }"""
-        result = collector._analyze_bibtex(text, "LLNL", "sundials")
+        result = collector._analyze_bibtex(text, "github.com/llnl/sundials")
         assert result["present"] == ["title", "authors", "version", "repository-code", "doi"]
 
     def test_url_to_another_site_is_not_repository_code(self, collector):
         text = "@article{x,\n  url = {https://doi.org/10.1/abc}\n}"
-        assert "repository-code" not in collector._analyze_bibtex(text, "o", "r")["present"]
+        assert "repository-code" not in collector._analyze_bibtex(text, "github.com/o/r")["present"]
 
     def _score(self, collector, bibtex):
         metadata = {"exists": False, "present": [], "missing": []}
@@ -485,23 +487,23 @@ class TestBibtexCitation:
 
     def test_booktitle_is_not_title(self, collector):
         text = "@inproceedings{x,\n  booktitle = {Proc. SC}\n}"
-        assert collector._analyze_bibtex(text, "o", "r")["present"] == []
+        assert collector._analyze_bibtex(text, "github.com/o/r")["present"] == []
 
 
 class TestReadmeBibtex:
     def _run(self, collector, readme, citation_files=()):
         import base64
         from unittest.mock import AsyncMock, patch
-        tree = RepoTree("o", "r", ["README.md", *citation_files], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md", *citation_files], truncated=False)
         data = {"content": base64.b64encode(readme.encode()).decode(), "path": "README.md"}
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
-            return asyncio.run(collector._get_bibtex_citation(None, "o", "r", tree))
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._get_bibtex_citation(None, "o/r", tree))
 
     def test_bibtex_under_citation_heading_is_read(self, collector):
         md = ("# Pkg\n## Citation\nPlease cite:\n```bibtex\n@software{pkg2026,\n"
               "  title={Pkg}, author={A and B}, year={2026}\n}\n```\n## Authors\n- A\n")
         result = self._run(collector, md)
-        assert result["path"] == "README.md citation section"
+        assert result["path"] == "README citation section"
         assert result["present"] == ["title", "authors"]
 
     def test_bibtex_elsewhere_in_readme_is_not(self, collector):

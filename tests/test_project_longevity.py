@@ -261,29 +261,11 @@ class TestProjectAgeDates:
         assert "Project age: age unknown" in html
 
 
-class TestFirstCommitLookup:
-    def test_picks_last_page_from_link_header(self):
-        from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
-
-        header = (
-            '<https://api.github.com/repositories/1/commits?per_page=1&page=2>; rel="next", '
-            '<https://api.github.com/repositories/1/commits?per_page=1&page=9000>; rel="last"'
-        )
-        assert ActiveMaintenanceCollector._get_rel_link(header, "last").endswith("page=9000")
-        assert ActiveMaintenanceCollector._get_next_link(header).endswith("page=2")
-
-    def test_missing_header_returns_none(self):
-        from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
-
-        assert ActiveMaintenanceCollector._get_rel_link(None, "last") is None
-        assert ActiveMaintenanceCollector._get_rel_link("", "last") is None
-
-
 class TestAgeDerivation:
     def test_longer_of_the_two_ages_wins(self):
         from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
-        c = ActiveMaintenanceCollector()
+        c = ActiveMaintenanceCollector(None)
         out = c._analyze_maintenance_indicators(
             {"archived": False, "description": "", "pushed_at": None,
              "created_at": "2020-04-24T18:25:20Z"},
@@ -297,7 +279,7 @@ class TestAgeDerivation:
         # is then the longer span and must not be discarded.
         from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
-        c = ActiveMaintenanceCollector()
+        c = ActiveMaintenanceCollector(None)
         out = c._analyze_maintenance_indicators(
             {"archived": False, "description": "", "pushed_at": None,
              "created_at": "2016-03-24T02:10:02Z"},
@@ -308,7 +290,7 @@ class TestAgeDerivation:
     def test_no_dates_yields_none(self):
         from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
 
-        c = ActiveMaintenanceCollector()
+        c = ActiveMaintenanceCollector(None)
         out = c._analyze_maintenance_indicators(
             {"archived": False, "description": "", "pushed_at": None}
         )

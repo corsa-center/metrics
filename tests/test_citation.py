@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from collectors.impact.citation import CitationMetricCollector
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    return CitationMetricCollector({"api_credentials": {}})
+    return CitationMetricCollector({"api_credentials": {}}, FakeForge())
 
 
 # Trimmed from AMReX's CITATION.cff: a Zenodo concept DOI for the software,
@@ -85,15 +86,14 @@ class TestFormalCitations:
 class TestDeclaredDois:
     def test_reads_citation_cff(self, collector):
         import yaml
-        collector.github.get_file_content = AsyncMock(return_value=yaml.safe_dump(AMREX_CFF))
+        collector.forge.files = {"CITATION.cff": yaml.safe_dump(AMREX_CFF)}
         out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
         assert out["software"] == "10.5281/zenodo.2555438"
 
     def test_unreadable_or_missing_file(self, collector):
-        collector.github.get_file_content = AsyncMock(return_value=None)
         out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
         assert out == {"software": None, "all": []}
-        collector.github.get_file_content = AsyncMock(return_value=": : not yaml [")
+        collector.forge.files = {"CITATION.cff": ": : not yaml ["}
         out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
         assert out == {"software": None, "all": []}
 
@@ -119,21 +119,15 @@ class TestBibtexCitationFileFallback:
         ]
 
     def test_used_when_there_is_no_citation_cff(self, collector):
-        async def fake(repo_url, name):
-            return SUNDIALS_CITATIONS_MD if name == "CITATIONS.md" else None
-        collector.github.get_file_content = fake
+        collector.forge.files = {"CITATIONS.md": SUNDIALS_CITATIONS_MD}
         out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
         assert out["software"] is None
         assert out["all"][0] == "10.1145/3539801"
 
     def test_citation_cff_dois_take_precedence(self, collector):
         import yaml
-        calls = []
-
-        async def fake(repo_url, name):
-            calls.append(name)
-            return yaml.safe_dump(AMREX_CFF) if name == "CITATION.cff" else SUNDIALS_CITATIONS_MD
-        collector.github.get_file_content = fake
+        collector.forge.files = {"CITATION.cff": yaml.safe_dump(AMREX_CFF),
+                                 "CITATIONS.md": SUNDIALS_CITATIONS_MD}
         out = asyncio.run(collector._declared_dois({"repo_url": "https://github.com/o/r"}))
         assert out["software"] == "10.5281/zenodo.2555438"
-        assert calls == ["CITATION.cff"]
+        assert [c[1] for c in collector.forge.calls if c[0] == "raw_text"] == ["CITATION.cff"]

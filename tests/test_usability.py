@@ -4,11 +4,13 @@ import pytest
 
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return UsabilityCollector()
+    return UsabilityCollector(GitHubForge())
 
 
 class TestScoring:
@@ -115,18 +117,18 @@ class TestEmptyResult:
 class TestAnalyzeReadmeGapHandling:
     def _run(self, collector, client):
         import asyncio
-        return asyncio.run(collector._analyze_readme(client, "o", "r"))
+        return asyncio.run(collector._analyze_readme(client, "o/r"))
 
     def test_gap_is_not_collected_not_a_confirmed_missing_readme(self, collector):
         from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
             result = self._run(collector, None)
         assert result["exists"] is False
         assert result["not_collected"] is True
 
     def test_confirmed_404_is_a_real_negative(self, collector):
         from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=None)):
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=None)):
             result = self._run(collector, None)
         assert result["exists"] is False
         assert "not_collected" not in result
@@ -144,7 +146,7 @@ class TestFindDocDirectory:
         assert saw_gap is True
 
     def test_found_directory_reports_no_gap(self, collector):
-        tree = RepoTree("o", "r", ["docs/index.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["docs/index.md"], truncated=False)
         path, saw_gap = collector._find_doc_directory(tree)
         assert path == "docs"
         assert saw_gap is False
@@ -153,20 +155,20 @@ class TestFindDocDirectory:
         # AMReX-Codes/amrex ships "Docs" (capital D, lowercase rest); the
         # waiver could never fire for it when case had to be enumerated.
         # Reported in corsa-center/metrics#54.
-        tree = RepoTree("o", "r", ["Docs/index.rst"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["Docs/index.rst"], truncated=False)
         path, saw_gap = collector._find_doc_directory(tree)
         assert path == "docs"
         assert saw_gap is False
 
     def test_screaming_case_doc_directory_is_found(self, collector):
         # superlu/superlu_dist/superlu_mt ship DOC/, not doc/ or docs/.
-        tree = RepoTree("o", "r", ["DOC/html/index.html"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["DOC/html/index.html"], truncated=False)
         path, saw_gap = collector._find_doc_directory(tree)
         assert path == "doc"
         assert saw_gap is False
 
     def test_no_doc_directory_is_a_confirmed_absence(self, collector):
-        tree = RepoTree("o", "r", ["README.md", "src/main.c"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md", "src/main.c"], truncated=False)
         path, saw_gap = collector._find_doc_directory(tree)
         assert path is None
         assert saw_gap is False
@@ -175,18 +177,18 @@ class TestFindDocDirectory:
 class TestFindDocumentationSiteGapHandling:
     def _run(self, collector):
         import asyncio
-        return asyncio.run(collector._find_documentation_site(None, "o", "r"))
+        return asyncio.run(collector._find_documentation_site(None, "o/r"))
 
     def test_gap_is_tracked_separately_from_confirmed_absence(self, collector):
         from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
             site, saw_gap = self._run(collector)
         assert site is None
         assert saw_gap is True
 
     def test_confirmed_repo_with_no_homepage_or_pages_is_not_a_gap(self, collector):
         from unittest.mock import AsyncMock, patch
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value={"homepage": "", "has_pages": False})):
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value={"homepage": "", "has_pages": False})):
             site, saw_gap = self._run(collector)
         assert site is None
         assert saw_gap is False
@@ -197,8 +199,8 @@ class TestReadmeLinkSections:
         import asyncio, base64
         from unittest.mock import AsyncMock, patch
         data = {"content": base64.b64encode(markdown.encode()).decode()}
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
-            return asyncio.run(collector._analyze_readme(None, "o", "r"))["sections"]
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._analyze_readme(None, "o/r"))["sections"]
 
     def test_topics_covered_by_links_count(self, collector):
         # Every topic a linked bullet under one heading.

@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock, patch
 
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.funding import FundingCollector
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return FundingCollector()
+    return FundingCollector(GitHubForge())
 
 
 class TestCompanyNormalization:
@@ -198,27 +200,27 @@ class TestFindFundingFiles:
     """
 
     def test_gapped_tree_is_not_collected(self, collector):
-        result = asyncio.run(collector._find_funding_files(None, "o", "r", COLLECTION_GAP))
+        result = asyncio.run(collector._find_funding_files(None, "o/r", COLLECTION_GAP))
         assert result["found"] == []
         assert result["not_collected"] is True
 
     def test_found_file_is_not_marked_not_collected(self, collector):
-        tree = RepoTree("o", "r", [".github/FUNDING.yml"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", [".github/FUNDING.yml"], truncated=False)
 
-        async def fake_platforms(client, owner, repo, path):
+        async def fake_platforms(client, ref, path):
             return [], False
 
         async def go():
             with patch.object(collector, "_read_funding_platforms", side_effect=fake_platforms):
-                return await collector._find_funding_files(None, "o", "r", tree)
+                return await collector._find_funding_files(None, "o/r", tree)
 
         result = asyncio.run(go())
         assert len(result["found"]) == 1
         assert "not_collected" not in result
 
     def test_confirmed_absence_is_not_collected_free(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
-        result = asyncio.run(collector._find_funding_files(None, "o", "r", tree))
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        result = asyncio.run(collector._find_funding_files(None, "o/r", tree))
         assert result["found"] == []
         assert "not_collected" not in result
 
@@ -226,7 +228,7 @@ class TestFindFundingFiles:
 class TestGetOwnerTypeGapHandling:
     def test_gap_is_tracked(self, collector):
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
                 return await collector._get_owner_type(None, "o")
 
         owner_type, saw_gap = asyncio.run(go())
@@ -235,7 +237,7 @@ class TestGetOwnerTypeGapHandling:
 
     def test_confirmed_user_type_is_not_a_gap(self, collector):
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value={"type": "User"})):
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value={"type": "User"})):
                 return await collector._get_owner_type(None, "o")
 
         owner_type, saw_gap = asyncio.run(go())
@@ -246,8 +248,8 @@ class TestGetOwnerTypeGapHandling:
 class TestGetAffiliationsGapHandling:
     def test_contributors_listing_gap_is_tracked(self, collector):
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_affiliations(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_affiliations(None, "o/r")
 
         result = asyncio.run(go())
         assert result["gap"] is True
@@ -266,8 +268,8 @@ class TestGetAffiliationsGapHandling:
             return None
 
         async def go():
-            with patch.object(collector, "_github_get", side_effect=fake_github_get):
-                return await collector._get_affiliations(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", side_effect=fake_github_get):
+                return await collector._get_affiliations(None, "o/r")
 
         result = asyncio.run(go())
         assert result["sampled"] == 1
@@ -299,8 +301,8 @@ class TestFindGrantReferences:
         data = {"content": base64.b64encode(readme.encode()).decode()}
 
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
-                return await collector._find_grant_references(MagicMock(), "o", "r")
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._find_grant_references(MagicMock(), "o/r")
         grants, gap = asyncio.run(go())
         return [g["value"] for g in grants]
 
@@ -348,9 +350,9 @@ class TestAcknowledgmentFiles:
                     return value
             return None
 
-        collector._github_get = fake_get
-        tree = RepoTree("o", "r", ["NOTICE", "docs/NOTICE"], truncated=False)
-        grants, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o", "r", tree))
+        collector.forge._github_get = fake_get
+        tree = RepoTree(FakeForge(), "o/r", ["NOTICE", "docs/NOTICE"], truncated=False)
+        grants, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
         assert grants == [{"value": "DOE", "kind": "acknowledgment"}]
         assert gap is False
 
@@ -372,12 +374,12 @@ class TestAcknowledgmentFiles:
                 return enc("Acknowledgements\n================\n\nNational Science Foundation\n")
             return None
 
-        collector._github_get = fake_get
-        tree = RepoTree("o", "r", [
+        collector.forge._github_get = fake_get
+        tree = RepoTree(FakeForge(), "o/r", [
             "docs/source/index.rst", "docs/acknowledgements.rst",
             "docs/_build/html/_sources/index.rst", "third_party/lib/docs/index.rst",
         ], truncated=False)
-        grants, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o", "r", tree))
+        grants, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
         assert {g["value"] for g in grants} == {"DOE", "NSF"}
         assert not any("_build" in p or "third_party" in p for p in read)
 
@@ -388,8 +390,8 @@ class TestAcknowledgmentFiles:
         async def fake_get(client, url, params=None):
             return None
 
-        collector._github_get = fake_get
-        _, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o", "r", COLLECTION_GAP))
+        collector.forge._github_get = fake_get
+        _, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", COLLECTION_GAP))
         assert gap is True
 
 

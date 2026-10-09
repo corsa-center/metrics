@@ -5,11 +5,12 @@ import pytest
 from collectors.quality.deployment_environments import (
     DeploymentEnvironmentCollector, _RUNNER_FAMILIES,
 )
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    return DeploymentEnvironmentCollector()
+    return DeploymentEnvironmentCollector(FakeForge())
 
 
 def _families(text):
@@ -241,7 +242,7 @@ def test_platform_guides_match(path, ok):
 class TestUnstatedRunners:
     def test_self_hosted_only_is_unmeasured(self):
         from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
-        s = DeploymentEnvironmentCollector()._calculate_score({}, unstated_ci=True)
+        s = DeploymentEnvironmentCollector(FakeForge())._calculate_score({}, unstated_ci=True)
         row = s["sub_scores"]["deployment_environment_testing"]
         assert row["unmeasured"] is True
         assert row["value"] == "CI runs on self-hosted or non-GitHub runners whose OS isn't stated"
@@ -249,12 +250,12 @@ class TestUnstatedRunners:
 
     def test_hosted_linux_plus_self_hosted(self):
         from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
-        s = DeploymentEnvironmentCollector()._calculate_score({"Linux": ["ubuntu-latest"]}, unstated_ci=True)
+        s = DeploymentEnvironmentCollector(FakeForge())._calculate_score({"Linux": ["ubuntu-latest"]}, unstated_ci=True)
         assert s["sub_scores"]["deployment_environment_testing"]["value"].startswith("1 environment: Linux; other CI runs")
 
     def test_no_ci_at_all_is_still_a_fail(self):
         from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
-        row = DeploymentEnvironmentCollector()._calculate_score({})["sub_scores"]["deployment_environment_testing"]
+        row = DeploymentEnvironmentCollector(FakeForge())._calculate_score({})["sub_scores"]["deployment_environment_testing"]
         assert not row.get("unmeasured") and row["passing"] is False
 
     @pytest.mark.parametrize("text,hit", [
@@ -272,9 +273,9 @@ class TestCollectRunnerKinds:
         from unittest.mock import AsyncMock, patch
         from collectors.ecosystem.base import RepoTree
         from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
-        c = DeploymentEnvironmentCollector()
-        tree = RepoTree("o", "r", [".github/workflows/ci.yml", *tree_paths], truncated=False)
-        with patch.object(c, "_list_workflows", new=AsyncMock(return_value=[{"name": "ci.yml", "url": "u"}])), \
+        c = DeploymentEnvironmentCollector(FakeForge())
+        tree = RepoTree(FakeForge(), "o/r", [".github/workflows/ci.yml", *tree_paths], truncated=False)
+        with patch.object(c, "_list_workflows", new=AsyncMock(return_value=[{"name": "ci.yml", "path": ".github/workflows/ci.yml"}])), \
              patch.object(c, "_read_platform_docs", new=AsyncMock(return_value="")), \
              patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
              patch.object(c, "_read_workflow", new=AsyncMock(return_value=workflow_text)):

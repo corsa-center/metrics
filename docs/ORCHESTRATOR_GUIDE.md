@@ -65,15 +65,86 @@ collectors:
 api_credentials:
   github:
     token: ${GITHUB_TOKEN}
+  # GitLab, keyed by host. gitlab.com is recognized even without an entry
+  # here -- an absent token still works for public repos, just at GitLab's
+  # lower unauthenticated rate limit. A self-hosted instance (e.g.
+  # gitlab.kitware.com) has no way to self-identify as GitLab from its
+  # hostname alone, so it must be listed here explicitly: being listed is
+  # itself what makes it recognized, not a separate allowlist.
+  gitlab:
+    gitlab.com:
+      token: ${GITLAB_TOKEN}
+    gitlab.kitware.com:
+      token: ${GITLAB_KITWARE_TOKEN}
 ```
 
 ### 3. Set Environment Variables
 
 ```bash
 export GITHUB_TOKEN="your_github_token"
+export GITLAB_TOKEN="your_gitlab_com_token"           # Optional -- public repos work without it
+export GITLAB_KITWARE_TOKEN="your_kitware_token"      # Optional, only needed for gitlab.kitware.com repos
 export SEMANTIC_SCHOLAR_KEY="your_ss_key"  # Optional
 export OPENALEX_EMAIL="your@email.com"     # Optional but recommended
 ```
+
+### Supported hosts
+
+Each package file's `repo_type` (see `docs/PACKAGE_CONFIG.md`) chooses the
+forge that collects it:
+
+- `github` -- GitHub, for repositories on github.com. GitHub Enterprise
+  hosts are skipped: the GitHub forge only talks to api.github.com.
+- `gitlab` -- GitLab, on whatever host `repo_url` names: gitlab.com or any
+  self-hosted instance (e.g. `gitlab.kitware.com` for ParaView, VTK,
+  Viskores). A host listed under `api_credentials.gitlab.<host>` in
+  `config/orchestrator.yaml` gets that token; any other host is queried
+  without one, which works for public projects at a lower rate limit.
+- Anything else -- skipped entirely: all three CASS dimensions render as
+  "not yet collected" for that package, rather than a false negative from
+  querying the wrong API.
+
+A package without `repo_type` falls back to the hostname: github.com is
+GitHub; gitlab.com and hosts listed under `api_credentials.gitlab` are
+GitLab; anything else is skipped.
+
+Collectors only ever see the platform-neutral `Forge` interface
+(`forge/interface.py`), implemented by `forge/github.py` and
+`forge/gitlab.py`. `Forge.for_repo` is the one place a
+concrete forge is chosen.
+
+GitLab-hosted packages get the same 3-dimension coverage as GitHub ones,
+with a few metrics GitLab genuinely cannot supply -- these render as "not
+yet collected", never as a zero or a failing result, so don't mistake them
+for bugs:
+
+- **Large issue counts** -- GitLab can't OR labels in one query, so label
+  counts (newcomer issues, defect trend) list matching issues per label
+  and combine them. Past 2,000 issues for one label or date window the
+  count is reported as not collected rather than undercounted. GitLab has
+  no "Bug" issue type, so the defect trend always uses labels there.
+- **Per-workflow CI breakdown** -- GitHub Actions has named workflows as a
+  first-class concept; GitLab Pipelines don't have an equivalent grouping.
+  `ci_workflows`/`ci_workflow_runs` always return empty for GitLab repos.
+- **Token-gated lookups** -- some GitLab instances (gitlab.kitware.com
+  among them) require a token to list a project's members or labels.
+  Without one, every author counts as an outside contributor (GitLab has no
+  author association field, so membership is the only signal), and label
+  counts fall back to conventional names (`good first issue`, `bug`) instead
+  of the project's own (ParaView's `triage:easy`). Set the host's token
+  under `api_credentials.gitlab.<host>`.
+- **Community profile** (`/community/profile`) -- a GitHub-only aggregate
+  endpoint. GitLab repos rely entirely on `community_health.py`'s own
+  direct file checks (CODE_OF_CONDUCT, GOVERNANCE, CONTRIBUTING), which run
+  the same on both platforms.
+- **OpenSSF Scorecard** -- its published dataset skews heavily toward
+  GitHub-hosted projects; a GitLab repo not in that dataset reads as "not
+  yet collected", not a failure.
+- **Weekly commit/contributor stats** -- GitHub exposes these via
+  dedicated `/stats/participation` and `/stats/contributors` endpoints;
+  GitLab has no equivalent, so they're derived from paged commit history
+  instead (bounded to a fixed number of pages), which is close but not
+  identical in methodology.
 
 ## Usage
 

@@ -14,7 +14,6 @@ releases API call rather than a simple file-existence check.
 """
 
 import asyncio
-import base64
 import httpx
 import logging
 import re
@@ -23,9 +22,9 @@ from typing import Any, Dict, List, Optional
 
 from collectors.quality.usability import readme_covers
 from collectors.ecosystem.base import (
-    COLLECTION_GAP, CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN,
-    GitHubCollectorBase, RepoTree, RetryingTransport,
+    COLLECTION_GAP, CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN, RepoTree, RetryingTransport,
 )
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -193,35 +192,37 @@ _WEIGHTS = {
 }
 
 
-class ReproducibilityCollector(GitHubCollectorBase):
+class ReproducibilityCollector:
     """Collects reproducibility indicators (CASS Report Section 4.3.3)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Collecting reproducibility metrics for {owner}/{repo}")
+        logger.info(f"Collecting reproducibility metrics for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             tree, semver = await asyncio.gather(
-                RepoTree.fetch(client, self.github_headers, owner, repo),
-                self._check_semantic_versioning(client, owner, repo),
+                RepoTree.fetch(client, self.forge, ref),
+                self._check_semantic_versioning(client, ref),
             )
             categories = {**self._scan_files(tree), "semantic_versioning": semver}
             pinning = categories["dependency_pinning"]
             if tree is not COLLECTION_GAP and not pinning["found"]:
-                for label, path in await self._managed_dependencies(client, owner, repo, tree):
+                for label, path in await self._managed_dependencies(client, ref, tree):
                     pinning["found"].append(label)
                     pinning["details"][label] = {"exists": True, "file": path, "url": tree.url_for(path)}
             docs = categories["reproducibility_docs"]
             if tree is not COLLECTION_GAP and "Install / build guide" in docs["missing"]:
-                readme = await self._readme_install_section(client, owner, repo)
+                readme = await self._readme_install_section(client, ref)
                 if readme:
                     docs["missing"].remove("Install / build guide")
                     docs["found"].append("Install / build guide")
@@ -232,8 +233,8 @@ class ReproducibilityCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "has_container": bool(categories["containers"]["found"]),
             "has_dependency_pinning": bool(categories["dependency_pinning"]["found"]),
             "has_fair4rs_metadata": bool(categories["fair4rs_metadata"]["found"]),
@@ -300,7 +301,7 @@ class ReproducibilityCollector(GitHubCollectorBase):
         return results
 
     async def _managed_dependencies(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> List[tuple]:
         """(label, path) for root manifests that constrain dependency
         versions, and for Dependabot configured for the software's own
@@ -309,36 +310,31 @@ class ReproducibilityCollector(GitHubCollectorBase):
         for name in _VERSIONED_MANIFESTS:
             path = tree.match([name])
             if path:
-                text = await self._file_text(client, owner, repo, path)
+                text = await self._file_text(client, ref, path)
                 if text and _versioned_dependencies(name, text):
                     found.append(("Versioned dependency manifest", path))
                     break
         path = tree.match(_DEPENDABOT_PATHS)
         if path:
-            text = await self._file_text(client, owner, repo, path) or ""
+            text = await self._file_text(client, ref, path) or ""
             ecosystems = set(re.findall(r"package-ecosystem:\s*[\"']?([\w-]+)", text))
             if ecosystems - _DEPENDABOT_CI_ONLY:
                 found.append(("Dependabot dependency updates", path))
         return found
 
-    async def _file_text(self, client: httpx.AsyncClient, owner: str, repo: str, path: str) -> Optional[str]:
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
-        if not isinstance(data, dict):
-            return None
-        return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+    async def _file_text(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
+        text = await self.forge.file_content(client, ref, path)
+        return text or None
 
     async def _readme_install_section(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Optional[Dict[str, str]]:
         """The README's installation section, if it has one: build
         instructions often live there rather than in a separate INSTALL file."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
-        if not isinstance(data, dict):
-            return None
-        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
-        if readme_covers(text, "Installation"):
-            path = data.get("path", "README.md")
-            return {"file": f"{path} (installation section)", "url": data.get("html_url")}
+        text = await self.forge.readme(client, ref)
+        if text and readme_covers(text, "Installation"):
+            return {"file": "README (installation section)",
+                    "url": f"https://{self.forge.host}/{ref}"}
         return None
 
     # ------------------------------------------------------------------ #
@@ -346,12 +342,9 @@ class ReproducibilityCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ #
 
     async def _check_semantic_versioning(
-        self, client: httpx.AsyncClient, owner: str, repo: str, sample: int = 5
+        self, client: httpx.AsyncClient, ref: str, sample: int = 5
     ) -> Dict[str, Any]:
-        releases = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
-            params={"per_page": sample},
-        )
+        releases = await self.forge.releases(client, ref, per_page=sample)
         if releases is COLLECTION_GAP:
             return {
                 "uses_semver": False, "releases_checked": 0, "semver_count": 0,
@@ -360,18 +353,15 @@ class ReproducibilityCollector(GitHubCollectorBase):
 
         if not releases:
             # Confirmed no formal releases -- fall back to tags.
-            return await self._check_tags(client, owner, repo, sample)
+            return await self._check_tags(client, ref, sample)
 
         tags = [r.get("tag_name", "") for r in releases]
         return self._summarize_tags(tags)
 
     async def _check_tags(
-        self, client: httpx.AsyncClient, owner: str, repo: str, sample: int
+        self, client: httpx.AsyncClient, ref: str, sample: int
     ) -> Dict[str, Any]:
-        tags_data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/tags",
-            params={"per_page": sample},
-        )
+        tags_data = await self.forge.tags(client, ref, per_page=sample)
         if tags_data is COLLECTION_GAP:
             return {
                 "uses_semver": False, "releases_checked": 0, "semver_count": 0,
@@ -437,7 +427,7 @@ class ReproducibilityCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "has_container": False,
             "has_dependency_pinning": False,
             "has_fair4rs_metadata": False,

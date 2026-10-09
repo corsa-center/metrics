@@ -12,7 +12,6 @@ handled elsewhere (ci_cd.py and the OpenSSF badge respectively).
 """
 
 import asyncio
-import base64
 import logging
 import re
 from typing import Any, Dict, List
@@ -20,8 +19,9 @@ from typing import Any, Dict, List
 import httpx
 
 from collectors.ecosystem.base import (
-    _VENDORED_DIR, COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold,
+    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ _CONFIG_FILES = ["CMakeLists.txt", "pyproject.toml", "setup.cfg", "Makefile.am"]
 # Test runners a project's CI invokes: evidence of the framework in use even
 # where no config file declares it (a CMake helper module calling
 # enable_testing, pytest run with defaults).
-_CI_FILES = r"^(?:\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml)$"
+_CI_FILES = r"^(?:\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.ya?ml|\.gitlab/.+\.ya?ml|azure-pipelines\.ya?ml)$"
 _MAX_CI_FILES = 10
 _CI_TEST_RUNNERS = {
     "Build-system test target": re.compile(r"\bctest\b|\bmake\s+(?:-\S+\s+)*(?:check|test)\b|\bfpm\s+test\b", re.I),
@@ -82,10 +82,12 @@ _TOOLING_PATHS = {
         ".flake8", ".pylintrc", "ruff.toml", ".eslintrc.json",
         ".clang-tidy", ".editorconfig",
     ],
-    "Dependency automation": [
-        ".github/dependabot.yml", ".github/dependabot.yaml", "renovate.json",
-    ],
+    # Plus the forge's own config locations (Dependabot on GitHub).
+    "Dependency automation": ["renovate.json"],
 }
+
+# Tooling groups whose paths also include the forge's platform_paths(kind).
+_PLATFORM_PATH_KINDS = {"Dependency automation": "dependency_automation"}
 
 # Formatter and linter configs kept anywhere in the project's own tree (a
 # component's src/.clang-format, a subproject's .clang-tidy), in more tools
@@ -115,23 +117,25 @@ _TOOLING_CONFIG_FILES = ["pyproject.toml", "setup.cfg", "tox.ini"]
 _PR_SAMPLE_SIZE = 50
 
 
-class DevToolingCollector(GitHubCollectorBase):
+class DevToolingCollector:
     """Collects testing, review and tooling practices (Section 4.3.2)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting development tooling metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             tree, review = await asyncio.gather(
-                RepoTree.fetch(client, self.github_headers, owner, repo),
-                self._analyze_review_coverage(client, owner, repo),
+                RepoTree.fetch(client, self.forge, ref),
+                self._analyze_review_coverage(client, ref),
                 return_exceptions=True,
             )
 
@@ -141,19 +145,22 @@ class DevToolingCollector(GitHubCollectorBase):
         testing = self._scan(tree, _TESTING_PATHS)
         if tree is not COLLECTION_GAP and testing["missing"]:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                testing = await self._refine_testing(client, owner, repo, tree, testing)
-        tooling = self._scan(tree, _TOOLING_PATHS)
+                testing = await self._refine_testing(client, ref, tree, testing)
+        tooling = self._scan(tree, {
+            label: paths + self.forge.platform_paths(_PLATFORM_PATH_KINDS.get(label, ""))
+            for label, paths in _TOOLING_PATHS.items()
+        })
         if tree is not COLLECTION_GAP and any(l in tooling["missing"] for l in _TOOLING_TREE):
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                tooling = await self._refine_tooling(client, owner, repo, tree, tooling)
+                tooling = await self._refine_tooling(client, ref, tree, tooling)
         if isinstance(review, Exception):
             logger.warning(f"COLLECTION-GAP category=code_review reason=exception:{review!r}")
             review = {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "testing": testing,
             "tooling": tooling,
             "code_review": review,
@@ -182,7 +189,7 @@ class DevToolingCollector(GitHubCollectorBase):
         return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
 
     async def _refine_testing(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree, testing: Dict[str, Any],
+        self, client: httpx.AsyncClient, ref: str, tree, testing: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Resolve testing labels the fixed paths missed, from the tree and
         then from build/config file contents. A label still missing after a
@@ -235,12 +242,10 @@ class DevToolingCollector(GitHubCollectorBase):
         ci_paths = tree.find(_CI_FILES)[:_MAX_CI_FILES]
 
         async def read(path: str):
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-            )
-            if data is COLLECTION_GAP or data is None or not isinstance(data, dict):
-                return data if data is COLLECTION_GAP else ""
-            return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
+            text = await self.forge.file_content(client, ref, path)
+            if text is COLLECTION_GAP:
+                return COLLECTION_GAP
+            return text or ""
 
         texts = await asyncio.gather(*[read(p) for p in paths + ci_paths])
         for label in wanted:
@@ -259,7 +264,7 @@ class DevToolingCollector(GitHubCollectorBase):
         return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
 
     async def _refine_tooling(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree, tooling: Dict[str, Any],
+        self, client: httpx.AsyncClient, ref: str, tree, tooling: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Formatter and linter configs outside the root list: anywhere in
         the project's own tree, then as sections of root Python config files."""
@@ -279,10 +284,9 @@ class DevToolingCollector(GitHubCollectorBase):
         for path in [p for p in (tree.match([c]) for c in _TOOLING_CONFIG_FILES) if p]:
             if not wanted:
                 break
-            data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
-            if not isinstance(data, dict):
+            text = await self.forge.file_content(client, ref, path)
+            if not text:
                 continue
-            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
             for label in list(wanted):
                 if _TOOLING_SECTIONS[label].search(text):
                     mark(label, path)
@@ -290,7 +294,7 @@ class DevToolingCollector(GitHubCollectorBase):
         return {**tooling, "found": found, "missing": missing, "details": details}
 
     async def _analyze_review_coverage(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Share of recently merged PRs that received at least one review.
 
@@ -298,11 +302,9 @@ class DevToolingCollector(GitHubCollectorBase):
         and distinguishing them would need per-review author comparison against
         the PR author for every sampled PR.
         """
-        url = (
-            f"https://api.github.com/repos/{owner}/{repo}/pulls"
-            f"?state=closed&per_page={_PR_SAMPLE_SIZE}&sort=updated&direction=desc"
+        prs = await self.forge.pull_requests(
+            client, ref, state="closed", per_page=_PR_SAMPLE_SIZE, sort="updated", direction="desc",
         )
-        prs = await self._github_get(client, url)
         if prs is COLLECTION_GAP:
             return {"sampled": 0, "reviewed": 0, "coverage_pct": None, "not_collected": True}
 
@@ -311,10 +313,7 @@ class DevToolingCollector(GitHubCollectorBase):
             return {"sampled": 0, "reviewed": 0, "coverage_pct": None}
 
         async def has_review(number: int):
-            reviews = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews",
-                params={"per_page": 1},
-            )
+            reviews = await self.forge.pr_reviews(client, ref, number, per_page=1)
             if reviews is COLLECTION_GAP:
                 return COLLECTION_GAP
             return bool(reviews)
@@ -398,7 +397,7 @@ class DevToolingCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "testing": empty,
             "tooling": empty,
             "code_review": {"sampled": 0, "reviewed": 0, "coverage_pct": None},

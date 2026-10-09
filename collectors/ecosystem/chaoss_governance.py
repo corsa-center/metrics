@@ -15,7 +15,6 @@ CHAOSS Metrics Reference: https://chaoss.community/metrics/
 """
 
 import asyncio
-import base64
 import httpx
 import logging
 import re
@@ -24,8 +23,9 @@ from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
 from collectors.ecosystem.base import (
-    COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, fetch_version_tags,
+    COLLECTION_GAP, RepoTree, RetryingTransport,
 )
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,11 @@ def _bracket_score(value: float, brackets: list, default: int) -> int:
     return default
 
 
-class CHAOSSGovernanceCollector(GitHubCollectorBase):
+class CHAOSSGovernanceCollector:
     """Collects CHAOSS-defined activity health indicators (Section 4.2.4)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
@@ -68,22 +71,20 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
 
         logger.info(f"Collecting CHAOSS metrics for {repo_name}")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
+            tree = await RepoTree.fetch(client, self.forge, ref)
             results = await asyncio.gather(
-                self._get_project_popularity(client, owner, repo),
-                self._get_documentation_usability(client, owner, repo, tree),
-                self._get_issue_metrics(client, owner, repo),
-                self._get_change_request_metrics(client, owner, repo),
-                self._get_release_frequency(client, owner, repo),
-                self._get_issues_inclusivity(client, owner, repo),
+                self._get_project_popularity(client, ref),
+                self._get_documentation_usability(client, ref, tree),
+                self._get_issue_metrics(client, ref),
+                self._get_change_request_metrics(client, ref),
+                self._get_release_frequency(client, ref),
+                self._get_issues_inclusivity(client, ref),
                 return_exceptions=True,
             )
 
@@ -124,8 +125,8 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "chaoss_metrics": {
                 "project_popularity": popularity,
                 "documentation_usability": documentation,
@@ -145,7 +146,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ #
 
     async def _get_project_popularity(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """CHAOSS: Project Popularity — stars, forks, watchers.
 
@@ -158,14 +159,19 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         dashboard as "0.0/100 (critical)" during the 2026-09-16 incident
         instead of "we don't know."
         """
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        data = await self.forge.repo_info(client, ref)
         try:
             if not data:
-                logger.warning(f"Popularity fetch failed for {owner}/{repo}")
+                logger.warning(f"Popularity fetch failed for {ref}")
                 return {"not_collected": True}
-            stars = data.get("stargazers_count", 0)
-            forks = data.get("forks_count", 0)
-            watchers = data.get("watchers_count", 0)
+            stars = data["stars"]
+            forks = data["forks"]
+            # GitHub's "watchers_count" field is a permanent, documented
+            # alias of stargazers_count, not a count of true (subscriber)
+            # watchers -- so this reuses "stars" rather than
+            # repo_info()['watchers'] (subscribers_count), which is a
+            # different, smaller number and would change this score.
+            watchers = stars
             star_score = min(100, (stars / _POPULARITY_STAR_SCALE) * 100) if stars else 0
             fork_score = min(100, (forks / _POPULARITY_FORK_SCALE) * 100) if forks else 0
             watch_score = min(100, (watchers / _POPULARITY_WATCH_SCALE) * 100) if watchers else 0
@@ -175,17 +181,17 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
                 "stars": stars,
                 "forks": forks,
                 "watchers": watchers,
-                "subscribers": data.get("subscribers_count", 0),
+                "subscribers": data["watchers"],
                 "score": round(avg_score, 2),
-                "created_at": data.get("created_at"),
-                "updated_at": data.get("updated_at"),
+                "created_at": data["created_at"],
+                "updated_at": data["updated_at"],
             }
         except Exception as e:
             logger.error(f"Error getting popularity: {e}")
             return {}
 
     async def _get_documentation_usability(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> Dict[str, Any]:
         """CHAOSS: Documentation Usability — README quality and docs presence.
 
@@ -208,7 +214,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         doc_details: Dict[str, Any] = {}
         has_gap = False
 
-        readme_data = await self._get_readme_content(client, owner, repo)
+        readme_data = await self._get_readme_content(client, ref)
         if readme_data is COLLECTION_GAP:
             has_gap = True
             doc_details["readme"] = {"exists": False, "quality_score": 0}
@@ -239,7 +245,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             else:
                 doc_details["docs_folder"] = {"exists": False}
 
-        has_wiki = await self._check_wiki_enabled(client, owner, repo)
+        has_wiki = await self._check_wiki_enabled(client, ref)
         if has_wiki is COLLECTION_GAP:
             has_gap = True
             has_wiki = False
@@ -264,11 +270,11 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         }
 
     async def _get_issue_metrics(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """CHAOSS: Time to Close and Issue Age."""
-        closed_issues = await self._get_closed_issues(client, owner, repo, limit=30)
-        open_issues = await self._get_open_issues(client, owner, repo, limit=50)
+        closed_issues = await self._get_closed_issues(client, ref, limit=30)
+        open_issues = await self._get_open_issues(client, ref, limit=50)
         issue_age = self._calculate_issue_age(open_issues)
         if not open_issues and not closed_issues and open_issues is not COLLECTION_GAP:
             issue_age = {"count": 0, "not_collected": True, "reason": "no issues"}
@@ -278,10 +284,10 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         }
 
     async def _get_change_request_metrics(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """CHAOSS: Change Request Closure Ratio — merged vs closed-without-merge."""
-        closed_prs = await self._get_closed_pull_requests(client, owner, repo, limit=50)
+        closed_prs = await self._get_closed_pull_requests(client, ref, limit=50)
         if closed_prs is COLLECTION_GAP:
             return {"closure_ratio": {"not_collected": True}}
         if not closed_prs:
@@ -305,20 +311,17 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         }
 
     async def _get_release_frequency(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """CHAOSS: Release Frequency — cadence of new releases."""
         try:
-            releases = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/releases",
-                params={"per_page": 30},
-            )
+            releases = await self.forge.releases(client, ref, per_page=30)
             if releases is COLLECTION_GAP:
                 return {"not_collected": True}
             # Version tags without a Release object are releases too.
             named = {r.get("tag_name") for r in releases}
             releases = sorted(
-                list(releases) + [t for t in await fetch_version_tags(client, self.github_headers, owner, repo)
+                list(releases) + [t for t in await self.forge.version_tags(client, ref)
                                   if t["tag_name"] not in named],
                 key=lambda r: r.get("published_at") or "", reverse=True)
             if not releases:
@@ -353,7 +356,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
             return {}
 
     async def _get_issues_inclusivity(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """CHAOSS: Issues Inclusivity — unique author count across recent issues.
 
@@ -361,7 +364,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         an indicator of participation breadth, not demographic diversity or
         depth of engagement.
         """
-        issues = await self._get_recent_issues_with_comments(client, owner, repo, limit=30)
+        issues = await self._get_recent_issues_with_comments(client, ref, limit=30)
         if issues is COLLECTION_GAP:
             return {"not_collected": True}
         if not issues:
@@ -393,65 +396,57 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ #
 
     async def _get_readme_content(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ):
         """Dict, None (confirmed no README), or COLLECTION_GAP."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
-        if data is COLLECTION_GAP:
+        text = await self.forge.readme(client, ref)
+        if text is COLLECTION_GAP:
             return COLLECTION_GAP
-        if not data:
+        if not text:
             return None
-        content = base64.b64decode(data.get("content", "")).decode("utf-8", errors="ignore")
-        return {"size": data.get("size", 0), "content": content}
+        # "size" is display-only (not used in any scoring math below), so a
+        # decoded-character count here instead of the API's exact byte size
+        # is an acceptable approximation -- forge.readme() only returns text.
+        return {"size": len(text), "content": text}
 
-    async def _check_wiki_enabled(self, client: httpx.AsyncClient, owner: str, repo: str):
+    async def _check_wiki_enabled(self, client: httpx.AsyncClient, ref: str):
         """bool, or COLLECTION_GAP."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}")
+        data = await self.forge.repo_info(client, ref)
         if data is COLLECTION_GAP:
             return COLLECTION_GAP
-        return bool(data and data.get("has_wiki", False))
+        return bool(data and data["has_wiki"])
 
     async def _get_closed_issues(
-        self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 30
+        self, client: httpx.AsyncClient, ref: str, limit: int = 30
     ):
         """List, or COLLECTION_GAP -- NOT an empty list, which is a real,
         distinct outcome (a repo with zero closed issues)."""
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/issues",
-            params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
+        data = await self.forge.issues(
+            client, ref, state="closed", per_page=limit, sort="updated", direction="desc",
         )
-        if data is COLLECTION_GAP:
-            return COLLECTION_GAP
-        return [i for i in data if "pull_request" not in i] if data else []
+        return data if data is not None else []
 
     async def _get_open_issues(
-        self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 50
+        self, client: httpx.AsyncClient, ref: str, limit: int = 50
     ):
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/issues",
-            params={"state": "open", "per_page": limit},
-        )
-        if data is COLLECTION_GAP:
-            return COLLECTION_GAP
-        return [i for i in data if "pull_request" not in i] if data else []
+        data = await self.forge.issues(client, ref, state="open", per_page=limit)
+        return data if data is not None else []
 
     async def _get_closed_pull_requests(
-        self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 50
+        self, client: httpx.AsyncClient, ref: str, limit: int = 50
     ):
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/pulls",
-            params={"state": "closed", "per_page": limit, "sort": "updated", "direction": "desc"},
+        data = await self.forge.pull_requests(
+            client, ref, state="closed", per_page=limit, sort="updated", direction="desc",
         )
         if data is COLLECTION_GAP:
             return COLLECTION_GAP
         return data or []
 
     async def _get_recent_issues_with_comments(
-        self, client: httpx.AsyncClient, owner: str, repo: str, limit: int = 30
+        self, client: httpx.AsyncClient, ref: str, limit: int = 30
     ):
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/issues",
-            params={"state": "all", "per_page": limit, "sort": "updated", "direction": "desc"},
+        data = await self.forge.issues(
+            client, ref, state="all", per_page=limit, sort="updated", direction="desc",
         )
         if data is COLLECTION_GAP:
             return COLLECTION_GAP
@@ -630,7 +625,7 @@ class CHAOSSGovernanceCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "chaoss_metrics": {},
             "overall_score": {"score": 0, "max_score": 100, "status": "error"},
             "assessment_method": "error",

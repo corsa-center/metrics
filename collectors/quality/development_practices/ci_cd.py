@@ -20,24 +20,22 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import RetryingTransport, get_threshold
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.interface import Forge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
+
+
+
+_MAX_WORKFLOWS_SAMPLED = 30
 
 
 class CICDMetricsCollector:
     """Collects CI/CD development-practice metrics from GitHub (Section 4.3.2)."""
 
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        credentials = config.get("api_credentials", {})
-        # Safe access — token may be absent or empty in dev/test environments.
-        self.github_token: str = credentials.get("github", {}).get("token", "") or ""
-        self.github_datetime_format = "%Y-%m-%dT%H:%M:%S%z"
-        self.headers: Dict[str, str] = {}
-        if self.github_token:
-            self.headers["Authorization"] = f"token {self.github_token}"
-            self.headers["Accept"] = "application/vnd.github.v3+json"
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     # ------------------------------------------------------------------ #
     # Public interface                                                     #
@@ -45,12 +43,18 @@ class CICDMetricsCollector:
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """Collect all CI/CD metrics for a package and return a scored result."""
-        repo_url = self._parse_repo_url(package.get("repo_url", ""))
+        repo_url = package.get("repo_url", "")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            # Matches the previous _parse_repo_url's fail-fast contract: no
+            # _empty_result convention here, orchestrator.py's generic
+            # except-and-log around collector.collect() handles it.
+            raise ValueError(f"Invalid GitHub URL format: {repo_url}")
 
         logger.info(f"Beginning CI/CD metric collection for {package.get('name')}")
 
         async with httpx.AsyncClient(transport=RetryingTransport()) as client:
-            branch = package.get("repo_branch") or await self._get_default_branch(client, repo_url)
+            branch = package.get("repo_branch") or await self._get_default_branch(client, ref)
             (
                 exec_time,
                 workflow_success,
@@ -59,12 +63,12 @@ class CICDMetricsCollector:
                 time_to_failure,
                 cycle_time,
             ) = await asyncio.gather(
-                self.workflow_execution_time(client, repo_url, branch),
-                self.percentage_workflow_success(client, repo_url),
-                self.deployment_frequency(client, repo_url),
-                self.release_frequency(client, repo_url),
-                self.average_time_failure(client, repo_url, branch),
-                self.average_cycle_time(client, repo_url),
+                self.workflow_execution_time(client, ref, branch),
+                self.percentage_workflow_success(client, ref),
+                self.deployment_frequency(client, ref),
+                self.release_frequency(client, ref),
+                self.average_time_failure(client, ref, branch),
+                self.average_cycle_time(client, ref),
             )
 
         results: Dict[str, Any] = {}
@@ -162,11 +166,11 @@ class CICDMetricsCollector:
     # ------------------------------------------------------------------ #
 
     async def workflow_execution_time(
-        self, client: httpx.AsyncClient, repo_url: str, branch: str, num_workflows: int = 100
+        self, client: httpx.AsyncClient, ref: str, branch: str, num_workflows: int = 100
     ) -> Dict[str, float]:
         """Average workflow execution time (seconds) over the last N runs."""
         workflows = await self._get_last_n_workflow_runs(
-            client, repo_url=repo_url, num_workflows=num_workflows, branch=branch
+            client, ref=ref, num_workflows=num_workflows, branch=branch
         )
         total = sum(
             self._parse_github_datetime_string(w["updated_at"]).timestamp()
@@ -178,141 +182,130 @@ class CICDMetricsCollector:
         return {"average_workflow_execution_time": avg}
 
     async def percentage_workflow_success(
-        self, client: httpx.AsyncClient, repo_url: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Per-workflow and overall success percentage across the last 30 runs."""
-        try:
-            response = await client.get(f"{repo_url}/actions/workflows", headers=self.headers)
-            response.raise_for_status()
-            workflows = response.json().get("workflows", [])
-
-            workflow_success_pct: Dict[str, float] = {}
-            total_successes = 0
-            total_runs = 0
-
-            for w in workflows:
-                try:
-                    runs_resp = await client.get(
-                        f"{repo_url}/actions/workflows/{w['id']}/runs",
-                        headers=self.headers,
-                        params={"exclude_pull_requests": "true"},
-                    )
-                    runs_resp.raise_for_status()
-                    runs = runs_resp.json().get("workflow_runs", [])
-                    successes = sum(
-                        1 for r in runs
-                        if r.get("status") == "completed" and r.get("conclusion") == "success"
-                    )
-                    if runs:
-                        workflow_success_pct[w["name"]] = successes / len(runs) * 100
-                        total_successes += successes
-                        total_runs += len(runs)
-                except Exception as e:
-                    logger.error(f"Error fetching runs for workflow {w}: {e}")
-
-            logger.debug(f"Workflow success percentages: {workflow_success_pct}")
-            return {
-                "workflow_success_percentage": workflow_success_pct,
-                "total_workflow_success_percentage": total_successes / max(total_runs, 1) * 100,
-            }
-        except Exception as e:
-            logger.error(f"Error fetching workflows: {e}")
+        workflows = await self.forge.ci_workflows(client, ref)
+        if workflows == [] and self.forge.platform != "github":
+            # GitLab has no named workflows; its pipelines are the runs.
+            return await self._pipeline_success(client, ref)
+        if not workflows:
+            if workflows is COLLECTION_GAP:
+                logger.error(f"Error fetching workflows for {ref}: collection gap")
             return {"workflow_success_percentage": {}}
+
+        workflow_success_pct: Dict[str, float] = {}
+        total_successes = 0
+        total_runs = 0
+
+        # The first 30 workflows -- the size of GitHub's default page, which
+        # is what this always sampled before ci_workflows() started listing
+        # up to 100 (for CodeQL default-setup detection). HDF5 has 93; a run
+        # fetch per workflow, one at a time, tripled its collection time.
+        for w in workflows[:_MAX_WORKFLOWS_SAMPLED]:
+            runs = await self.forge.ci_workflow_runs(client, ref, w["id"], per_page=30)
+            if not runs:
+                continue
+            successes = sum(
+                1 for r in runs
+                if r.get("status") == "completed" and r.get("conclusion") == "success"
+            )
+            workflow_success_pct[w["name"]] = successes / len(runs) * 100
+            total_successes += successes
+            total_runs += len(runs)
+
+        logger.debug(f"Workflow success percentages: {workflow_success_pct}")
+        return {
+            "workflow_success_percentage": workflow_success_pct,
+            "total_workflow_success_percentage": total_successes / max(total_runs, 1) * 100,
+        }
+
+    async def _pipeline_success(self, client: httpx.AsyncClient, ref: str) -> Dict[str, Any]:
+        """Overall success rate of the last 30 finished CI runs, for forges
+        without per-workflow grouping. Only finished runs count: running,
+        pending, canceled, skipped and manual pipelines say nothing about
+        whether the build passes."""
+        runs = await self.forge.ci_runs(client, ref, per_page=30)
+        finished = [r for r in runs or [] if r.get("conclusion") in ("success", "failed", "failure")]
+        if not finished:
+            return {"workflow_success_percentage": {}}
+        successes = sum(1 for r in finished if r.get("conclusion") == "success")
+        return {
+            "workflow_success_percentage": {},
+            "total_workflow_success_percentage": successes / len(finished) * 100,
+        }
 
     async def deployment_frequency(
         self,
         client: httpx.AsyncClient,
-        repo_url: str,
+        ref: str,
         days_to_measure: int = 365,
         pages: int = 1,
         page_size: int = 100,
     ) -> Dict[str, Optional[int]]:
         """Number of successful GitHub deployments in the last `days_to_measure` days."""
         key = f"num_of_deployments_last_{days_to_measure}_days"
-        try:
-            deployments: List[Dict] = []
-            for page in range(1, pages + 1):
-                resp = await client.get(
-                    f"{repo_url}/deployments",
-                    headers=self.headers,
-                    params={"per_page": page_size, "page": page},
-                )
-                resp.raise_for_status()
-                deployments += resp.json()
+        deployments: List[Dict] = []
+        for page in range(1, pages + 1):
+            batch = await self.forge.deployments(client, ref, per_page=page_size, page=page)
+            if not batch:
+                break
+            deployments += batch
 
-            start_date = datetime.now(timezone.utc) - timedelta(days=days_to_measure)
-            deployment_count = 0
-            for d in deployments:
-                if self._parse_github_datetime_string(d["created_at"]) < start_date:
-                    break
-                try:
-                    status_resp = await client.get(d["statuses_url"], headers=self.headers)
-                    status_resp.raise_for_status()
-                    if any(s["state"] == "success" for s in status_resp.json()):
-                        deployment_count += 1
-                except Exception as e:
-                    logger.error(f"Error fetching deployment statuses: {e}")
+        if not deployments:
+            # Distinguish "zero deployments in window" from "repo doesn't use GitHub deployments".
+            return {key: None}
 
-            if deployment_count == 0:
-                # Distinguish "zero deployments in window" from "repo doesn't use GitHub deployments".
-                check = await client.get(f"{repo_url}/deployments", headers=self.headers)
-                if not check.json():
-                    return {key: None}
+        start_date = datetime.now(timezone.utc) - timedelta(days=days_to_measure)
+        deployment_count = 0
+        for d in deployments:
+            if self._parse_github_datetime_string(d["created_at"]) < start_date:
+                break
+            if await self.forge.deployment_succeeded(client, d["statuses_url"]):
+                deployment_count += 1
 
-            logger.debug(f"Deployments in last {days_to_measure} days: {deployment_count}")
-            return {key: deployment_count}
-        except Exception as e:
-            logger.error(f"Error fetching deployments: {e}")
-            return {key: 0}
+        logger.debug(f"Deployments in last {days_to_measure} days: {deployment_count}")
+        return {key: deployment_count}
 
     async def release_frequency(
         self,
         client: httpx.AsyncClient,
-        repo_url: str,
+        ref: str,
         days_to_measure: int = 365,
         pages: int = 1,
         page_size: int = 100,
     ) -> Dict[str, Optional[int]]:
         """Number of GitHub releases published in the last `days_to_measure` days."""
         key = f"num_of_releases_last_{days_to_measure}_days"
-        try:
-            releases: List[Dict] = []
-            for page in range(1, pages + 1):
-                resp = await client.get(
-                    f"{repo_url}/releases",
-                    headers=self.headers,
-                    params={"per_page": page_size, "page": page},
-                )
-                resp.raise_for_status()
-                releases += resp.json()
+        releases: List[Dict] = []
+        for page in range(1, pages + 1):
+            batch = await self.forge.releases(client, ref, per_page=page_size, page=page)
+            if not batch:
+                break
+            releases += batch
 
-            start_date = datetime.now(timezone.utc) - timedelta(days=days_to_measure)
-            release_count = 0
-            for r in releases:
-                if not r.get("published_at"):
-                    continue
-                if self._parse_github_datetime_string(r["published_at"]) >= start_date:
-                    release_count += 1
-                else:
-                    break
+        if not releases:
+            return {key: None}
 
-            if release_count == 0:
-                check = await client.get(f"{repo_url}/releases/latest", headers=self.headers)
-                if check.status_code == 404:
-                    return {key: None}
+        start_date = datetime.now(timezone.utc) - timedelta(days=days_to_measure)
+        release_count = 0
+        for r in releases:
+            if not r.get("published_at"):
+                continue
+            if self._parse_github_datetime_string(r["published_at"]) >= start_date:
+                release_count += 1
+            else:
+                break
 
-            logger.debug(f"Releases in last {days_to_measure} days: {release_count}")
-            return {key: release_count}
-        except Exception as e:
-            logger.error(f"Error fetching releases: {e}")
-            return {key: 0}
+        logger.debug(f"Releases in last {days_to_measure} days: {release_count}")
+        return {key: release_count}
 
     async def average_time_failure(
-        self, client: httpx.AsyncClient, repo_url: str, branch: str, num_workflows: int = 100
+        self, client: httpx.AsyncClient, ref: str, branch: str, num_workflows: int = 100
     ) -> Dict[str, float]:
         """Average duration (seconds) of failed workflow runs over the last N runs."""
         runs = await self._get_last_n_workflow_runs(
-            client, repo_url, num_workflows, branch, status="failure"
+            client, ref, num_workflows, branch, status="failure"
         )
         total = sum(
             self._parse_github_datetime_string(w["updated_at"]).timestamp()
@@ -326,34 +319,29 @@ class CICDMetricsCollector:
     async def average_cycle_time(
         self,
         client: httpx.AsyncClient,
-        repo_url: str,
+        ref: str,
         pages: int = 1,
         page_size: int = 100,
     ) -> Dict[str, float]:
         """Average time (seconds) from PR open to merge across the last N closed PRs."""
-        try:
-            pull_requests: List[Dict] = []
-            for page in range(1, pages + 1):
-                resp = await client.get(
-                    f"{repo_url}/pulls",
-                    headers=self.headers,
-                    params={"state": "closed", "per_page": page_size, "page": page},
-                )
-                resp.raise_for_status()
-                pull_requests += resp.json()
-
-            total_cycle_time = sum(
-                self._parse_github_datetime_string(pr["merged_at"]).timestamp()
-                - self._parse_github_datetime_string(pr["created_at"]).timestamp()
-                for pr in pull_requests
-                if pr.get("merged_at")
+        pull_requests: List[Dict] = []
+        for page in range(1, pages + 1):
+            batch = await self.forge.pull_requests(
+                client, ref, state="closed", per_page=page_size, page=page,
             )
-            avg = total_cycle_time / max(len(pull_requests), 1)
-            logger.debug(f"Average cycle time: {avg:.1f}s")
-            return {"average_cycle_time": avg}
-        except Exception as e:
-            logger.error(f"Error fetching pull requests: {e}")
-            return {"average_cycle_time": 0.0}
+            if not batch:
+                break
+            pull_requests += batch
+
+        total_cycle_time = sum(
+            self._parse_github_datetime_string(pr["merged_at"]).timestamp()
+            - self._parse_github_datetime_string(pr["created_at"]).timestamp()
+            for pr in pull_requests
+            if pr.get("merged_at")
+        )
+        avg = total_cycle_time / max(len(pull_requests), 1)
+        logger.debug(f"Average cycle time: {avg:.1f}s")
+        return {"average_cycle_time": avg}
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
@@ -362,40 +350,30 @@ class CICDMetricsCollector:
     async def _get_last_n_workflow_runs(
         self,
         client: httpx.AsyncClient,
-        repo_url: str,
+        ref: str,
         num_workflows: int = 100,
         branch: str = "main",
         status: Optional[str] = None,
     ) -> List[Dict]:
         """Fetch up to `num_workflows` workflow runs, paging as needed."""
-        try:
-            results: List[Dict] = []
-            remaining = num_workflows
-            page = 1
-            while remaining > 0:
-                params: Dict[str, Any] = {
-                    "branch": branch,
-                    "per_page": min(remaining, 100),
-                    "page": page,
-                }
-                if status:
-                    params["status"] = status
-                resp = await client.get(
-                    f"{repo_url}/actions/runs", headers=self.headers, params=params
-                )
-                resp.raise_for_status()
-                batch = resp.json().get("workflow_runs", [])
-                results += batch
-                if len(batch) < params["per_page"]:
-                    break
-                remaining -= len(batch)
-                page += 1
-            return results
-        except Exception as e:
-            logger.error(f"Error fetching workflow runs: {e}")
-            return []
+        results: List[Dict] = []
+        remaining = num_workflows
+        page = 1
+        while remaining > 0:
+            per_page = min(remaining, 100)
+            batch = await self.forge.ci_runs(
+                client, ref, branch=branch, status=status, per_page=per_page, page=page,
+            )
+            if not batch:
+                break
+            results += batch
+            if len(batch) < per_page:
+                break
+            remaining -= len(batch)
+            page += 1
+        return results
 
-    async def _get_default_branch(self, client: httpx.AsyncClient, repo_url: str) -> str:
+    async def _get_default_branch(self, client: httpx.AsyncClient, ref: str) -> str:
         """The repo's actual default branch, falling back to "main" only if
         it can't be determined.
 
@@ -405,28 +383,18 @@ class CICDMetricsCollector:
         runs on a branch literally named "main", which read as "no CI data"
         instead of the ~64k real runs it actually has.
         """
-        try:
-            resp = await client.get(repo_url, headers=self.headers)
-            resp.raise_for_status()
-            return resp.json().get("default_branch") or "main"
-        except Exception as e:
-            logger.error(f"Error fetching default branch for {repo_url}: {e}")
+        info = await self.forge.repo_info(client, ref)
+        if not info:
+            logger.error(f"Could not fetch default branch for {ref}; assuming main")
             return "main"
-
-    def _parse_repo_url(self, repo_url: str) -> str:
-        """Return the GitHub REST API base URL for a repository.
-
-        Examples:
-            'https://github.com/owner/repo'     -> 'https://api.github.com/repos/owner/repo'
-            'https://github.com/owner/repo.git' -> 'https://api.github.com/repos/owner/repo'
-        """
-        url = repo_url.rstrip("/").removesuffix(".git")
-        if "github.com/" in url:
-            parts = url.split("github.com/")[-1].split("/")
-            if len(parts) >= 2:
-                return f"https://api.github.com/repos/{parts[0]}/{parts[1]}"
-        raise ValueError(f"Invalid GitHub URL format: {repo_url}")
+        return info.get("default_branch") or "main"
 
     def _parse_github_datetime_string(self, date: str) -> datetime:
-        """Parse a GitHub ISO 8601 timestamp into a timezone-aware datetime."""
-        return datetime.strptime(date, self.github_datetime_format)
+        """Parse an ISO 8601 timestamp into a timezone-aware datetime.
+
+        GitHub sends "2026-01-01T00:00:00Z"; GitLab sends fractional seconds
+        and an offset ("2026-10-08T16:30:11.964-04:00"), which the old
+        fixed strptime format rejected, failing the whole CI/CD collection.
+        """
+        parsed = datetime.fromisoformat(date.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

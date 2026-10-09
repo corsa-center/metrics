@@ -3,43 +3,20 @@
 import asyncio
 
 import pytest
+
+from tests.fakes import FakeForge
 from unittest.mock import AsyncMock, MagicMock
 
 from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
 
 
-CONFIG = {
-    "api_credentials": {
-        "github": {"token": ""},
-    }
-}
-
-
 @pytest.fixture
 def collector():
-    return CICDMetricsCollector(CONFIG)
-
-
-# ------------------------------------------------------------------ #
-# _parse_repo_url                                                      #
-# ------------------------------------------------------------------ #
-
-class TestParseRepoUrl:
-    def test_https_url(self, collector):
-        assert collector._parse_repo_url("https://github.com/owner/repo") == \
-            "https://api.github.com/repos/owner/repo"
-
-    def test_git_suffix_stripped(self, collector):
-        assert collector._parse_repo_url("https://github.com/owner/repo.git") == \
-            "https://api.github.com/repos/owner/repo"
-
-    def test_trailing_slash_stripped(self, collector):
-        assert collector._parse_repo_url("https://github.com/owner/repo/") == \
-            "https://api.github.com/repos/owner/repo"
-
-    def test_invalid_url_raises(self, collector):
-        with pytest.raises(ValueError):
-            collector._parse_repo_url("https://gitlab.com/owner/repo")
+    # None: every test here exercises _calculate_score, which is pure and
+    # never touches self.forge. URL-parsing coverage (formerly
+    # _parse_repo_url here) now lives in tests/forge/test_github.py
+    # against GitHubForge.extract_ref.
+    return CICDMetricsCollector(None)
 
 
 # ------------------------------------------------------------------ #
@@ -144,18 +121,28 @@ class TestGetDefaultBranch:
         # AMReX-Codes/amrex works on "development" and has zero workflow
         # runs on a branch literally named "main" -- a hardcoded "main"
         # default silently read that as "no CI data".
-        client = MagicMock()
-        response = MagicMock()
-        response.json.return_value = {"default_branch": "development"}
-        response.raise_for_status = MagicMock()
-        client.get = AsyncMock(return_value=response)
-
-        branch = asyncio.run(collector._get_default_branch(client, "https://api.github.com/repos/AMReX-Codes/amrex"))
-        assert branch == "development"
+        collector.forge = FakeForge(repo_info_data={"default_branch": "development"})
+        assert asyncio.run(collector._get_default_branch(None, "AMReX-Codes/amrex")) == "development"
 
     def test_falls_back_to_main_on_error(self, collector):
-        client = MagicMock()
-        client.get = AsyncMock(side_effect=Exception("network error"))
+        collector.forge = FakeForge(gaps={"repo_info"})
+        assert asyncio.run(collector._get_default_branch(None, "o/r")) == "main"
 
-        branch = asyncio.run(collector._get_default_branch(client, "https://api.github.com/repos/o/r"))
-        assert branch == "main"
+
+class TestTimestampParsing:
+    def test_github_and_gitlab_formats(self, collector):
+        gh = collector._parse_github_datetime_string("2026-01-01T00:00:00Z")
+        gl = collector._parse_github_datetime_string("2026-10-08T16:30:11.964-04:00")
+        assert gh.tzinfo is not None and gl.tzinfo is not None
+        assert (gl - gh).days == 280
+
+
+class TestPipelineSuccessWithoutWorkflows:
+    def test_gitlab_pipelines_give_the_success_rate(self):
+        from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
+        from tests.fakes import gitlab_fake
+        runs = ([{"conclusion": "success"}] * 6 + [{"conclusion": "failed"}] * 2
+                + [{"conclusion": "running"}, {"conclusion": "canceled"}])
+        c = CICDMetricsCollector(gitlab_fake(ci_run_list=runs))
+        out = asyncio.run(c.percentage_workflow_success(None, "g/p"))
+        assert out["total_workflow_success_percentage"] == 75.0

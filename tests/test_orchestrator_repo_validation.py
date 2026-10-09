@@ -11,7 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from forge.base import COLLECTION_GAP
+from forge.gitlab import GitLabForge
 from orchestrator import MetricsOrchestrator
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
@@ -19,48 +22,37 @@ def orchestrator():
     return MetricsOrchestrator(config_path="config/orchestrator.yaml")
 
 
-def _resp(status_code):
-    r = MagicMock()
-    r.status_code = status_code
-    return r
-
-
 class TestConfirmRepoExists:
-    def test_404_is_confirmed_missing(self, orchestrator):
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(404))
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/RAJA-llnl/RAJA"))
-        assert result is False
+    """Existence comes from the package's own forge: repo_info() is None
+    only for a confirmed 404, and a gap (rate limit, network error) is not
+    a confirmed absence."""
 
-    def test_200_confirms_it_exists(self, orchestrator):
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(200))
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/LLNL/RAJA"))
-        assert result is True
+    def _confirm(self, orchestrator, repo_info, url="https://github.com/LLNL/RAJA"):
+        forge = FakeForge()
+        if isinstance(repo_info, Exception):
+            forge.repo_info = AsyncMock(side_effect=repo_info)
+        else:
+            forge.repo_info_data = repo_info
+        return asyncio.run(orchestrator._confirm_repo_exists(forge, url))
+
+    def test_404_is_confirmed_missing(self, orchestrator):
+        assert self._confirm(orchestrator, None, "https://github.com/RAJA-llnl/RAJA") is False
+
+    def test_found_confirms_it_exists(self, orchestrator):
+        assert self._confirm(orchestrator, {"stars": 1}) is True
 
     def test_network_exception_fails_open(self, orchestrator):
         # A hiccup here must not silently drop a perfectly valid package --
         # the per-collector gap handling is the right tool for that
         # uncertainty, not a hard skip at this preflight stage.
-        with patch("httpx.AsyncClient", side_effect=Exception("boom")):
-            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/HDFGroup/hdf5"))
-        assert result is True
+        assert self._confirm(orchestrator, Exception("boom")) is True
 
-    def test_rate_limited_403_fails_open(self, orchestrator):
+    def test_gap_fails_open(self, orchestrator):
         # Not a confirmed absence -- only a clean 404 is.
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=_resp(403))
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = asyncio.run(orchestrator._confirm_repo_exists("https://github.com/HDFGroup/hdf5"))
-        assert result is True
+        assert self._confirm(orchestrator, COLLECTION_GAP) is True
+
+    def test_unparseable_url_is_missing(self, orchestrator):
+        assert self._confirm(orchestrator, {"stars": 1}, "not-a-url") is False
 
 
 class TestCollectAllMetricsSkipsMissingRepo:
@@ -100,16 +92,35 @@ class TestCollectAllMetricsSkipsMissingRepo:
         result = asyncio.run(go())
         assert result["dimensions"]["impact"]["score"] == 42.0
 
-    def test_non_github_repo_check_takes_priority_over_existence_check(self, orchestrator):
-        # A GitLab repo shouldn't trigger a GitHub existence lookup at all.
+    def test_unsupported_platform_skips_before_the_existence_check(self, orchestrator):
+        # A host no forge supports shouldn't trigger an existence lookup at all.
         async def go():
             with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
-                 patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)) as confirm:
-                pkg = {
-                    "name": "GitLabThing",
-                    "repo_url": "https://gitlab.com/owner/thing",
-                }
-                await orchestrator.collect_all_metrics(pkg)
+                 patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)) as confirm, \
+                 patch.object(orchestrator, "collect_impact_dimension") as impact:
+                pkg = {"name": "Elsewhere", "repo_type": "bitbucket",
+                       "repo_url": "https://bitbucket.org/owner/thing"}
+                result = await orchestrator.collect_all_metrics(pkg)
                 confirm.assert_not_called()
+                impact.assert_not_called()
+                return result
 
-        asyncio.run(go())
+        result = asyncio.run(go())
+        assert result["dimensions"]["quality"]["score"] == 0.0
+
+    def test_gitlab_repo_is_checked_and_collected(self, orchestrator):
+        fake_dim = {"dimension": "x", "score": 42.0, "max_score": 100.0}
+
+        async def go():
+            with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
+                 patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)) as confirm, \
+                 patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                pkg = {"name": "GitLabThing", "repo_type": "gitlab",
+                       "repo_url": "https://gitlab.com/owner/thing"}
+                result = await orchestrator.collect_all_metrics(pkg)
+                assert isinstance(confirm.call_args.args[0], GitLabForge)
+                return result
+
+        assert asyncio.run(go())["dimensions"]["impact"]["score"] == 42.0

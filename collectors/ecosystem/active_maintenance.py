@@ -17,12 +17,9 @@ import logging
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
-from urllib.parse import urlencode
 
-from collectors.ecosystem.base import (
-    PUBLIC_CHANNEL_PATTERNS, RetryingTransport, fetch_version_tags, get_threshold, wiki_has_content,
-)
-from collectors.rate_limit import search_get
+from collectors.ecosystem.base import PUBLIC_CHANNEL_PATTERNS, RetryingTransport, get_threshold
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +27,7 @@ logger = logging.getLogger(__name__)
 # Community channels a project might link from its README, beyond the tracker.
 _CHANNEL_PATTERNS = PUBLIC_CHANNEL_PATTERNS
 
-# Maintainer-group author associations; issues from anyone else are community
-# traffic on the tracker.
-_INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
-# Search pages (100 issues each) read while counting community issues.
+# Pages (100 issues each) read while counting community issues.
 _COMMUNITY_ISSUE_PAGES = 5
 
 # The pass/fail thresholds for this collector's data (departure rate,
@@ -43,13 +37,10 @@ _COMMUNITY_ISSUE_PAGES = 5
 
 
 class ActiveMaintenanceCollector:
-    """Collects active maintenance metrics from GitHub repositories"""
+    """Collects active maintenance metrics from a project's code-hosting forge."""
 
-    def __init__(self, github_token: Optional[str] = None):
-        self.github_token = github_token
-        self.headers = {"Accept": "application/vnd.github.v3+json"}
-        if github_token:
-            self.headers["Authorization"] = f"token {github_token}"
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """Collect active maintenance metrics for a package."""
@@ -58,41 +49,48 @@ class ActiveMaintenanceCollector:
 
         logger.info(f"Collecting active maintenance metrics for {repo_name}")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         # Companion repositories a project's work also lives in (declared in
         # its metrics_data catalog entry), so moving part of a project to
         # another repository isn't read as its contributors abandoning it.
+        # They are assumed to be on the same forge as the main repository.
         related = [r for r in package.get("related_repositories") or []
-                   if isinstance(r, str) and r.count("/") == 1]
+                   if isinstance(r, str) and r.count("/") >= 1]
 
-        # Collect all data concurrently
-        (
-            repo_info,
-            commit_activity,
-            releases,
-            contributors,
-            first_commit_date,
-            contributor_stats,
-            readme_text,
-            wiki_has_content,
-            community_issues,
-        ) = await asyncio.gather(
-            self._get_repo_info(owner, repo),
-            self._get_commit_activity(owner, repo),
-            self._get_releases(owner, repo),
-            self._get_contributors(owner, repo),
-            self._get_first_commit_date(owner, repo),
-            self._get_contributor_stats(owner, repo),
-            self._get_readme(owner, repo),
-            self._wiki_has_content(owner, repo),
-            self._count_community_issues(owner, repo),
-            return_exceptions=True,
-        )
+        async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
+            # Collect all data concurrently
+            (
+                repo_info,
+                commit_activity,
+                releases,
+                contributors,
+                first_commit_date,
+                contributor_stats,
+                readme_text,
+                wiki_has_content,
+                community_issues,
+            ) = await asyncio.gather(
+                self._get_repo_info(client, ref),
+                self._get_commit_activity(client, ref),
+                self._get_releases(client, ref),
+                self._get_contributors(client, ref),
+                self.forge.first_commit_date(client, ref),
+                self.forge.contributor_weekly_stats(client, ref),
+                self._get_readme(client, ref),
+                self.forge.wiki_has_content(client, ref),
+                self._count_community_issues(client, ref),
+                return_exceptions=True,
+            )
+            extra = []
+            if related:
+                extra = await asyncio.gather(
+                    *[self.forge.contributor_weekly_stats(client, r) for r in related],
+                    return_exceptions=True,
+                )
 
         # Handle exceptions
         if isinstance(repo_info, Exception):
@@ -127,13 +125,11 @@ class ActiveMaintenanceCollector:
         release_analysis = self._analyze_releases(releases)
         contributor_analysis = self._analyze_contributors(contributors)
         if related:
-            extra = await asyncio.gather(
-                *[self._get_contributor_stats(*r.split("/")) for r in related], return_exceptions=True)
             contributor_stats = self._merge_contributor_stats(
                 [contributor_stats] + [e for e in extra if isinstance(e, list)])
         abandonment = self._analyze_abandonment(contributor_stats)
         if related:
-            abandonment["repositories"] = [f"{owner}/{repo}"] + related
+            abandonment["repositories"] = [ref] + related
         channels = self._analyze_channels(repo_info, readme_text, wiki_has_content, community_issues)
 
         # Calculate score
@@ -143,8 +139,8 @@ class ActiveMaintenanceCollector:
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "maintenance_indicators": maintenance_indicators,
             "commit_activity": commit_analysis,
             "release_activity": release_analysis,
@@ -154,83 +150,40 @@ class ActiveMaintenanceCollector:
             "score": score,
         }
 
-    async def _get_contributor_stats(self, owner: str, repo: str) -> List[Dict]:
-        """Per-contributor weekly commit history, in a single request.
-
-        GitHub computes this asynchronously and answers 202 while it works, so
-        one retry is allowed before giving up.
-        """
-        url = f"https://api.github.com/repos/{owner}/{repo}/stats/contributors"
-        try:
-            async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code == 202:
-                    await asyncio.sleep(3)
-                    resp = await client.get(url, headers=self.headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data if isinstance(data, list) else []
-        except Exception as e:
-            logger.debug(f"Error fetching contributor stats: {e}")
-        return []
-
-    async def _wiki_has_content(self, owner: str, repo: str) -> bool:
-        return await wiki_has_content(owner, repo)
-
-    async def _count_community_issues(self, owner: str, repo: str) -> Optional[int]:
+    async def _count_community_issues(self, client: httpx.AsyncClient, ref: str) -> Optional[int]:
         """How many issues opened in the last 365 days came from outside the
         maintainer group, counted until the threshold is reached. None on
         failure.
 
-        Uses search rather than the issues endpoint, which also returns pull
-        requests -- on a busy repository the newest 100 items are mostly PRs.
-        Pages past the newest 100 (up to _COMMUNITY_ISSUE_PAGES): a project
-        whose maintainers file their own tickets can bury its community
-        issues -- AMReX's newest 100 were 98 maintainer-filed, while the full
-        year held 51 from outside.
+        Uses forge.recent_issues() rather than issues(), which on GitHub
+        also returns pull requests -- on a busy repository the newest 100
+        items are mostly PRs. Pages past the newest 100 (up to
+        _COMMUNITY_ISSUE_PAGES): a project whose maintainers file their own
+        tickets can bury its community issues -- AMReX's newest 100 were 98
+        maintainer-filed, while the full year held 51 from outside.
         """
         since = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
         enough = get_threshold(
             "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
         outside = 0
         try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                for page in range(1, _COMMUNITY_ISSUE_PAGES + 1):
-                    query = urlencode({
-                        "q": f"repo:{owner}/{repo} is:issue created:>={since}",
-                        "sort": "created", "order": "desc", "per_page": 100, "page": page,
-                    })
-                    resp = await search_get(
-                        client, f"https://api.github.com/search/issues?{query}", self.headers)
-                    if resp is None or resp.status_code != 200:
-                        # A later page failing still leaves a real lower bound.
-                        return outside if page > 1 else None
-                    items = resp.json().get("items", [])
-                    outside += sum(
-                        1 for i in items if i.get("author_association") not in _INSIDE_ASSOCIATIONS
-                    )
-                    if outside >= enough or len(items) < 100:
-                        break
+            for page in range(1, _COMMUNITY_ISSUE_PAGES + 1):
+                items = await self.forge.recent_issues(client, ref, since, page=page)
+                if items is None:
+                    # A later page failing still leaves a real lower bound.
+                    return outside if page > 1 else None
+                outside += sum(1 for i in items if i.get("is_outsider"))
+                if outside >= enough or len(items) < 100:
+                    break
         except Exception as e:
-            logger.debug(f"Could not search issues for {owner}/{repo}: {e}")
+            logger.debug(f"Could not count community issues for {ref}: {e}")
             return outside or None
         return outside
 
-    async def _get_readme(self, owner: str, repo: str) -> str:
+    async def _get_readme(self, client: httpx.AsyncClient, ref: str) -> str:
         """README text, used to find community channels linked from it."""
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                resp = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}/readme",
-                    headers=self.headers,
-                )
-                if resp.status_code != 200:
-                    return ""
-                import base64
-                return base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
-        except Exception as e:
-            logger.debug(f"Error fetching README: {e}")
-            return ""
+        text = await self.forge.readme(client, ref)
+        return text or ""
 
     @staticmethod
     def _merge_contributor_stats(stat_lists: List[List[Dict]]) -> List[Dict]:
@@ -294,90 +247,46 @@ class ActiveMaintenanceCollector:
         when people outside the maintainer group actually use it -- every
         repository has one, so its mere presence says nothing."""
         found = []
+        platform = self.forge.display_name
         if repo_info.get("has_discussions"):
-            found.append("GitHub Discussions")
+            found.append(f"{platform} Discussions")
         if repo_info.get("has_wiki") and wiki_has_content:
             found.append("Wiki")
         min_issues = get_threshold(
             "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
         if (repo_info.get("has_issues", True) and community_issues is not None
                 and community_issues >= min_issues):
-            found.append("GitHub Issues")
+            found.append(f"{platform} Issues")
 
         for label, pattern in _CHANNEL_PATTERNS.items():
             if readme and pattern.search(readme):
                 found.append(label)
         return {"found": found, "count": len(found), "community_issues_last_year": community_issues}
 
-    async def _get_repo_info(self, owner: str, repo: str) -> Dict:
+    async def _get_repo_info(self, client: httpx.AsyncClient, ref: str) -> Dict:
         """Get basic repository info (archived status, description, pushed_at)."""
-        url = f"https://api.github.com/repos/{owner}/{repo}"
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code == 200:
-                    return resp.json()
-        except Exception as e:
-            logger.debug(f"Error fetching repo info: {e}")
-        return {}
+        data = await self.forge.repo_info(client, ref)
+        return data if data else {}
 
-    async def _get_commit_activity(self, owner: str, repo: str) -> Dict:
-        """Get commit activity stats from the GitHub stats API."""
-        # Get participation stats (last 52 weeks of commit counts)
-        url = f"https://api.github.com/repos/{owner}/{repo}/stats/participation"
-        participation = {}
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code == 200:
-                    participation = resp.json()
-                elif resp.status_code == 202:
-                    # GitHub is computing stats, wait and retry once
-                    await asyncio.sleep(3)
-                    resp = await client.get(url, headers=self.headers)
-                    if resp.status_code == 200:
-                        participation = resp.json()
-        except Exception as e:
-            logger.debug(f"Error fetching participation stats: {e}")
-
-        # Get recent commits (last page to find most recent)
-        url = f"https://api.github.com/repos/{owner}/{repo}/commits?per_page=1"
-        last_commit = {}
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data:
-                        last_commit = data[0]
-        except Exception as e:
-            logger.debug(f"Error fetching recent commits: {e}")
-
+    async def _get_commit_activity(self, client: httpx.AsyncClient, ref: str) -> Dict:
+        """Get commit activity stats: 52-week participation plus the most recent commit."""
+        participation = await self.forge.commit_participation(client, ref)
+        commits = await self.forge.commits(client, ref, per_page=1)
+        last_commit = commits[0] if commits else {}
         return {"participation": participation, "last_commit": last_commit}
 
-    async def _get_releases(self, owner: str, repo: str) -> List[Dict]:
-        """Recent releases, newest first: GitHub Releases plus version tags
-        that have no Release object. Many projects publish versions only as
-        tags, which the Releases API doesn't list."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20"
-        releases: List[Dict] = []
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code == 200:
-                    releases = resp.json()
-                named = {r.get("tag_name") for r in releases}
-                releases += [t for t in await self._get_version_tags(client, owner, repo)
-                             if t["tag_name"] not in named]
-        except Exception as e:
-            logger.debug(f"Error fetching releases: {e}")
+    async def _get_releases(self, client: httpx.AsyncClient, ref: str) -> List[Dict]:
+        """Recent releases, newest first: release objects plus version tags
+        that have no release object. Many projects publish versions only as
+        tags, which the releases API doesn't list."""
+        releases = list(await self.forge.releases(client, ref, per_page=20) or [])
+        named = {r.get("tag_name") for r in releases}
+        releases += [t for t in await self.forge.version_tags(client, ref)
+                     if t["tag_name"] not in named]
         return sorted(releases, key=lambda r: r.get("published_at") or r.get("created_at") or "",
                       reverse=True)
 
-    async def _get_version_tags(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[Dict]:
-        return await fetch_version_tags(client, self.headers, owner, repo)
-
-    async def _get_contributors(self, owner: str, repo: str) -> List[Dict]:
+    async def _get_contributors(self, client: httpx.AsyncClient, ref: str) -> List[Dict]:
         """Get contributors, paginated.
 
         Bounded to 5 pages (500 contributors) to cap worst-case API calls —
@@ -385,78 +294,13 @@ class ActiveMaintenanceCollector:
         pagination for an unusually large repository.
         """
         contributors: List[Dict] = []
-        url = f"https://api.github.com/repos/{owner}/{repo}/contributors?per_page=100"
         max_pages = 5
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                for _ in range(max_pages):
-                    resp = await client.get(url, headers=self.headers)
-                    if resp.status_code != 200:
-                        break
-                    page = resp.json()
-                    if not isinstance(page, list) or not page:
-                        break
-                    contributors.extend(page)
-                    next_url = self._get_next_link(resp.headers.get("Link"))
-                    if not next_url:
-                        break
-                    url = next_url
-        except Exception as e:
-            logger.debug(f"Error fetching contributors: {e}")
+        for page in range(1, max_pages + 1):
+            batch = await self.forge.contributors(client, ref, per_page=100, page=page)
+            if not batch:
+                break
+            contributors.extend(batch)
         return contributors
-
-    @staticmethod
-    def _get_rel_link(link_header: Optional[str], rel: str) -> Optional[str]:
-        """Parse the URL for a given `rel` out of a GitHub Link pagination header."""
-        if not link_header:
-            return None
-        for part in link_header.split(","):
-            segment = part.strip()
-            if f'rel="{rel}"' in segment:
-                return segment.split(";")[0].strip().strip("<>")
-        return None
-
-    @classmethod
-    def _get_next_link(cls, link_header: Optional[str]) -> Optional[str]:
-        """Parse the `next` URL out of a GitHub Link pagination header."""
-        return cls._get_rel_link(link_header, "next")
-
-    async def _get_first_commit_date(self, owner: str, repo: str) -> Optional[str]:
-        """Date of the repository's oldest commit.
-
-        GitHub has no direct endpoint for this, but asking for one commit per page
-        makes the `rel="last"` Link header point at the final (oldest) commit, so
-        this costs two requests regardless of history size.
-
-        This is the age of the *code history*, which for projects that imported an
-        earlier VCS is much older than the GitHub repository itself — HDF5's first
-        commit is from 1997, 23 years before its repo was created.
-        """
-        url = f"https://api.github.com/repos/{owner}/{repo}/commits?per_page=1"
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                resp = await client.get(url, headers=self.headers)
-                if resp.status_code != 200:
-                    return None
-
-                last_url = self._get_rel_link(resp.headers.get("Link"), "last")
-                if not last_url:
-                    # Single page of history: the commit already in hand is the oldest.
-                    data = resp.json()
-                    if not data:
-                        return None
-                    return data[0].get("commit", {}).get("committer", {}).get("date")
-
-                resp = await client.get(last_url, headers=self.headers)
-                if resp.status_code != 200:
-                    return None
-                data = resp.json()
-                if not data:
-                    return None
-                return data[0].get("commit", {}).get("committer", {}).get("date")
-        except Exception as e:
-            logger.debug(f"Error fetching first commit: {e}")
-            return None
 
     def _analyze_maintenance_indicators(
         self, repo_info: Dict, first_commit_date: Optional[str] = None
@@ -562,10 +406,8 @@ class ActiveMaintenanceCollector:
         # Last commit date
         last_date = None
         days_since = None
-        commit_info = last_commit.get("commit", {})
-        committer = commit_info.get("committer", {})
-        if committer.get("date"):
-            last_date = committer["date"]
+        if last_commit.get("committer_date"):
+            last_date = last_commit["committer_date"]
             last_dt = datetime.fromisoformat(last_date.replace("Z", "+00:00"))
             days_since = (datetime.now(timezone.utc) - last_dt).days
 
@@ -631,7 +473,7 @@ class ActiveMaintenanceCollector:
                 "bus_factor": 0,
             }
 
-        total_contribs = sum(c.get("contributions", 0) for c in contributors)
+        total_contribs = sum(c.get("commit_count", 0) for c in contributors)
         if total_contribs == 0:
             return {
                 "total_contributors": len(contributors),
@@ -641,18 +483,18 @@ class ActiveMaintenanceCollector:
 
         # Bus factor: minimum contributors needed for >50% of commits
         sorted_contribs = sorted(
-            contributors, key=lambda c: c.get("contributions", 0), reverse=True
+            contributors, key=lambda c: c.get("commit_count", 0), reverse=True
         )
         cumulative = 0
         bus_factor = 0
         for c in sorted_contribs:
-            cumulative += c.get("contributions", 0)
+            cumulative += c.get("commit_count", 0)
             bus_factor += 1
             if cumulative > total_contribs * 0.5:
                 break
 
         top_pct = round(
-            sorted_contribs[0].get("contributions", 0) / total_contribs * 100, 1
+            sorted_contribs[0].get("commit_count", 0) / total_contribs * 100, 1
         )
 
         return {
@@ -720,24 +562,11 @@ class ActiveMaintenanceCollector:
             "details": details,
         }
 
-    def _extract_owner_repo(self, repo_url: str) -> Optional[tuple]:
-        patterns = [
-            r"github\.com/([^/]+)/([^/]+)",
-            r"github\.com:([^/]+)/([^/]+)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, repo_url)
-            if match:
-                owner = match.group(1)
-                repo = match.group(2).replace(".git", "")
-                return (owner, repo)
-        return None
-
     def _empty_result(self, repo_name: str) -> Dict:
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": self.forge.get_timestamp(),
             "maintenance_indicators": {},
             "commit_activity": {},
             "release_activity": {},

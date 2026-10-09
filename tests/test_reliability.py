@@ -9,11 +9,13 @@ from collectors.quality.reliability import (
     ReliabilityCollector, _ANALYSIS_WORKFLOW_HINT, _HARDENING_MARKERS,
     _FLAG_FILE_HINT, _DEFECT_LABELS, _ANALYSIS_CONFIGS, _MAX_FLAG_FILES,
 )
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return ReliabilityCollector()
+    return ReliabilityCollector(GitHubForge())
 
 
 class TestWorkflowSelection:
@@ -46,7 +48,7 @@ class TestReadAnalysisWorkflows:
 
     def test_gapped_tree_is_tracked(self, collector):
         texts, saw_gap = asyncio.run(
-            collector._read_analysis_workflows(None, "o", "r", COLLECTION_GAP)
+            collector._read_analysis_workflows(None, "o/r", COLLECTION_GAP)
         )
         assert texts == []
         assert saw_gap is True
@@ -55,14 +57,14 @@ class TestReadAnalysisWorkflows:
         # AMReX's shape: gcc.yml matches no analysis keyword, but with the
         # keyword-only gate removed it's read anyway since nothing else
         # competes for the budget.
-        tree = RepoTree("o", "r", [".github/workflows/gcc.yml"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", [".github/workflows/gcc.yml"], truncated=False)
 
         async def fake_get(client, url, params=None):
             return self._b64("run: cppcheck .")
 
-        with patch.object(collector, "_github_get", side_effect=fake_get):
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get):
             texts, saw_gap = asyncio.run(
-                collector._read_analysis_workflows(None, "o", "r", tree)
+                collector._read_analysis_workflows(None, "o/r", tree)
             )
         assert texts == ["run: cppcheck ."]
         assert saw_gap is False
@@ -71,22 +73,22 @@ class TestReadAnalysisWorkflows:
         # More workflows than the cap: an unhinted one and a hinted one,
         # with the cap small enough that only the hinted one fits.
         paths = [".github/workflows/build.yml", ".github/workflows/codeql.yml"]
-        tree = RepoTree("o", "r", paths, truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", paths, truncated=False)
         seen = []
 
         async def fake_get(client, url, params=None):
             seen.append(url)
             return self._b64("content")
 
-        with patch.object(collector, "_github_get", side_effect=fake_get), \
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch("collectors.quality.reliability._MAX_ANALYSIS_WORKFLOWS", 1):
-            asyncio.run(collector._read_analysis_workflows(None, "o", "r", tree))
+            asyncio.run(collector._read_analysis_workflows(None, "o/r", tree))
         assert seen == ["https://api.github.com/repos/o/r/contents/.github/workflows/codeql.yml"]
 
     def test_no_workflows_directory_is_a_confirmed_empty_not_a_gap(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
         texts, saw_gap = asyncio.run(
-            collector._read_analysis_workflows(None, "o", "r", tree)
+            collector._read_analysis_workflows(None, "o/r", tree)
         )
         assert texts == []
         assert saw_gap is False
@@ -96,14 +98,14 @@ class TestReadAnalysisWorkflows:
         # nothing there must not read as "confirmed no analysis tooling" --
         # the unread 51 could hold it.
         paths = [f".github/workflows/w{i}.yml" for i in range(30)]
-        tree = RepoTree("o", "r", paths, truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", paths, truncated=False)
 
         async def fake_get(client, url, params=None):
             return self._b64("nothing relevant here")
 
-        with patch.object(collector, "_github_get", side_effect=fake_get):
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get):
             texts, saw_gap = asyncio.run(
-                collector._read_analysis_workflows(None, "o", "r", tree)
+                collector._read_analysis_workflows(None, "o/r", tree)
             )
         assert len(texts) == 25
         assert saw_gap is True
@@ -168,9 +170,8 @@ class TestLabelQuoting:
     def test_labels_with_spaces_are_quoted(self):
         # Unquoted, a label containing a space splits the search query and
         # silently drops the rest of the list — every project returned 0.
-        quoted = ",".join(
-            f'"{l}"' if (" " in l or ":" in l) else l for l in _DEFECT_LABELS
-        )
+        from forge.github import _label_query
+        quoted = _label_query(_DEFECT_LABELS)
         assert '"type: bug"' in quoted
         assert '"bug report"' in quoted
         assert quoted.startswith("bug,defect")
@@ -245,13 +246,13 @@ class TestFindAnalysisTools:
         assert saw_gap is True
 
     def test_config_file_found(self, collector):
-        tree = RepoTree("o", "r", [".clang-tidy"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", [".clang-tidy"], truncated=False)
         tools, saw_gap = asyncio.run(collector._find_analysis_tools(tree, []))
         assert tools == ["clang-tidy"]
         assert saw_gap is False
 
     def test_confirmed_absence_is_not_a_gap(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
         tools, saw_gap = asyncio.run(collector._find_analysis_tools(tree, []))
         assert tools == []
         assert saw_gap is False
@@ -274,7 +275,7 @@ class TestPythonAnalysisTools:
         assert tool in tools
 
     def test_mypy_config_file(self, collector):
-        tree = RepoTree("o", "r", ["mypy.ini"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["mypy.ini"], truncated=False)
         tools, _ = asyncio.run(collector._find_analysis_tools(tree, []))
         assert tools == ["mypy"]
 
@@ -297,20 +298,20 @@ class TestFindFlagFiles:
         assert saw_gap is True
 
     def test_confirmed_no_flag_files_is_not_a_gap(self, collector):
-        tree = RepoTree("o", "r", ["README.md", "CMakeLists.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md", "CMakeLists.txt"], truncated=False)
         paths, saw_gap = collector._find_flag_files(tree)
         assert paths == []
         assert saw_gap is False
 
     def test_flag_file_found_outside_conventional_directories(self, collector):
-        tree = RepoTree("o", "r", ["Tools/CMake/AMReXFlagsTargets.cmake"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["Tools/CMake/AMReXFlagsTargets.cmake"], truncated=False)
         paths, saw_gap = collector._find_flag_files(tree)
         assert paths == ["Tools/CMake/AMReXFlagsTargets.cmake"]
         assert saw_gap is False
 
     def test_result_capped_at_max_flag_files(self, collector):
         tree = RepoTree(
-            "o", "r",
+            FakeForge(), "o/r",
             [f"cmake/warn{i}.cmake" for i in range(10)],
             truncated=False,
         )
@@ -319,26 +320,26 @@ class TestFindFlagFiles:
 
     def test_compiler_setup_modules_are_read(self, collector):
         # SUNDIALS keeps -Werror and -fsanitize in SundialsSetupCompilers.cmake.
-        tree = RepoTree("o", "r", ["cmake/SundialsSetupCompilers.cmake", "cmake/Other.cmake"],
+        tree = RepoTree(FakeForge(), "o/r", ["cmake/SundialsSetupCompilers.cmake", "cmake/Other.cmake"],
                         truncated=False)
         assert collector._find_flag_files(tree)[0] == ["cmake/SundialsSetupCompilers.cmake"]
 
     def test_stronger_hints_come_before_compiler_modules(self, collector):
         tree = RepoTree(
-            "o", "r",
+            FakeForge(), "o/r",
             [f"cmake/SetupCompilers{i}.cmake" for i in range(10)] + ["cmake/deep/x/Warnings.cmake"],
             truncated=False,
         )
         assert collector._find_flag_files(tree)[0][0] == "cmake/deep/x/Warnings.cmake"
 
     def test_unrelated_compiler_named_modules_are_not_read(self, collector):
-        tree = RepoTree("o", "r", ["cmake/Modules/HandleCompilerRT.cmake",
+        tree = RepoTree(FakeForge(), "o/r", ["cmake/Modules/HandleCompilerRT.cmake",
                                    "build/CMakeFiles/3.22.1/CMakeCXXCompiler.cmake",
                                    "cmake/CompilerFlags.cmake"], truncated=False)
         assert collector._find_flag_files(tree)[0] == ["cmake/CompilerFlags.cmake"]
 
     def test_vendored_flag_files_are_skipped(self, collector):
-        tree = RepoTree("o", "r", ["external/lib/cmake/Warnings.cmake"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["external/lib/cmake/Warnings.cmake"], truncated=False)
         assert collector._find_flag_files(tree)[0] == []
 
     def test_non_cmake_files_do_not_crowd_out_the_cap(self, collector):
@@ -347,7 +348,7 @@ class TestFindFlagFiles:
         # to .cmake keeps them from spending the small result cap on
         # Trilinos-shaped false positives.
         tree = RepoTree(
-            "o", "r",
+            FakeForge(), "o/r",
             ["SECURITY.md", ".github/workflows/flag_prs_to_master.yml",
              "cmake/tribits/WarningFlags.cmake"],
             truncated=False,
@@ -360,8 +361,8 @@ class TestDefectTrendGapHandling:
     def _run(self, collector, search_side_effect):
         async def go():
             client = MagicMock()
-            with patch("collectors.quality.reliability.search_get", side_effect=search_side_effect):
-                return await collector._defect_trend(client, "o", "r")
+            with patch("forge.github.search_get", side_effect=search_side_effect):
+                return await collector._defect_trend(client, "o/r")
 
         return asyncio.run(go())
 
@@ -387,9 +388,9 @@ class TestDefectTrendSignificance:
             return r
 
         async def go():
-            with patch("collectors.quality.reliability.search_get",
+            with patch("forge.github.search_get",
                        new=AsyncMock(side_effect=[resp(recent), resp(previous)])):
-                return await collector._defect_trend(MagicMock(), "o", "r")
+                return await collector._defect_trend(MagicMock(), "o/r")
         return asyncio.run(go())
 
     def test_small_rise_within_normal_variation_is_stable(self, collector):
@@ -461,8 +462,8 @@ class TestRepoDefectLabels:
     def _labels(self, collector, pages):
         async def fake_get(client, url, params=None):
             return pages.pop(0) if pages else []
-        with patch.object(collector, "_github_get", new=fake_get):
-            return asyncio.run(collector._repo_defect_labels(MagicMock(), "o", "r"))
+        with patch.object(collector.forge, "_github_get", new=fake_get):
+            return asyncio.run(collector._repo_defect_labels(MagicMock(), "o/r"))
 
     def test_project_spellings_are_found(self, collector):
         names = ["type-bug", "is:bug", "kind/bug", "Bug", "regression", "enhancement",
@@ -478,8 +479,8 @@ class TestAnalysisBadges:
     def _badges(self, collector, readme, owner="o", repo="r"):
         import base64
         data = {"content": base64.b64encode(readme.encode()).decode()}
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
-            return asyncio.run(collector._analysis_badges(MagicMock(), owner, repo))
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+            return asyncio.run(collector._analysis_badges(MagicMock(), f"{owner}/{repo}"))
 
     def test_hosted_service_badges_for_this_repo(self, collector):
         md = ("[![CodeFactor](https://www.codefactor.io/repository/github/o/r/badge)](x)\n"

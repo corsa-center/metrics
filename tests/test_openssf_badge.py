@@ -6,11 +6,12 @@ import pytest
 
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    return OpenSSFBadgeCollector()
+    return OpenSSFBadgeCollector(FakeForge())
 
 
 # ------------------------------------------------------------------ #
@@ -110,7 +111,7 @@ class TestCollectWithBadge:
             "badge_percentage_0": 100,
             "id": 42,
         }
-        result = collector._collect_with_badge("MyPkg", "owner", "repo", badge_data)
+        result = collector._collect_with_badge("MyPkg", "owner/repo", badge_data)
         assert result["badge_exists"] is True
         assert result["badge_status"]["level"] == "passing"
         assert result["badge_status"]["progress_percentage"] == 100
@@ -119,7 +120,7 @@ class TestCollectWithBadge:
 
     def test_in_progress_badge(self, collector):
         badge_data = {"badge_level": None, "badge_percentage_0": 65, "id": 7}
-        result = collector._collect_with_badge("Pkg", "o", "r", badge_data)
+        result = collector._collect_with_badge("Pkg", "o/r", badge_data)
         assert result["badge_status"]["in_progress"] is True
         assert result["overall_score"]["status"] == "in_progress"
 
@@ -140,14 +141,14 @@ class TestScanFilesGapHandling:
 
     def test_confirmed_absent_is_still_a_real_miss(self, collector):
         file_map = {"code_of_conduct": ["CODE_OF_CONDUCT.md"]}
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
         result = collector._scan_files(tree, file_map)
         assert result["missing"] == ["code_of_conduct"]
         assert result["not_collected"] == []
 
     def test_differently_cased_governance_doc_found(self, collector):
         # AMReX-Codes/amrex ships GOVERNANCE.rst.
-        tree = RepoTree("o", "r", ["GOVERNANCE.rst"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["GOVERNANCE.rst"], truncated=False)
         result = collector._scan_files(tree, collector.GOVERNANCE_FILES)
         assert "governance" in result["found"]
 
@@ -159,7 +160,7 @@ class TestScanFilesGapHandling:
 
     def test_mixed_confirmed_and_missing_computes_percentage(self, collector):
         file_map = {"found_one": ["F.md"], "missing_one": ["G.md"]}
-        tree = RepoTree("o", "r", ["F.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["F.md"], truncated=False)
         result = collector._scan_files(tree, file_map)
         assert result["count_total"] == 2
         assert result["percentage"] == 50.0
@@ -173,7 +174,7 @@ class TestCollectWithoutBadgeGapHandling:
             return {"percentage": 100.0}
 
         with patch.object(collector, "_scan_files", side_effect=fake_scan):
-            result = collector._collect_without_badge("Pkg", "o", "r", None)
+            result = collector._collect_without_badge("Pkg", "o/r", None)
         # If the gap silently counted as 0%, this would be 60% (0.3+0.3 of 100).
         assert result["overall_score"]["percentage"] == 100.0
 
@@ -182,7 +183,7 @@ class TestCollectWithoutBadgeGapHandling:
             return {"percentage": None}
 
         with patch.object(collector, "_scan_files", side_effect=fake_scan):
-            result = collector._collect_without_badge("Pkg", "o", "r", None)
+            result = collector._collect_without_badge("Pkg", "o/r", None)
         assert result["overall_score"]["score"] is None
         assert result["overall_score"]["status"] == "not_collected"
 
@@ -191,7 +192,7 @@ class TestUnstartedBadge:
     def _collect(self, collector, badge_data):
         import asyncio
         from unittest.mock import AsyncMock
-        tree = RepoTree("o", "r", ["CODE_OF_CONDUCT.md", "SECURITY.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["CODE_OF_CONDUCT.md", "SECURITY.md"], truncated=False)
         with patch.object(collector, "_search_badge", new=AsyncMock(return_value=badge_data)), \
              patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)):
             return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))

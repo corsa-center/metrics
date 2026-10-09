@@ -40,7 +40,8 @@ from urllib.parse import quote
 
 import httpx
 
-from collectors.ecosystem.base import GitHubCollectorBase, get_threshold
+from forge.interface import Forge
+from collectors.ecosystem.base import get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -68,23 +69,28 @@ _AUDIT_CONFIDENCE = {"high", "medium"}
 _RATE_LIMIT_PAUSE_SECONDS = 2
 
 
-class CollaborationCollector(GitHubCollectorBase):
+class CollaborationCollector:
     """Collects ecosystem integration metrics (Section 4.2.7)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting collaboration metrics for {repo_name}")
+        # Package registries key projects by "owner/name"; on GitLab the
+        # owner may be a nested group path, so split at the last slash.
+        owner, _, repo = ref.rpartition("/")
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             by_repo, spack, conda, source = await asyncio.gather(
-                self._lookup_by_repository(client, owner, repo),
+                self._lookup_by_repository(client, ref),
                 self._lookup_spack(client, repo, owner),
                 self._lookup_conda_forge(client, owner, repo),
                 self._source_dependents(client, owner, repo),
@@ -108,8 +114,8 @@ class CollaborationCollector(GitHubCollectorBase):
         registries = self._drop_spurious_go_entries(registries, package.get("primary_language"))
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "registries": registries,
             "ecosystems": sorted({r["ecosystem"] for r in registries}),
             "source_dependents": source,
@@ -148,10 +154,10 @@ class CollaborationCollector(GitHubCollectorBase):
         return None
 
     async def _lookup_by_repository(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict[str, Any]]:
         """Every package ecosyste.ms links back to this repository."""
-        target = quote(f"https://github.com/{owner}/{repo}", safe="")
+        target = quote(f"https://{self.forge.host}/{ref}", safe="")
         data = await self._get_json(
             client, f"{_PACKAGES_API}/packages/lookup?repository_url={target}"
         )
@@ -188,8 +194,9 @@ class CollaborationCollector(GitHubCollectorBase):
         return None
 
     async def _spack_names_for(self, client: httpx.AsyncClient, owner: str, repo: str) -> List[str]:
-        """Spack packages whose homepage or download URLs are this GitHub
-        repository."""
+        """Spack packages whose homepage or download URLs are this
+        repository. The index only recognizes GitHub URLs, so a GitLab
+        project falls back to the name-based lookup."""
         global _spack_by_repo
         async with _spack_index_lock:
             if _spack_by_repo is None:
@@ -240,7 +247,7 @@ class CollaborationCollector(GitHubCollectorBase):
     ) -> Optional[Dict[str, Any]]:
         """conda-forge package for this repository, looked up by name and
         accepted only if its metadata links back to the repository."""
-        target = f"github.com/{owner}/{repo}".lower()
+        target = f"{self.forge.host}/{owner}/{repo}".lower()
         for name in dict.fromkeys([repo.lower(), repo]):
             data = await self._get_json(client, f"{_ANACONDA_API}/{quote(name)}")
             if not isinstance(data, dict) or not data.get("name"):
@@ -470,7 +477,7 @@ class CollaborationCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "registries": [],
             "ecosystems": [],
             "overall_score": self._calculate_score([]),

@@ -17,7 +17,6 @@ project as unlicensed.
 """
 
 import asyncio
-import base64
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -25,7 +24,8 @@ from typing import Any, Dict, List, Optional
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -119,25 +119,27 @@ _BIBTEX_TO_CITATION_FIELD = {
 }
 
 
-class FairLicensingCollector(GitHubCollectorBase):
+class FairLicensingCollector:
     """Collects FAIR compliance and license-exception signals (Section 4.2.2)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting FAIR and licensing detail for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
+            tree = await RepoTree.fetch(client, self.forge, ref)
             results = await asyncio.gather(
-                self._get_license(client, owner, repo),
-                self._get_citation(client, owner, repo, tree),
-                self._has_releases(client, owner, repo),
+                self._get_license(client, ref),
+                self._get_citation(client, ref, tree),
+                self._has_releases(client, ref),
                 return_exceptions=True,
             )
 
@@ -172,12 +174,12 @@ class FairLicensingCollector(GitHubCollectorBase):
         bibtex = None
         if not metadata.get("exists") and tree is not COLLECTION_GAP:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                bibtex = await self._get_bibtex_citation(client, owner, repo, tree)
+                bibtex = await self._get_bibtex_citation(client, ref, tree)
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "license_exceptions": exceptions,
             "citation_metadata": metadata,
             "bibtex_citation": bibtex,
@@ -188,25 +190,22 @@ class FairLicensingCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ fetch
 
     async def _get_license(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """SPDX id from the API plus the raw licence text. Returns (data, saw_gap)."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/license")
+        data = await self.forge.license(client, ref)
         if data is COLLECTION_GAP:
             return {"spdx_id": None, "text": ""}, True
         if data is None:
             return {"spdx_id": None, "text": ""}, False
-        text = ""
-        if data.get("content"):
-            text = base64.b64decode(data["content"]).decode("utf-8", "replace")
         return {
-            "spdx_id": (data.get("license") or {}).get("spdx_id"),
-            "name": (data.get("license") or {}).get("name"),
-            "text": text,
+            "spdx_id": data["spdx_id"],
+            "name": data["name"],
+            "text": data["text"],
         }, False
 
     async def _get_citation(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> tuple:
         """Parsed CITATION.cff, or an empty dict if absent or unparseable.
 
@@ -219,15 +218,12 @@ class FairLicensingCollector(GitHubCollectorBase):
         path = tree.match(_CITATION_PATHS)
         if path is None:
             return {}, False
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        )
-        if data is COLLECTION_GAP:
+        text = await self.forge.file_content(client, ref, path)
+        if text is COLLECTION_GAP:
             return {}, True
-        if data is None:
+        if text is None:
             return {}, False
         try:
-            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
             parsed = yaml.safe_load(text)
             if isinstance(parsed, dict):
                 return parsed, False
@@ -242,22 +238,16 @@ class FairLicensingCollector(GitHubCollectorBase):
         return bool(tree.match(paths)), False
 
     async def _has_releases(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Returns (has_releases, saw_gap). Version tags count too: many
-        projects publish versions as tags without GitHub Release objects."""
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
-            params={"per_page": 1},
-        )
+        projects publish versions as tags without release objects."""
+        data = await self.forge.releases(client, ref, per_page=1)
         if data is COLLECTION_GAP:
             return False, True
         if data:
             return True, False
-        tags = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/tags",
-            params={"per_page": 20},
-        )
+        tags = await self.forge.tags(client, ref, per_page=20)
         if tags is COLLECTION_GAP:
             return False, True
         return any(re.search(r"\d+\.\d+", t.get("name", "")) for t in tags or []
@@ -343,7 +333,7 @@ class FairLicensingCollector(GitHubCollectorBase):
         return None
 
     async def _get_bibtex_citation(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> Dict[str, Any]:
         """Citation fields carried by BibTeX in a root-level citation file,
         or None if there's no such file or it has no BibTeX entries.
@@ -354,25 +344,25 @@ class FairLicensingCollector(GitHubCollectorBase):
         """
         paths = [p for p in tree.find(_BIBTEX_CITATION_FILE) if "/" not in p]
         for path in paths:
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-            )
-            if not isinstance(data, dict):
+            text = await self.forge.file_content(client, ref, path)
+            if not text:
                 continue
-            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
             if not _BIBTEX_ENTRY.search(text):
                 continue
-            return {"path": path, **self._analyze_bibtex(text, owner, repo)}
-        return await self._readme_bibtex(client, owner, repo)
+            return {"path": path, **self._analyze_bibtex(text, self._repo_ref(ref))}
+        return await self._readme_bibtex(client, ref)
 
-    async def _readme_bibtex(self, client: httpx.AsyncClient, owner: str, repo: str) -> Dict[str, Any]:
+    def _repo_ref(self, ref: str) -> str:
+        """"host/owner/repo", as a BibTeX url field would contain it."""
+        return f"{self.forge.host}/{ref}".lower()
+
+    async def _readme_bibtex(self, client: httpx.AsyncClient, ref: str) -> Dict[str, Any]:
         """BibTeX under the README's own citation heading ("Citation", "How to
         cite", "Citing"), or None. Only that section is read: BibTeX elsewhere
         in a README is usually related work, not how to cite this project."""
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
-        if not isinstance(data, dict):
+        text = await self.forge.readme(client, ref)
+        if not text:
             return None
-        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
         m = _README_CITATION_HEADING.search(text)
         if not m:
             return None
@@ -381,16 +371,15 @@ class FairLicensingCollector(GitHubCollectorBase):
         section = section[:nxt.start()] if nxt else section
         if not _BIBTEX_ENTRY.search(section):
             return None
-        return {"path": f"{data.get('path', 'README.md')} citation section",
-                **self._analyze_bibtex(section, owner, repo)}
+        return {"path": "README citation section",
+                **self._analyze_bibtex(section, self._repo_ref(ref))}
 
     @staticmethod
-    def _analyze_bibtex(text: str, owner: str, repo: str) -> Dict[str, Any]:
+    def _analyze_bibtex(text: str, repo_ref: str) -> Dict[str, Any]:
         """Which _CITATION_FIELDS appear in any BibTeX entry. A url or
         repository field counts as repository-code only if it points at
         this repository."""
         found = set()
-        repo_ref = f"github.com/{owner}/{repo}".lower()
         for name, value in _BIBTEX_FIELD.findall(text):
             name = name.lower()
             if not value.strip():
@@ -598,7 +587,7 @@ class FairLicensingCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "license_exceptions": exceptions,
             "citation_metadata": metadata,
             "fair": fair,

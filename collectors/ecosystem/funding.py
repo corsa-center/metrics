@@ -24,7 +24,6 @@ report itself notes these need LinkedIn or institutional directory data.
 """
 
 import asyncio
-import base64
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,8 +32,9 @@ import httpx
 import yaml
 
 from collectors.ecosystem.base import (
-    _VENDORED_DIR, COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold,
+    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -150,25 +150,28 @@ _AFFILIATION_SAMPLE = 25
 _NOISE_AFFILIATIONS = {"", "-", "none", "n/a", "freelance", "independent", "self", "self-employed"}
 
 
-class FundingCollector(GitHubCollectorBase):
+class FundingCollector:
     """Collects funding and institutional-affiliation signals (4.2.8 and 4.2.9)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
+        owner = ref.split("/", 1)[0]
         logger.info(f"Collecting funding and institutional metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
+            tree = await RepoTree.fetch(client, self.forge, ref)
             results = await asyncio.gather(
-                self._find_funding_files(client, owner, repo, tree),
-                self._find_grant_references(client, owner, repo, tree),
-                self._get_affiliations(client, owner, repo),
+                self._find_funding_files(client, ref, tree),
+                self._find_grant_references(client, ref, tree),
+                self._get_affiliations(client, ref),
                 self._get_owner_type(client, owner),
                 return_exceptions=True,
             )
@@ -199,8 +202,8 @@ class FundingCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "funding_files": funding_files,
             "grants": grants,
             "affiliations": affiliations,
@@ -213,7 +216,7 @@ class FundingCollector(GitHubCollectorBase):
     # ------------------------------------------------------------------ fetch
 
     async def _find_funding_files(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> Dict[str, Any]:
         """Locate funding manifests and read the platforms they declare.
 
@@ -228,7 +231,7 @@ class FundingCollector(GitHubCollectorBase):
             if not real_path:
                 continue
             found.append({"path": real_path, "url": tree.match_url([path])})
-            plats, plat_gap = await self._read_funding_platforms(client, owner, repo, real_path)
+            plats, plat_gap = await self._read_funding_platforms(client, ref, real_path)
             platforms.extend(plats)
             saw_gap = saw_gap or plat_gap
         # Preserve first-seen order while removing duplicates across files.
@@ -241,21 +244,18 @@ class FundingCollector(GitHubCollectorBase):
         return result
 
     async def _read_funding_platforms(
-        self, client: httpx.AsyncClient, owner: str, repo: str, path: str
+        self, client: httpx.AsyncClient, ref: str, path: str
     ) -> tuple:
         """Parse a FUNDING.yml into the list of platforms it names.
 
         Returns (platforms, saw_gap).
         """
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        )
-        if data is COLLECTION_GAP:
+        content = await self.forge.file_content(client, ref, path)
+        if content is COLLECTION_GAP:
             return [], True
-        if data is None:
+        if not content:
             return [], False
         try:
-            content = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
             parsed = yaml.safe_load(content)
         except Exception as e:
             logger.debug(f"Could not parse {path}: {e}")
@@ -266,7 +266,7 @@ class FundingCollector(GitHubCollectorBase):
         return [k for k, v in parsed.items() if v], False
 
     async def _find_grant_references(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree=None
+        self, client: httpx.AsyncClient, ref: str, tree=None
     ) -> tuple:
         """Award numbers and agency funding acknowledgments in the README,
         root NOTICE / ACKNOWLEDGMENTS / FUNDING files, and the docs landing
@@ -277,11 +277,11 @@ class FundingCollector(GitHubCollectorBase):
         sentence, no number).
         """
         texts, saw_gap = [], False
-        data = await self._github_get(client, f"https://api.github.com/repos/{owner}/{repo}/readme")
-        if data is COLLECTION_GAP:
+        text = await self.forge.readme(client, ref)
+        if text is COLLECTION_GAP:
             saw_gap = True
-        elif data is not None:
-            texts.append(self._decode(data, "README"))
+        elif text is not None:
+            texts.append(text)
 
         if tree is COLLECTION_GAP:
             saw_gap = True
@@ -291,13 +291,11 @@ class FundingCollector(GitHubCollectorBase):
                  if not _VENDORED_DIR.search(p) and not _DOC_BUILD_DIR.search(p)),
                 key=lambda p: (p.count("/"), p))[:_MAX_DOC_FUNDING_FILES]
             for path in [p for p in tree.find(_ACKNOWLEDGMENT_FILE) if "/" not in p] + doc_pages:
-                data = await self._github_get(
-                    client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-                )
-                if data is COLLECTION_GAP:
+                text = await self.forge.file_content(client, ref, path)
+                if text is COLLECTION_GAP:
                     saw_gap = True
-                elif isinstance(data, dict):
-                    texts.append(self._decode(data, path))
+                elif text is not None:
+                    texts.append(text)
 
         seen, grants = set(), []
         for text in texts:
@@ -313,14 +311,6 @@ class FundingCollector(GitHubCollectorBase):
                 seen.add(agency)
                 grants.append({"value": agency, "kind": "acknowledgment"})
         return grants, saw_gap
-
-    @staticmethod
-    def _decode(data: Dict[str, Any], label: str) -> str:
-        try:
-            return base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
-        except Exception as e:
-            logger.debug(f"Could not decode {label}: {e}")
-            return ""
 
     @staticmethod
     def _acknowledged_agencies(text: str) -> List[str]:
@@ -344,19 +334,16 @@ class FundingCollector(GitHubCollectorBase):
         return found
 
     async def _get_affiliations(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Organizations declared by the project's most active contributors."""
-        contributors = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contributors",
-            params={"per_page": _AFFILIATION_SAMPLE},
-        )
+        contributors = await self.forge.contributors(client, ref, per_page=_AFFILIATION_SAMPLE)
         if contributors is COLLECTION_GAP:
             return {"organizations": [], "sampled": 0, "with_affiliation": 0, "gap": True}
-        logins = [c["login"] for c in (contributors or []) if c.get("login")]
+        logins = [c["identity"] for c in (contributors or []) if c.get("identity")]
 
         async def company_of(login: str):
-            data = await self._github_get(client, f"https://api.github.com/users/{login}")
+            data = await self.forge.user(client, login)
             if data is COLLECTION_GAP:
                 return COLLECTION_GAP
             return (data or {}).get("company")
@@ -423,7 +410,7 @@ class FundingCollector(GitHubCollectorBase):
 
         Returns (type_or_None, saw_gap).
         """
-        data = await self._github_get(client, f"https://api.github.com/users/{owner}")
+        data = await self.forge.user(client, owner)
         if data is COLLECTION_GAP:
             return None, True
         if data is None:
@@ -548,7 +535,7 @@ class FundingCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "funding_files": {"found": [], "platforms": []},
             "grants": [],
             "affiliations": {"organizations": [], "sampled": 0, "with_affiliation": 0},

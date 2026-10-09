@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return CHAOSSGovernanceCollector()
+    return CHAOSSGovernanceCollector(GitHubForge())
 
 
 # ------------------------------------------------------------------ #
@@ -26,7 +28,7 @@ class TestDocumentationUsabilityTreeResolution:
         async def go():
             with patch.object(collector, "_get_readme_content", new=AsyncMock(return_value=readme)), \
                  patch.object(collector, "_check_wiki_enabled", new=AsyncMock(return_value=has_wiki)):
-                return await collector._get_documentation_usability(None, "o", "r", tree)
+                return await collector._get_documentation_usability(None, "o/r", tree)
 
         return asyncio.run(go())
 
@@ -36,20 +38,20 @@ class TestDocumentationUsabilityTreeResolution:
 
     def test_differently_cased_contributing_guide_found(self, collector):
         # ADIOS2 names its guide Contributing.md.
-        tree = RepoTree("o", "r", ["Contributing.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["Contributing.md"], truncated=False)
         result = self._run(collector, tree)
         assert "contributing" in result["found"]
         assert result["details"]["contributing"]["exists"] is True
 
     def test_capitalized_docs_directory_found(self, collector):
         # AMReX-Codes/amrex ships "Docs", superlu ships "DOC".
-        tree = RepoTree("o", "r", ["Docs/index.rst"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["Docs/index.rst"], truncated=False)
         result = self._run(collector, tree)
         assert "docs_folder" in result["found"]
         assert result["details"]["docs_folder"]["path"] == "docs"
 
     def test_confirmed_absence_is_not_a_gap(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
         result = self._run(collector, tree)
         assert "not_collected" not in result
         assert result["details"]["contributing"]["exists"] is False
@@ -275,7 +277,7 @@ class TestGapPropagatesThroughAggregation:
         from unittest.mock import AsyncMock, patch
         with patch.object(collector, "_get_closed_issues", new=AsyncMock(return_value=[])), \
              patch.object(collector, "_get_open_issues", new=AsyncMock(return_value=[])):
-            m = asyncio.run(collector._get_issue_metrics(None, "o", "r"))
+            m = asyncio.run(collector._get_issue_metrics(None, "o/r"))
         assert m["issue_age"]["not_collected"] is True
         assert m["time_to_close"]["not_collected"] is True
 
@@ -306,12 +308,12 @@ class TestParseDate:
 class TestNothingToMeasure:
     def test_no_closed_prs_is_not_collected(self, collector):
         with patch.object(collector, "_get_closed_pull_requests", new=AsyncMock(return_value=[])):
-            r = asyncio.run(collector._get_change_request_metrics(None, "o", "r"))
+            r = asyncio.run(collector._get_change_request_metrics(None, "o/r"))
         assert r["closure_ratio"]["not_collected"] is True
 
     def test_no_issues_inclusivity_is_not_collected(self, collector):
         with patch.object(collector, "_get_recent_issues_with_comments", new=AsyncMock(return_value=[])):
-            r = asyncio.run(collector._get_issues_inclusivity(None, "o", "r"))
+            r = asyncio.run(collector._get_issues_inclusivity(None, "o/r"))
         assert r["not_collected"] is True
 
 
@@ -319,9 +321,9 @@ class TestReleaseFrequencyFromTags:
     def test_version_tags_count_when_there_are_no_releases(self, collector):
         tags = [{"tag_name": "v5.0.11", "published_at": "2026-08-26T00:00:00Z", "from_tag": True},
                 {"tag_name": "v5.0.10", "published_at": "2026-02-01T00:00:00Z", "from_tag": True}]
-        with patch.object(collector, "_github_get", new=AsyncMock(return_value=[])), \
-             patch("collectors.ecosystem.chaoss_governance.fetch_version_tags", new=AsyncMock(return_value=tags)):
-            r = asyncio.run(collector._get_release_frequency(None, "o", "r"))
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=[])), \
+             patch.object(collector.forge, "version_tags", new=AsyncMock(return_value=tags)):
+            r = asyncio.run(collector._get_release_frequency(None, "o/r"))
         assert r["total_releases"] == 2
         assert r["latest_release"]["tag"] == "v5.0.11"
         assert r["score"] > 0

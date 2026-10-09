@@ -8,11 +8,13 @@ from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.development_practices.dev_tooling import (
     DevToolingCollector, _TESTING_PATHS, _TOOLING_PATHS,
 )
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return DevToolingCollector()
+    return DevToolingCollector(GitHubForge())
 
 
 def _scan(found):
@@ -136,7 +138,7 @@ class TestScan:
         assert set(result["not_collected"]) == set(_TESTING_PATHS)
 
     def test_found_group_survives_confirmed_misses_on_other_groups(self, collector):
-        tree = RepoTree("o", "r", ["pytest.ini"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["pytest.ini"], truncated=False)
         result = collector._scan(tree, _TESTING_PATHS)
         assert "pytest" in result["found"]
         assert result["not_collected"] == []
@@ -145,12 +147,12 @@ class TestScan:
         # AMReX-Codes/amrex's test directory is "Tests" (capitalized), which
         # a lowercase-only literal comparison never matches even though a
         # real test suite is right there.
-        tree = RepoTree("o", "r", ["Tests/CMakeLists.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["Tests/CMakeLists.txt"], truncated=False)
         result = collector._scan(tree, _TESTING_PATHS)
         assert "Test suite directory" in result["found"]
 
     def test_vendored_test_framework_directory_is_found(self, collector):
-        tree = RepoTree("o", "r", ["test/googletest/README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["test/googletest/README.md"], truncated=False)
         result = collector._scan(tree, _TESTING_PATHS)
         assert "Unit-test framework" in result["found"]
 
@@ -158,8 +160,8 @@ class TestScan:
 class TestAnalyzeReviewCoverageGapHandling:
     def _run(self, collector, github_get_side_effect):
         async def go():
-            with patch.object(collector, "_github_get", side_effect=github_get_side_effect):
-                return await collector._analyze_review_coverage(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", side_effect=github_get_side_effect):
+                return await collector._analyze_review_coverage(None, "o/r")
 
         return asyncio.run(go())
 
@@ -186,7 +188,7 @@ class TestAnalyzeReviewCoverageGapHandling:
         ]
 
         async def fake(client, url, params=None):
-            if "/pulls?" in url:
+            if url.endswith("/pulls"):
                 return prs
             if "/1/reviews" in url:
                 return [{"id": 1}]
@@ -205,7 +207,7 @@ class TestAnalyzeReviewCoverageGapHandling:
         prs = [{"number": 1, "merged_at": "2024-01-01T00:00:00Z"}]
 
         async def fake(client, url, params=None):
-            if "/pulls?" in url:
+            if url.endswith("/pulls"):
                 return prs
             return COLLECTION_GAP
 
@@ -219,7 +221,7 @@ class TestRefineTesting:
 
     def _run(self, collector, paths, files):
         import base64 as b64
-        tree = RepoTree("o", "r", paths, truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", paths, truncated=False)
 
         async def fake_get(client, url, params=None):
             path = url.split("/contents/", 1)[1]
@@ -229,9 +231,9 @@ class TestRefineTesting:
                 return None
             return {"content": b64.b64encode(files[path].encode()).decode()}
 
-        collector._github_get = fake_get
+        collector.forge._github_get = fake_get
         base = collector._scan(tree, _TESTING_PATHS)
-        return asyncio.run(collector._refine_testing(None, "o", "r", tree, base))
+        return asyncio.run(collector._refine_testing(None, "o/r", tree, base))
 
     def test_sundials_shape_finds_all_four(self, collector):
         out = self._run(
@@ -273,13 +275,13 @@ class TestRefineTesting:
 
 class TestNestedTestSuite:
     def _run(self, collector, paths):
-        tree = RepoTree("o", "r", paths, truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", paths, truncated=False)
 
         async def fake_get(client, url, params=None):
             return None
-        collector._github_get = fake_get
+        collector.forge._github_get = fake_get
         base = collector._scan(tree, _TESTING_PATHS)
-        return asyncio.run(collector._refine_testing(None, "o", "r", tree, base))
+        return asyncio.run(collector._refine_testing(None, "o/r", tree, base))
 
     def test_suite_beside_the_package_is_found(self, collector):
         out = self._run(collector, ["lib/spack/spack/test/concretize.py", "lib/spack/spack/spec.py"])
@@ -302,14 +304,14 @@ class TestToolingBeyondRoot:
         from collectors.ecosystem.base import RepoTree
         from collectors.quality.development_practices.dev_tooling import _TOOLING_PATHS
         files = files or {}
-        tree = RepoTree("o", "r", list(paths) + list(files), truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", list(paths) + list(files), truncated=False)
 
         async def get(client, url, params=None):
             text = files.get(url.split("/contents/", 1)[-1])
             return {"content": base64.b64encode(text.encode()).decode()} if text else None
-        collector._github_get = get
+        collector.forge._github_get = get
         tooling = collector._scan(tree, _TOOLING_PATHS)
-        return asyncio.run(collector._refine_tooling(None, "o", "r", tree, tooling))["found"]
+        return asyncio.run(collector._refine_tooling(None, "o/r", tree, tooling))["found"]
 
     def test_component_formatter_and_linter_configs(self, collector):
         found = self._refine(collector, ["runtime/legion/.clang-format", "realm/.clang-tidy"])
@@ -334,14 +336,14 @@ class TestTestRunnersBeyondConfig:
         import base64
         from collectors.ecosystem.base import RepoTree
         from collectors.quality.development_practices.dev_tooling import _TESTING_PATHS
-        tree = RepoTree("o", "r", list(paths) + list(files), truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", list(paths) + list(files), truncated=False)
 
         async def get(client, url, params=None):
             text = files.get(url.split("/contents/", 1)[-1])
             return {"content": base64.b64encode(text.encode()).decode()} if text else None
-        collector._github_get = get
+        collector.forge._github_get = get
         testing = collector._scan(tree, _TESTING_PATHS)
-        return asyncio.run(collector._refine_testing(None, "o", "r", tree, testing))["found"]
+        return asyncio.run(collector._refine_testing(None, "o/r", tree, testing))["found"]
 
     def test_ctest_run_in_ci(self, collector):
         found = self._refine(collector, ["src/a.cc"], {".github/workflows/cmake.yml": "run: ctest --output-on-failure"})

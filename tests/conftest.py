@@ -21,3 +21,30 @@ def _no_shared_index_downloads(monkeypatch):
     from collectors.quality import accessibility
     monkeypatch.setattr(collaboration, "_spack_by_repo", {})
     monkeypatch.setattr(accessibility, "_e4s_specs", set())
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    """Fail any test that reaches the real network. Collectors turn a
+    transport error into COLLECTION_GAP, so a stray request would otherwise
+    pass quietly (and slowly) instead of exposing a mock aimed at the wrong
+    place."""
+    import httpx
+    attempts = []
+
+    async def blocked(self, request):
+        attempts.append(str(request.url))
+        raise httpx.ConnectError("network disabled in tests", request=request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked)
+    yield
+    assert not attempts, f"test attempted real network access: {attempts}"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_tree_cache():
+    """RepoTree.fetch caches per (platform, host, ref); tests reuse "o/r"."""
+    from collectors.ecosystem.base import _clear_tree_cache
+    _clear_tree_cache()
+    yield
+    _clear_tree_cache()

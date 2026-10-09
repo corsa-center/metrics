@@ -4,11 +4,12 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from collectors.quality.test_coverage import TestCoverageCollector
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    return TestCoverageCollector()
+    return TestCoverageCollector(FakeForge(ref="owner/repo"))
 
 
 SAMPLE_ACTIVE_REPO = {
@@ -29,7 +30,7 @@ class TestEmptyResult:
 
 class TestNoCoverageResult:
     def test_structure(self, collector):
-        result = collector._no_coverage_result("MyPkg", "owner", "repo")
+        result = collector._no_coverage_result("MyPkg", "owner/repo")
         assert result["coverage_exists"] is False
         assert result["repository"] == "owner/repo"
 
@@ -45,7 +46,7 @@ class TestFetchCoverage:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_coverage(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_coverage(mock_client, "MyPkg", "owner/repo")
         )
 
         assert result["coverage_exists"] is True
@@ -64,7 +65,7 @@ class TestFetchCoverage:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_coverage(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_coverage(mock_client, "MyPkg", "owner/repo")
         )
         assert result["coverage_exists"] is False
 
@@ -76,7 +77,7 @@ class TestFetchCoverage:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_coverage(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_coverage(mock_client, "MyPkg", "owner/repo")
         )
         assert result["coverage_exists"] is False
 
@@ -113,12 +114,7 @@ class TestCoverageInCi:
         import asyncio
         from unittest.mock import AsyncMock, MagicMock, patch
         from collectors.ecosystem.base import RepoTree
-        tree = RepoTree("o", "r", [".github/workflows/ci.yml", ".github/workflows/nightly.yml"], False)
-        texts = {"ci.yml": "run: make", "nightly.yml": "run: gcovr -r ."}
-
-        async def get(url):
-            return MagicMock(status_code=200, text=texts[url.rsplit("/", 1)[-1]])
-        client = MagicMock(get=get)
-        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)):
-            found = asyncio.run(collector._coverage_in_ci(client, "o", "r"))
+        collector.forge.files = {".github/workflows/ci.yml": "run: make",
+                                 ".github/workflows/nightly.yml": "run: gcovr -r ."}
+        found = asyncio.run(collector._coverage_in_ci(None, "o/r"))
         assert found == ".github/workflows/nightly.yml"

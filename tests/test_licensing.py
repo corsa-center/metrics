@@ -4,13 +4,38 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP
 from collectors.ecosystem.licensing import LicensingCollector
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    def __init__(self):
+        self.license_result = None
+        self.file_metadata_results = {}
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "o/r"
+
+    async def license(self, client, ref):
+        return self.license_result
+
+    async def file_metadata(self, client, ref, path):
+        return self.file_metadata_results.get(path)
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
-def collector():
-    return LicensingCollector()
+def forge():
+    return FakeForge()
+
+
+@pytest.fixture
+def collector(forge):
+    return LicensingCollector(forge)
 
 
 class TestAnalyzeLicense:
@@ -69,69 +94,60 @@ class TestComplianceScoreGapHandling:
 
 
 class TestGetLicenseFromApiGapHandling:
-    def _run(self, collector, github_get_return):
-        async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=github_get_return)):
-                return await collector._get_license_from_api(None, "o", "r")
+    def _run(self, collector, forge, license_result):
+        forge.license_result = license_result
+        return asyncio.run(collector._get_license_from_api(None, "o/r"))
 
-        return asyncio.run(go())
-
-    def test_gap_is_tracked(self, collector):
-        result = self._run(collector, COLLECTION_GAP)
+    def test_gap_is_tracked(self, collector, forge):
+        result = self._run(collector, forge, COLLECTION_GAP)
         assert result["found"] is False
         assert result["not_collected"] is True
 
-    def test_confirmed_no_license_is_not_a_gap(self, collector):
-        result = self._run(collector, None)
+    def test_confirmed_no_license_is_not_a_gap(self, collector, forge):
+        result = self._run(collector, forge, None)
         assert result["found"] is False
         assert "not_collected" not in result
 
-    def test_found_license_parses_metadata(self, collector):
-        data = {"name": "LICENSE", "html_url": "http://x", "size": 100,
-                "download_url": "http://raw",
-                "license": {"key": "mit", "name": "MIT License", "spdx_id": "MIT"}}
-        result = self._run(collector, data)
+    def test_found_license_parses_metadata(self, collector, forge):
+        data = {"file_path": "LICENSE", "html_url": "http://x", "size": 100,
+                "download_url": "http://raw", "key": "mit", "name": "MIT License",
+                "spdx_id": "MIT"}
+        result = self._run(collector, forge, data)
         assert result["found"] is True
         assert result["spdx_id"] == "MIT"
 
 
 class TestCheckLicenseFileGapHandling:
-    def _run(self, collector, responses):
-        async def fake_probe(client, owner, repo, path):
-            return responses.get(path, None)
+    def _run(self, collector, forge, responses):
+        forge.file_metadata_results = responses
+        return asyncio.run(collector._check_license_file(None, "o/r"))
 
-        async def go():
-            with patch.object(collector, "_probe_license_file", side_effect=fake_probe):
-                return await collector._check_license_file(None, "o", "r")
-
-        return asyncio.run(go())
-
-    def test_gap_with_no_find_is_not_collected(self, collector):
+    def test_gap_with_no_find_is_not_collected(self, collector, forge):
         responses = {p: COLLECTION_GAP for p in collector.LICENSE_PATTERNS}
-        result = self._run(collector, responses)
+        result = self._run(collector, forge, responses)
         assert result["found"] is False
         assert result["not_collected"] is True
 
-    def test_confirmed_absence_on_all_patterns_is_a_real_negative(self, collector):
+    def test_confirmed_absence_on_all_patterns_is_a_real_negative(self, collector, forge):
         responses = {p: None for p in collector.LICENSE_PATTERNS}
-        result = self._run(collector, responses)
+        result = self._run(collector, forge, responses)
         assert result["found"] is False
         assert "not_collected" not in result
 
-    def test_found_file_survives_gaps_on_other_patterns(self, collector):
+    def test_found_file_survives_gaps_on_other_patterns(self, collector, forge):
         responses = {p: COLLECTION_GAP for p in collector.LICENSE_PATTERNS}
-        responses["LICENSE"] = {"url": "http://x", "size": 10, "download_url": ""}
-        result = self._run(collector, responses)
+        responses["LICENSE"] = {"html_url": "http://x", "size": 10, "download_url": ""}
+        result = self._run(collector, forge, responses)
         assert result["found"] is True
         assert result["file_path"] == "LICENSE"
 
 
 class TestCollectGapHandling:
     def test_api_gap_and_manual_gap_reports_not_collected(self, collector):
-        async def fake_api(client, owner, repo):
+        async def fake_api(client, ref):
             return {"found": False, "source": "github_api", "not_collected": True}
 
-        async def fake_manual(client, owner, repo):
+        async def fake_manual(client, ref):
             return {"found": False, "source": "manual_check", "not_collected": True}
 
         async def go():
@@ -148,10 +164,10 @@ class TestCollectGapHandling:
         # filename-pattern list doesn't cover, so a gap on it isn't offset
         # by the manual scan coming back clean -- that scan only rules out
         # the patterns it knows about, not "no license anywhere".
-        async def fake_api(client, owner, repo):
+        async def fake_api(client, ref):
             return {"found": False, "source": "github_api", "not_collected": True}
 
-        async def fake_manual(client, owner, repo):
+        async def fake_manual(client, ref):
             return {"found": False, "source": "manual_check"}
 
         async def go():
@@ -163,10 +179,10 @@ class TestCollectGapHandling:
         assert result["license_info"]["not_collected"] is True
 
     def test_both_confirm_absence_is_a_real_negative(self, collector):
-        async def fake_api(client, owner, repo):
+        async def fake_api(client, ref):
             return {"found": False, "source": "github_api"}
 
-        async def fake_manual(client, owner, repo):
+        async def fake_manual(client, ref):
             return {"found": False, "source": "manual_check"}
 
         async def go():
@@ -179,7 +195,7 @@ class TestCollectGapHandling:
         assert result["compliance_score"]["max_score"] == 3
 
     def test_api_found_short_circuits_manual_check(self, collector):
-        async def fake_api(client, owner, repo):
+        async def fake_api(client, ref):
             return {"found": True, "source": "github_api", "spdx_id": "MIT",
                     "license_key": "mit", "license_name": "MIT License"}
 

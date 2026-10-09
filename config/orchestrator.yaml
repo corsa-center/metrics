@@ -50,6 +50,16 @@ quality_collectors:
 api_credentials:
   github:
     token: ${GITHUB_TOKEN}  # Set via environment variable
+  # GitLab tokens, keyed by host. A package's repo_type: gitlab (see
+  # docs/PACKAGE_CONFIG.md) works on any host without an entry here -- an
+  # absent token still works for public projects, at GitLab's lower
+  # unauthenticated rate limit. For a package with no repo_type, being
+  # listed here is also what makes a self-hosted host count as GitLab.
+  gitlab:
+    gitlab.com:
+      token: ${GITLAB_TOKEN}
+    gitlab.kitware.com:
+      token: ${GITLAB_KITWARE_TOKEN}
   semantic_scholar:
     api_key: ${SEMANTIC_SCHOLAR_KEY}  # Optional, improves rate limits
   openalex:

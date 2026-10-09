@@ -1,263 +1,27 @@
-"""Shared base class for GitHub-based ecosystem collectors."""
+"""Platform-neutral helpers shared by ecosystem/quality collectors and
+orchestrator.py: the threshold registry, the RepoTree path index, and the
+file-pattern vocabularies several collectors agree on.
+
+The HTTP plumbing that used to live here (COLLECTION_GAP, RetryingTransport,
+GitHubCollectorBase) has moved to the forge/ package -- see forge/base.py
+and forge/interface.py. COLLECTION_GAP and RetryingTransport are re-exported
+here so existing imports keep working.
+"""
 
 import asyncio
-import re
-import httpx
 import logging
-from datetime import datetime, timezone
+import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+import httpx
 import yaml
 
+from forge.base import COLLECTION_GAP, RetryingTransport  # noqa: F401 (re-exported)
+from forge.interface import Forge
+
 logger = logging.getLogger(__name__)
-
-# Statuses worth retrying. 429/5xx are unambiguous; 403 is GitHub's shared
-# code for both a real permission error and its *secondary* (abuse-detection)
-# rate limit, so it needs the extra check below before retrying.
-_RETRYABLE_STATUSES = {403, 429, 500, 502, 503}
-_RETRY_ATTEMPTS = 2
-
-
-class _CollectionGap:
-    """Sentinel: this fetch did not succeed, and it was NOT a confirmed 404.
-
-    _check_file_exists/_github_get used to collapse both into the same
-    `None` -- a genuine "this file doesn't exist" (trustworthy) and "we
-    couldn't tell" (a rate limit, a network error, a non-retried failure)
-    read identically to every caller, which is how Kokkos's CHAOSS score
-    reached the dashboard as a confident "0.0/100 (critical)" instead of
-    "we don't know." Per CASS §3.5, only a confirmed negative should ever
-    render as a negative result; anything else should render as not
-    collected.
-
-    Deliberately falsy (`bool(COLLECTION_GAP) is False`), so every existing
-    `if not data:` / `if data:` check across the codebase keeps working
-    exactly as before with zero changes -- this is opt-in. A collector that
-    wants to report the distinction checks `is COLLECTION_GAP` explicitly
-    and sets not_collected=True instead of a confident False/0.
-    """
-
-    def __repr__(self) -> str:
-        return "<COLLECTION_GAP>"
-
-    def __bool__(self) -> bool:
-        return False
-
-
-COLLECTION_GAP = _CollectionGap()
-
-# Every collector builds its own httpx client, so this has to be module-level
-# (not per-instance) to actually coalesce requests issued by different
-# collector objects for the same package. One process per orchestrator run,
-# so it's never cleared -- at most ~1 entry per tracked package, trivial
-# memory, and each URL is only ever fetched during that package's brief
-# collection window anyway.
-_repo_info_cache: Dict[str, "asyncio.Future[httpx.Response]"] = {}
-
-# The bare repo-info endpoint, no query string -- confirmed independently
-# re-fetched for the same package by at least 5 collectors
-# (chaoss_governance.py twice on its own), each treating it as if no one
-# else wanted the same thing. Deliberately narrow: only this exact shape is
-# cached, not e.g. issues/PRs/releases listings, whose results legitimately
-# vary by query params and where staleness risk is less obviously nil.
-_REPO_INFO_URL_RE = re.compile(r"^https://api\.github\.com/repos/[^/]+/[^/]+$")
-
-
-def _clear_repo_info_cache() -> None:
-    """Test-only: module-level cache state must not leak between tests."""
-    _repo_info_cache.clear()
-
-
-class RetryingTransport(httpx.AsyncBaseTransport):
-    """A single, shared retry policy for every collector's httpx client.
-
-    Wraps the default transport so 403/429/5xx from GitHub's API get retried
-    with Retry-After-aware backoff, transparently to whatever code issued the
-    request -- no caller needs its own retry loop or even to know this
-    exists. This replaced three independent, slightly different hand-rolled
-    retry loops (base.py, integrations/github_api.py's PyGithub wrapper, and
-    community_health.py) after the same bug -- a GitHub secondary rate limit
-    during this pipeline's concurrent per-package collection silently read
-    as "no data" instead of being retried -- turned up in three places.
-
-    A plain permission 403 (private repo, bad token) is NOT retried: only a
-    403 carrying a Retry-After header is treated as the throttle it actually
-    is. This is deliberately narrower than message-sniffing for "secondary
-    rate limit"/"abuse" text: a first version did that too, and multiplying
-    every throttled call across ~20 collectors x 70+ packages up to 3x each
-    pushed total request volume for a full run past GitHub's 5,000/hour
-    authenticated quota, which produced a *worse* outcome (near-total data
-    loss once the primary quota was exhausted) than the original bug.
-    GitHub's own docs recommend keying off Retry-After specifically; requiring
-    it here is a stricter, cheaper signal that retries less often, on purpose.
-    Returns the final response either way (success, or the last failure once
-    retries are exhausted) so a caller's existing
-    `if response.status_code != 200` check keeps working completely
-    unchanged.
-    """
-
-    def __init__(self, wrapped: Optional[httpx.AsyncBaseTransport] = None):
-        self._wrapped = wrapped or httpx.AsyncHTTPTransport()
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        if request.method == "GET" and _REPO_INFO_URL_RE.match(str(request.url)):
-            return await self._deduped(request)
-        return await self._request_with_retry(request)
-
-    async def _deduped(self, request: httpx.Request) -> httpx.Response:
-        """Coalesce concurrent/repeated fetches of the same repo-info URL.
-
-        Collectors within one package's collection window fire together via
-        asyncio.gather, so a plain "check cache, else fetch" dict would still
-        miss on every one of them -- none has finished by the time the next
-        one checks. Storing the in-flight Future itself (not just its
-        eventual result) means every caller for the same URL awaits the one
-        real request in progress instead of starting their own.
-        """
-        key = str(request.url)
-        future = _repo_info_cache.get(key)
-        if future is None:
-            future = asyncio.ensure_future(self._request_with_retry(request))
-            _repo_info_cache[key] = future
-        return await future
-
-    async def _request_with_retry(self, request: httpx.Request) -> httpx.Response:
-        response: Optional[httpx.Response] = None
-        for attempt in range(_RETRY_ATTEMPTS):
-            response = await self._wrapped.handle_async_request(request)
-            if response.status_code not in _RETRYABLE_STATUSES:
-                await response.aread()
-                return response
-
-            retry_after = response.headers.get("Retry-After")
-            if response.status_code == 403 and not retry_after:
-                await response.aread()
-                # COLLECTION-GAP: grep-able tag so "why is this metric
-                # empty" can be answered from orchestrator.log instead of
-                # reproducing the collector locally by hand, which is how
-                # every gap in the 2026-09-16 incident actually got
-                # diagnosed. Not a 404 (that's a trustworthy "confirmed
-                # absent", not a gap) -- this is specifically a 403 with no
-                # Retry-After, i.e. a permission error or primary quota
-                # exhaustion, neither of which retrying would have fixed.
-                logger.warning(
-                    f"COLLECTION-GAP url={request.url} status=403 "
-                    f"reason=not_retried_no_retry_after"
-                )
-                return response
-
-            if attempt < _RETRY_ATTEMPTS - 1:
-                await response.aread()
-                delay = float(retry_after) if retry_after else min(30, 3 * (2 ** attempt))
-                logger.debug(
-                    f"HTTP {response.status_code} from {request.url}, retrying in {delay:.0f}s"
-                )
-                await asyncio.sleep(delay)
-            else:
-                await response.aread()
-                logger.warning(
-                    f"COLLECTION-GAP url={request.url} status={response.status_code} "
-                    f"reason=retries_exhausted attempts={_RETRY_ATTEMPTS}"
-                )
-        return response
-
-    async def aclose(self) -> None:
-        await self._wrapped.aclose()
-
-
-class GitHubCollectorBase:
-    """Provides shared GitHub API utilities for ecosystem collectors."""
-
-    def __init__(self, github_token: Optional[str] = None):
-        if github_token:
-            self.github_headers = {
-                "Authorization": f"token {github_token}",
-                "Accept": "application/vnd.github.v3+json",
-            }
-        else:
-            self.github_headers = {"Accept": "application/vnd.github.v3+json"}
-
-    def _extract_owner_repo(self, repo_url: str) -> Optional[tuple]:
-        """Extract (owner, repo) from a GitHub URL."""
-        patterns = [
-            r"github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
-            r"github\.com:([^/]+)/([^/]+?)(?:\.git)?/?$",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, repo_url)
-            if match:
-                return (match.group(1), match.group(2).replace(".git", ""))
-        return None
-
-    async def _check_file_exists(
-        self, client: httpx.AsyncClient, owner: str, repo: str, path: str
-    ):
-        """Return the file's html_url if it exists, None if confirmed absent
-        (a real 404), or COLLECTION_GAP if we couldn't actually tell.
-
-        Using the GitHub Contents API without a ?ref= parameter so the
-        repo's actual default branch is used (works for develop, main,
-        master, or any other default). Retrying a throttled request is the
-        client's job now (see RetryingTransport) -- callers just need to
-        build their httpx.AsyncClient with transport=RetryingTransport().
-
-        `path` may point at a directory (e.g. ".github/workflows"), in which
-        case the Contents API returns a JSON list rather than a dict — handled
-        explicitly below since a plain `.get("html_url", ...)` on a list raises
-        AttributeError, which previously got swallowed and misreported as
-        "not found".
-
-        COLLECTION_GAP is falsy, same as None, so `if not result:` keeps
-        working unchanged for callers that haven't opted into the
-        distinction; `if result is COLLECTION_GAP:` is for ones that have.
-        """
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-        try:
-            response = await client.get(url, headers=self.github_headers)
-        except Exception as e:
-            # A network-level exception never reaches RetryingTransport's own
-            # status-code-based retry/logging (it's raised from inside the
-            # wrapped transport, before there's a response to inspect), so
-            # this is the only place that sees it -- log it here rather than
-            # let it join the same silent "None" every other gap collapses
-            # into.
-            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
-            return COLLECTION_GAP
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list):
-                return f"https://github.com/{owner}/{repo}/tree/HEAD/{path}"
-            return data.get("html_url", url)
-        if response.status_code == 404:
-            return None
-        return COLLECTION_GAP
-
-    async def _github_get(
-        self, client: httpx.AsyncClient, url: str, params: Optional[dict] = None
-    ):
-        """GET a GitHub API endpoint and return the parsed JSON body, None
-        for a confirmed 404, or COLLECTION_GAP if we couldn't actually tell
-        (rate limit, network error, other non-2xx). Per CASS §3.5, only a
-        confirmed 404 should read as "absent" -- COLLECTION_GAP is falsy,
-        same as None, so `if not data:` keeps working unchanged for callers
-        that haven't opted into the distinction; `if data is COLLECTION_GAP:`
-        is for ones that have.
-        """
-        try:
-            response = await client.get(url, headers=self.github_headers, params=params)
-        except Exception as e:
-            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
-            return COLLECTION_GAP
-        if response.status_code == 200:
-            return response.json()
-        if response.status_code == 404:
-            return None
-        return COLLECTION_GAP
-
-    def _get_timestamp(self) -> str:
-        """Return current UTC timestamp in ISO format."""
-        return datetime.now(timezone.utc).isoformat()
 
 
 # Directories holding someone else's code. A Dockerfile or spack.yaml inside
@@ -309,19 +73,21 @@ PUBLIC_CHANNEL_PATTERNS = {
 }
 
 
-async def wiki_has_content(owner: str, repo: str) -> bool:
-    """Whether the wiki has any pages. GitHub's has_wiki flag is on by
-    default for every repository, so it says nothing on its own; the wiki's
-    git endpoint only answers 200 once a page exists. Not a REST API call,
-    so it costs no rate-limit quota."""
-    url = f"https://github.com/{owner}/{repo}.wiki.git/info/refs?service=git-upload-pack"
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(url)
-            return resp.status_code == 200
-    except Exception as e:
-        logger.debug(f"Could not check wiki for {owner}/{repo}: {e}")
-        return False
+# Fetched trees, shared by every collector in a run: about ten collectors
+# each want the same package's tree, and on GitLab one tree is up to a few
+# hundred paginated requests. Bounded LRU, since a large repository's index
+# (llvm-project: ~150k paths) shouldn't be kept for the whole portfolio run;
+# packages are collected a few at a time, so recent entries are the ones
+# still being asked for. Gaps aren't cached -- a later collector retries.
+_TREE_CACHE_SIZE = 8
+_tree_cache: "OrderedDict[tuple, RepoTree]" = OrderedDict()
+_tree_inflight: Dict[tuple, "asyncio.Future"] = {}
+
+
+def _clear_tree_cache() -> None:
+    """Test-only: module-level cache state must not leak between tests."""
+    _tree_cache.clear()
+    _tree_inflight.clear()
 
 
 class RepoTree:
@@ -330,7 +96,7 @@ class RepoTree:
 
     Fixes two related problems in one call:
 
-    1. **Case sensitivity.** The Contents API (`_check_file_exists` above) is
+    1. **Case sensitivity.** Per-path existence checks (`forge.file_exists`) are
        case-sensitive, so a literal "docs" never matches "Docs" and "tests"
        never matches "TESTING". `community_health.py` solved this for
        governance documents by listing directories and matching
@@ -343,14 +109,16 @@ class RepoTree:
        `Docs/sphinx_documentation/source/GettingStarted.rst` and 15 other
        portfolio repos still miss.
 
-    One `git/trees/{branch}?recursive=1` call replaces what could otherwise
-    be a dozen-plus per-path Contents API probes per repository -- a net
-    reduction in request volume, not just a correctness fix.
+    One forge.repo_tree() call (a single recursive tree request on GitHub)
+    replaces what could otherwise be a dozen-plus per-path existence probes
+    per repository -- a net reduction in request volume, not just a
+    correctness fix. URLs are built by the forge, so the same index works
+    for GitHub and GitLab repositories.
     """
 
-    def __init__(self, owner: str, repo: str, paths: List[str], truncated: bool):
-        self.owner = owner
-        self.repo = repo
+    def __init__(self, forge: Forge, ref: str, paths: List[str], truncated: bool):
+        self.forge = forge
+        self.ref = ref
         self.paths = paths
         self.truncated = truncated
         self._by_lower_path: Dict[str, str] = {p.lower(): p for p in paths}
@@ -366,27 +134,45 @@ class RepoTree:
                 self._by_lower_dir.setdefault(d.lower(), d)
 
     @classmethod
-    async def fetch(
-        cls, client: httpx.AsyncClient, headers: Dict[str, str],
-        owner: str, repo: str, branch: str = "HEAD",
-    ):
-        """A RepoTree, or COLLECTION_GAP if the tree couldn't be fetched.
+    async def fetch(cls, client: httpx.AsyncClient, forge: Forge, ref: str):
+        """A RepoTree for the default branch, or COLLECTION_GAP if the tree
+        couldn't be fetched (including a confirmed-missing repository, which
+        _confirm_repo_exists screens out before collection anyway).
 
-        `branch="HEAD"` resolves against the repo's actual default branch
-        (develop, main, master, whatever it is) without needing to look it
-        up first -- same trick `_check_file_exists` uses.
-        """
-        url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+        Cached per (platform, host, ref) and de-duplicated while in flight;
+        see _tree_cache."""
+        key = (forge.platform, forge.host, ref)
+        if key in _tree_cache:
+            _tree_cache.move_to_end(key)
+            return _tree_cache[key]
+        loop_key = (id(asyncio.get_running_loop()),) + key
+        pending = _tree_inflight.get(loop_key)
+        if pending is not None:
+            return await asyncio.shield(pending)
+        future = asyncio.get_running_loop().create_future()
+        _tree_inflight[loop_key] = future
         try:
-            response = await client.get(url, headers=headers)
-        except Exception as e:
-            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
+            tree = await cls._fetch_uncached(client, forge, ref)
+            if tree is not COLLECTION_GAP:
+                _tree_cache[key] = tree
+                while len(_tree_cache) > _TREE_CACHE_SIZE:
+                    _tree_cache.popitem(last=False)
+            future.set_result(tree)
+            return tree
+        except BaseException as e:
+            future.set_exception(e)
+            future.exception()  # mark retrieved when nobody else is waiting
+            raise
+        finally:
+            _tree_inflight.pop(loop_key, None)
+
+    @classmethod
+    async def _fetch_uncached(cls, client: httpx.AsyncClient, forge: Forge, ref: str):
+        data = await forge.repo_tree(client, ref)
+        if not data or data is COLLECTION_GAP:
             return COLLECTION_GAP
-        if response.status_code != 200:
-            return COLLECTION_GAP
-        data = response.json()
-        paths = [e["path"] for e in data.get("tree", []) if e.get("type") == "blob"]
-        return cls(owner, repo, paths, bool(data.get("truncated")))
+        paths = [f["path"] for f in data.get("files", [])]
+        return cls(forge, ref, paths, bool(data.get("truncated")))
 
     def match(self, candidates: List[str]) -> Optional[str]:
         """First candidate present in the tree as a file OR a directory,
@@ -394,7 +180,7 @@ class RepoTree:
         with its real casing (not the candidate's), or None if none of them
         are there.
 
-        Checking both is what `_check_file_exists` did too (the Contents API
+        Checking both is what per-path existence checks do too (the Contents API
         returns either a file or a directory listing for the same path) --
         a candidate like "test/googletest" is a vendored subdirectory, not a
         file, and still needs to match.
@@ -407,12 +193,12 @@ class RepoTree:
         return None
 
     def match_url(self, candidates: List[str]) -> Optional[str]:
-        """Same as match(), rendered as a browsable GitHub URL."""
+        """Same as match(), rendered as a browsable URL on the forge."""
         path = self.match(candidates)
         if path is None:
             return None
         kind = "blob" if path.lower() in self._by_lower_path else "tree"
-        return f"https://github.com/{self.owner}/{self.repo}/{kind}/HEAD/{path}"
+        return self.forge.web_url(self.ref, path, kind)
 
     def has_dir(self, path: str) -> bool:
         """Whether this exact directory path exists, case-insensitively --
@@ -438,14 +224,14 @@ class RepoTree:
         return min(hits, key=lambda p: (p.count("/"), p)) if hits else None
 
     def url_for(self, path: str) -> str:
-        return f"https://github.com/{self.owner}/{self.repo}/blob/HEAD/{path}"
+        return self.forge.web_url(self.ref, path)
 
     def find_url(self, pattern: str, flags: int = re.IGNORECASE) -> Optional[str]:
-        """First find() hit, rendered as a browsable GitHub URL."""
+        """First find() hit, rendered as a browsable URL on the forge."""
         hits = self.find(pattern, flags)
         if not hits:
             return None
-        return f"https://github.com/{self.owner}/{self.repo}/blob/HEAD/{hits[0]}"
+        return self.forge.web_url(self.ref, hits[0])
 
 
 # --------------------------------------------------------------------------- #
@@ -622,42 +408,3 @@ def configure_threshold_overrides(overrides: Optional[Dict[str, Dict[str, Any]]]
     """Install threshold overrides from config/orchestrator.yaml's `thresholds:`
     block. Call once at startup, before any collector runs."""
     _REGISTRY.set_overrides(overrides)
-
-
-# A tag naming a version (v5.0.11, name-7-2-0, checkpoint.1.14.0), and the
-# pre-release suffixes that shouldn't count as a release on their own.
-_VERSION_TAG = re.compile(r"\d+[._-]\d+")
-# "<consumer>-YYYY-MM-DD" marks a snapshot known to work with another project
-# (e.g. "downstream-2026-03-21"), not a release.
-_SNAPSHOT_TAG = re.compile(r"^(?!release)[a-z][\w.]*[-_]\d{4}-\d{2}-\d{2}$", re.I)
-_PRE_RELEASE_TAG = re.compile(
-    r"(?<![a-z])(?:rc|alpha|beta|pre|dev)(?:[._-]?\d+)?(?![a-z])|\d(?:a|b)\d+", re.I)
-
-
-async def fetch_version_tags(client: httpx.AsyncClient, headers: Dict[str, str], owner: str, repo: str) -> List[Dict]:
-    """The 50 most recent version tags (not release candidates), dated by
-    the annotated tag or else its commit, as release-shaped dicts. One
-    GraphQL query; needs a token, so returns [] without one."""
-    if "Authorization" not in headers:
-        return []
-    query = """query($o:String!,$n:String!){repository(owner:$o,name:$n){
-      refs(refPrefix:"refs/tags/",first:50,orderBy:{field:TAG_COMMIT_DATE,direction:DESC}){
-        nodes{name target{__typename ... on Commit{committedDate}
-          ... on Tag{tagger{date} target{... on Commit{committedDate}}}}}}}}"""
-    resp = await client.post("https://api.github.com/graphql", headers=headers,
-                             json={"query": query, "variables": {"o": owner, "n": repo}})
-    if resp.status_code != 200:
-        return []
-    repo_data = (resp.json().get("data") or {}).get("repository") or {}
-    tags = []
-    for node in (repo_data.get("refs") or {}).get("nodes") or []:
-        name, target = node.get("name", ""), node.get("target") or {}
-        if (not _VERSION_TAG.search(name) or _PRE_RELEASE_TAG.search(name)
-                or _SNAPSHOT_TAG.search(name)):
-            continue
-        date = ((target.get("tagger") or {}).get("date")
-                or target.get("committedDate")
-                or (target.get("target") or {}).get("committedDate"))
-        if date:
-            tags.append({"tag_name": name, "published_at": date, "from_tag": True})
-    return tags

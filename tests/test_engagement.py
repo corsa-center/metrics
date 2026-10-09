@@ -2,12 +2,13 @@
 
 import asyncio
 import pytest
-from collectors.ecosystem.engagement import EngagementCollector, _is_bot, _hours, _parse_dt
+from collectors.ecosystem.engagement import EngagementCollector, _hours, _parse_dt
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    return EngagementCollector()
+    return EngagementCollector(FakeForge())
 
 
 # ------------------------------------------------------------------ #
@@ -15,15 +16,6 @@ def collector():
 # ------------------------------------------------------------------ #
 
 class TestHelpers:
-    def test_is_bot_github_actions(self):
-        assert _is_bot("github-actions[bot]") is True
-
-    def test_is_bot_renovate(self):
-        assert _is_bot("renovate-bot") is True
-
-    def test_is_bot_human(self):
-        assert _is_bot("octocat") is False
-
     def test_parse_dt_z_suffix(self):
         dt = _parse_dt("2024-01-15T10:00:00Z")
         assert dt is not None
@@ -225,7 +217,8 @@ class TestIssueStats:
     """Regression cover for the sampling and consistency computations."""
 
     def _issues(self, n, comments=0, assoc="MEMBER"):
-        return [{"comments": comments, "author_association": assoc,
+        is_outsider = assoc not in {"OWNER", "MEMBER", "COLLABORATOR"}
+        return [{"comments": comments, "is_outsider": is_outsider,
                  "created_at": None, "closed_at": None} for _ in range(n)]
 
     def test_maintainer_associations_are_not_outside(self, collector):
@@ -248,7 +241,7 @@ class TestIssueStats:
         assert stats["timely_response_share"] == 0.5
 
     def test_median_comments(self, collector):
-        issues = [{"comments": c, "author_association": "NONE",
+        issues = [{"comments": c, "is_outsider": True,
                    "created_at": None, "closed_at": None} for c in [0, 4, 6]]
         assert collector._compute_issue_stats(issues, [None] * 3)["median_comments"] == 4
 
@@ -267,6 +260,7 @@ class TestInternalTriageExclusion:
 
     def _issue(self, assoc, comments):
         return {"comments": comments, "author_association": assoc,
+                "is_outsider": assoc not in ("OWNER", "MEMBER", "COLLABORATOR"),
                 "created_at": None, "closed_at": None}
 
     def test_maintainer_zero_comment_issues_excluded_from_median(self, collector):
@@ -371,26 +365,15 @@ class TestFetchIssuesSamplesDiscussion:
     sample is full, rather than stopping at 30 raw issues."""
 
     def test_pages_until_enough_discussion_issues(self, collector):
-        triage = [{"number": n, "comments": 0, "author_association": "MEMBER"} for n in range(80)]
-        community = [{"number": 100 + n, "comments": 1, "author_association": "NONE"} for n in range(60)]
+        triage = [{"number": n, "comments": 0, "author_association": "MEMBER", "is_outsider": False} for n in range(80)]
+        community = [{"number": 100 + n, "comments": 1, "author_association": "NONE", "is_outsider": True} for n in range(60)]
         pages = [triage + community[:20], community[20:], []]
 
-        class Resp:
-            def __init__(self, body): self._body = body
-            def raise_for_status(self): pass
-            def json(self): return self._body
-
-        class Client:
-            def __init__(self): self.calls = 0
-            async def get(self, url, headers=None, params=None):
-                self.calls += 1
-                return Resp(pages[params["page"] - 1])
-
-        client = Client()
-        issues = asyncio.run(collector._fetch_issues(client, "https://api.github.com/repos/o/r"))
+        collector.forge.issue_list = triage + community
+        issues = asyncio.run(collector._fetch_issues(None, "o/r"))
         discussable = [i for i in issues if i["author_association"] == "NONE"]
         assert len(discussable) == 30
-        assert client.calls == 2
+        assert collector.forge.calls.count(("issues",)) == 2
 
 
 class TestIssueFlowScoring:
@@ -431,26 +414,30 @@ class TestIssueFlowScoring:
 
 class TestIssueFlowQueries:
     def test_cohort_counts_open_issues_as_unresolved(self, collector):
-        from unittest.mock import AsyncMock, MagicMock, patch
         items = [{"created_at": "2026-01-01T00:00:00Z", "closed_at": "2026-01-02T00:00:00Z"},
                  {"created_at": "2026-01-01T00:00:00Z", "closed_at": None},
                  {"created_at": "2026-01-01T00:00:00Z", "closed_at": "2026-01-01T12:00:00Z"}]
-        def resp(body):
-            r = MagicMock(status_code=200); r.json.return_value = body; return r
-        responses = [resp({"items": items, "total_count": 40}), resp({"total_count": 50})]
-        with patch("collectors.ecosystem.engagement.search_get", new=AsyncMock(side_effect=responses)) as sg:
-            flow = asyncio.run(collector._issue_flow(MagicMock(), "o", "r"))
+        collector.forge.opened_between = {"items": items, "total_count": 40}
+        collector.forge.closed_between = 50
+        flow = asyncio.run(collector._issue_flow(None, "o/r"))
         assert flow["cohort_size"] == 3 and flow["cohort_still_open"] == 1
         assert flow["median_close_hours"] == 24
         assert (flow["opened"], flow["closed"]) == (40, 50)
-        assert "is%3Aissue" in sg.call_args_list[0].args[1]
-        assert sg.call_count == 2
 
     def test_search_failure_leaves_rows_unmeasured(self, collector):
-        from unittest.mock import AsyncMock, MagicMock, patch
-        with patch("collectors.ecosystem.engagement.search_get", new=AsyncMock(return_value=None)):
-            flow = asyncio.run(collector._issue_flow(MagicMock(), "o", "r"))
+        collector.forge.opened_between = None
+        collector.forge.closed_between = None
+        flow = asyncio.run(collector._issue_flow(None, "o/r"))
         assert "cohort_size" not in flow and "opened" not in flow
+
+    def test_closed_count_unavailable_leaves_closure_unmeasured(self, collector):
+        # GitLab can't count issues closed in a window; the cohort still
+        # measures resolution, but the opened/closed comparison is skipped.
+        collector.forge.opened_between = {"items": [], "total_count": 5}
+        collector.forge.closed_between = None
+        flow = asyncio.run(collector._issue_flow(None, "o/r"))
+        assert flow["cohort_size"] == 0
+        assert "opened" not in flow and "closed" not in flow
 
 
 class TestThinWindows:

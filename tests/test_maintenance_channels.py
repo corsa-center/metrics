@@ -3,11 +3,12 @@
 import pytest
 
 from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
 def collector():
-    return ActiveMaintenanceCollector()
+    return ActiveMaintenanceCollector(FakeForge())
 
 
 def _weeks(prior, recent):
@@ -84,69 +85,47 @@ class TestChannels:
 
 
 class TestCountCommunityIssues:
-    def _run(self, collector, status, items):
+    def _run(self, pages):
         import asyncio
-        from unittest.mock import AsyncMock, MagicMock, patch
-        resp = MagicMock(status_code=status)
-        resp.json.return_value = {"items": items}
-        client = MagicMock()
-        client.get = AsyncMock(return_value=resp)
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        with patch("collectors.ecosystem.active_maintenance.httpx.AsyncClient", return_value=client):
-            return asyncio.run(collector._count_community_issues("o", "r")), client
+        from tests.fakes import FakeForge
+        forge = FakeForge(recent_issue_pages=pages)
+        return asyncio.run(ActiveMaintenanceCollector(forge)._count_community_issues(None, "o/r")), forge
 
-    def test_counts_only_outside_authors(self, collector):
-        items = [{"author_association": a} for a in ("NONE", "CONTRIBUTOR", "MEMBER", "OWNER", "FIRST_TIMER")]
-        count, client = self._run(collector, 200, items)
+    @staticmethod
+    def _page(outside, inside):
+        return [{"is_outsider": True}] * outside + [{"is_outsider": False}] * inside
+
+    def test_counts_only_outside_authors(self):
+        count, _ = self._run([self._page(3, 2)])
         assert count == 3
-        assert "is%3Aissue" in client.get.call_args.args[0]
 
-    def test_failure_is_none_not_zero(self, collector):
-        assert self._run(collector, 403, [])[0] is None
+    def test_failure_is_none_not_zero(self):
+        assert self._run([None])[0] is None
 
 
 class TestCountCommunityIssuesPaging:
     """Maintainer-filed tickets can fill the newest 100 issues (AMReX: 98 of
     100) while the year holds plenty from outside -- keep paging."""
 
-    def _run(self, collector, pages):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock, patch
-        responses = []
-        for status, items in pages:
-            resp = MagicMock(status_code=status)
-            resp.json.return_value = {"items": items}
-            responses.append(resp)
-        client = MagicMock()
-        client.get = AsyncMock(side_effect=responses)
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        with patch("collectors.ecosystem.active_maintenance.httpx.AsyncClient", return_value=client):
-            return asyncio.run(collector._count_community_issues("o", "r")), client
+    _page = staticmethod(TestCountCommunityIssues._page)
 
-    @staticmethod
-    def _page(outside, inside):
-        return [{"author_association": "NONE"}] * outside + [{"author_association": "MEMBER"}] * inside
+    def _run(self, pages):
+        return TestCountCommunityIssues._run(self, pages)
 
-    def test_pages_past_a_maintainer_filled_first_page(self, collector):
-        count, client = self._run(collector, [(200, self._page(2, 98)), (200, self._page(10, 90))])
+    def test_pages_past_a_maintainer_filled_first_page(self):
+        count, _ = self._run([self._page(2, 98), self._page(10, 90)])
         assert count == 12
-        assert client.get.await_count == 2
-        assert "page=2" in client.get.call_args.args[0]
 
-    def test_stops_once_the_threshold_is_met(self, collector):
-        count, client = self._run(collector, [(200, self._page(6, 94))])
+    def test_stops_once_the_threshold_is_met(self):
+        count, _ = self._run([self._page(6, 94), self._page(50, 50)])
         assert count == 6
-        assert client.get.await_count == 1
 
-    def test_stops_on_a_short_page(self, collector):
-        count, client = self._run(collector, [(200, self._page(1, 30))])
+    def test_stops_on_a_short_page(self):
+        count, _ = self._run([self._page(1, 30), self._page(50, 50)])
         assert count == 1
-        assert client.get.await_count == 1
 
-    def test_later_page_failure_keeps_the_lower_bound(self, collector):
-        count, _ = self._run(collector, [(200, self._page(2, 98)), (403, [])])
+    def test_later_page_failure_keeps_the_lower_bound(self):
+        count, _ = self._run([self._page(2, 98), None])
         assert count == 2
 
 
@@ -161,28 +140,20 @@ class TestRelatedRepositories:
         assert alone["departed"] == 1
         assert merged["departed"] == 0 and merged["previously_active"] == 1
 
-    def test_related_repositories_are_read_from_catalog_entry(self, collector):
+    def test_related_repositories_are_read_from_catalog_entry(self):
         import asyncio
-        from unittest.mock import AsyncMock, patch
+        from tests.fakes import FakeForge
         calls = []
+        forge = FakeForge()
 
-        async def stats(owner, repo):
-            calls.append(f"{owner}/{repo}")
+        async def stats(client, ref):
+            calls.append(ref)
             return []
-        empty = AsyncMock(return_value={})
-        with patch.object(collector, "_get_contributor_stats", new=stats), \
-             patch.object(collector, "_get_repo_info", new=empty), \
-             patch.object(collector, "_get_commit_activity", new=empty), \
-             patch.object(collector, "_get_releases", new=AsyncMock(return_value=[])), \
-             patch.object(collector, "_get_contributors", new=AsyncMock(return_value=[])), \
-             patch.object(collector, "_get_first_commit_date", new=AsyncMock(return_value=None)), \
-             patch.object(collector, "_get_readme", new=AsyncMock(return_value="")), \
-             patch.object(collector, "_wiki_has_content", new=AsyncMock(return_value=False)), \
-             patch.object(collector, "_count_community_issues", new=AsyncMock(return_value=None)):
-            asyncio.run(collector.collect({
-                "name": "spack", "repo_url": "https://github.com/spack/spack",
-                "related_repositories": ["spack/spack-packages"]}))
-        assert calls == ["spack/spack", "spack/spack-packages"]
+        forge.contributor_weekly_stats = stats
+        asyncio.run(ActiveMaintenanceCollector(forge).collect({
+            "name": "spack", "repo_url": "https://github.com/spack/spack",
+            "related_repositories": ["spack/spack-packages"]}))
+        assert calls == ["o/r", "spack/spack-packages"]
 
 
 class TestVersionTagsAsReleases:
@@ -207,15 +178,15 @@ class TestVersionTagsAsReleases:
             async def __aexit__(self, *a):
                 return False
 
-            async def get(self, url, headers=None):
+            async def get(self, url, headers=None, params=None):
                 return Resp(200, releases)
 
             async def post(self, url, headers=None, json=None):
                 return Resp(200, graphql)
 
-        c = ActiveMaintenanceCollector("token")
-        with patch("collectors.ecosystem.active_maintenance.httpx.AsyncClient", Client):
-            return asyncio.run(c._get_releases("o", "r"))
+        from forge.github import GitHubForge
+        c = ActiveMaintenanceCollector(GitHubForge("token"))
+        return asyncio.run(c._get_releases(Client(), "o/r"))
 
     @staticmethod
     def _tags(*items):
@@ -243,3 +214,12 @@ class TestVersionTagsAsReleases:
         rel = self._run([], self._tags(("compass-2026-03-21", "2026-03-21T00:00:00Z"),
                                        ("release-2022.05.15", "2022-05-15T00:00:00Z")))
         assert [r["tag_name"] for r in rel] == ["release-2022.05.15"]
+
+
+class TestPlatformLabels:
+    def test_gitlab_tracker_is_labelled_gitlab(self):
+        from tests.fakes import gitlab_fake
+        out = ActiveMaintenanceCollector(gitlab_fake())._analyze_channels(
+            {"has_issues": True}, "", community_issues=100)
+        assert "GitLab Issues" in out["found"]
+        assert not any("GitHub" in c for c in out["found"])

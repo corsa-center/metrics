@@ -7,11 +7,13 @@ from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.quality.reproducibility import (
     ReproducibilityCollector, _FILE_CHECKS, _versioning_scheme,
 )
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return ReproducibilityCollector()
+    return ReproducibilityCollector(GitHubForge())
 
 
 class TestEmptyResult:
@@ -264,7 +266,7 @@ class TestScanFiles:
     """
 
     def _tree(self, paths):
-        return RepoTree("owner", "repo", list(paths), truncated=False)
+        return RepoTree(FakeForge(), "owner/repo", list(paths), truncated=False)
 
     def test_dockerfile_detected(self, collector):
         result = collector._scan_files(self._tree({"Dockerfile"}))
@@ -303,7 +305,7 @@ class TestScanFilesGapHandling:
         assert result["fair4rs_metadata"]["count_total"] == 0
 
     def test_confirmed_missing_is_not_the_same_as_gapped(self, collector):
-        tree = RepoTree("owner", "repo", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "owner/repo", ["README.md"], truncated=False)
         result = collector._scan_files(tree)
         containers = result["containers"]
         assert containers["not_collected"] == []
@@ -322,26 +324,26 @@ class TestSemanticVersioningGapHandling:
     def test_releases_request_failure_is_not_collected_not_a_confirmed_no(self, collector):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=ConnectionError("boom"))
-        result = asyncio.run(collector._check_semantic_versioning(mock_client, "o", "r"))
+        result = asyncio.run(collector._check_semantic_versioning(mock_client, "o/r"))
         assert result["uses_semver"] is False
         assert result["not_collected"] is True
 
     def test_releases_rate_limited_is_not_collected(self, collector):
         client = self._mock_client(403)
-        result = asyncio.run(collector._check_semantic_versioning(client, "o", "r"))
+        result = asyncio.run(collector._check_semantic_versioning(client, "o/r"))
         assert result["not_collected"] is True
 
     def test_tags_request_failure_is_not_collected(self, collector):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=ConnectionError("boom"))
-        result = asyncio.run(collector._check_tags(mock_client, "o", "r", 5))
+        result = asyncio.run(collector._check_tags(mock_client, "o/r", 5))
         assert result["uses_semver"] is False
         assert result["not_collected"] is True
 
     def test_confirmed_no_releases_or_tags_is_a_real_negative(self, collector):
         # 200 with an empty body -- a real, trustworthy "no releases, no tags".
         empty_releases = self._mock_client(200, [])
-        result = asyncio.run(collector._check_semantic_versioning(empty_releases, "o", "r"))
+        result = asyncio.run(collector._check_semantic_versioning(empty_releases, "o/r"))
         assert result["uses_semver"] is False
         assert "not_collected" not in result
 
@@ -351,7 +353,7 @@ class TestScanFilesAnywhereInTree:
     them, but not inside vendored code."""
 
     def _scan(self, collector, paths):
-        return collector._scan_files(RepoTree("o", "r", paths, truncated=False))
+        return collector._scan_files(RepoTree(FakeForge(), "o/r", paths, truncated=False))
 
     def test_dockerfile_in_a_subdirectory(self, collector):
         # SUNDIALS: scripts/docker/Dockerfile.
@@ -397,13 +399,13 @@ class TestReadmeInstallSection:
     def _docs(self, collector, readme):
         import base64
         from unittest.mock import AsyncMock, patch
-        tree = RepoTree("o", "r", ["README.md", "src/a.py"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md", "src/a.py"], truncated=False)
         data = ({"content": base64.b64encode(readme.encode()).decode(), "path": "README.md",
                  "html_url": "https://github.com/o/r#readme"} if readme else None)
         semver = {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
         with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
              patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)), \
-             patch.object(collector, "_github_get", new=AsyncMock(return_value=data)):
+             patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
             r = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
         return r
 
@@ -411,7 +413,7 @@ class TestReadmeInstallSection:
         r = self._docs(collector, "# Pkg\n## Installation\nuv sync\n")
         assert r["has_reproducibility_docs"] is True
         assert r["categories"]["reproducibility_docs"]["details"]["Install / build guide"]["file"] \
-            == "README.md (installation section)"
+            == "README (installation section)"
 
     def test_readme_without_one_does_not(self, collector):
         assert self._docs(collector, "# Pkg\nSome prose about install.\n")["has_reproducibility_docs"] is False
@@ -421,7 +423,7 @@ class TestManagedDependencies:
     def _collect(self, collector, files):
         import base64
         from unittest.mock import patch
-        tree = RepoTree("o", "r", list(files), truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", list(files), truncated=False)
         semver = {"uses_semver": False, "releases_checked": 0, "semver_count": 0, "example_tags": []}
 
         async def get(client, url, params=None):
@@ -431,7 +433,7 @@ class TestManagedDependencies:
 
         with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
              patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)), \
-             patch.object(collector, "_github_get", side_effect=get):
+             patch.object(collector.forge, "_github_get", side_effect=get):
             return asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
 
     def test_fpm_dependency_pinned_to_a_tag(self, collector):

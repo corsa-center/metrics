@@ -2,7 +2,8 @@
 Deployment Environment Collector (CASS Report Section 4.3.5 — Accessibility)
 
 Fills the three CI- and documentation-derived sub-metrics of section 4.3.5 by
-reading the workflow definitions once:
+reading the CI definitions once (GitHub workflows, or .gitlab-ci.yml and
+its local includes):
 
   - Deployment Environment Testing    : which OS families CI builds on
   - Architecture Compatibility Analysis : which non-x86 CPU architectures and
@@ -26,7 +27,6 @@ ubuntu-24.04 covers one environment, not two.
 """
 
 import asyncio
-import base64
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -34,23 +34,33 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from collectors.ecosystem.base import (
-    _VENDORED_DIR, GitHubCollectorBase, RepoTree, RetryingTransport, get_threshold,
+    _VENDORED_DIR, RepoTree, RetryingTransport, get_threshold,
 )
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
-
-_WORKFLOWS_DIR = ".github/workflows"
 
 # Runner label prefixes that GitHub-hosted and common self-hosted runners use,
 # mapped to the OS family they represent.
 # The version suffix matters: matching any word after the family name sweeps up
 # job names like "macos-clang" and "linux-oneapi", which are toolchain labels
 # rather than runners and make the reported detail wrong.
+#
+# GitLab runners are named by tags and container images instead of GitHub's
+# hosted-runner labels: an OS plus an architecture ("linux-x86_64",
+# "windows-x86_64", "macos-arm64", "os:macos-arm") or a distro image
+# ("ubuntu:22.04", "ci-fedora44"). An architecture suffix is as specific as a
+# version suffix, so it is accepted too; a distro name may also be followed by
+# ':' or directly by its version number.
 _RUNNER_SUFFIX = r"(?:latest|\d+(?:\.\d+)?)"
+_ARCH_SUFFIX = r"(?:x86_64|amd64|arm64|aarch64|arm)"
+_DISTROS = r"(?:ubuntu|debian|fedora|rhel|centos|rockylinux|almalinux)"
 _RUNNER_FAMILIES = {
-    "Linux": re.compile(rf"\b(?:ubuntu|debian|fedora|rhel|centos)-{_RUNNER_SUFFIX}\b", re.I),
-    "Windows": re.compile(rf"\bwindows-{_RUNNER_SUFFIX}\b", re.I),
-    "macOS": re.compile(rf"\bmacos-{_RUNNER_SUFFIX}\b", re.I),
+    "Linux": re.compile(
+        rf"\b(?:{_DISTROS}[-:]?{_RUNNER_SUFFIX}|(?:{_DISTROS}|linux)-{_ARCH_SUFFIX})\b", re.I
+    ),
+    "Windows": re.compile(rf"\bwindows-(?:{_RUNNER_SUFFIX}|{_ARCH_SUFFIX})\b", re.I),
+    "macOS": re.compile(rf"\bmacos-(?:{_RUNNER_SUFFIX}|{_ARCH_SUFFIX})\b", re.I),
 }
 
 # CI whose runner OS the configuration doesn't state: self-hosted GitHub
@@ -148,24 +158,26 @@ _PLATFORM_DOC_TERMS = {
 _MAX_WORKFLOW_FILES = 25
 
 
-class DeploymentEnvironmentCollector(GitHubCollectorBase):
+class DeploymentEnvironmentCollector:
     """Detects the OS families a project's CI exercises (Section 4.3.5)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
-        owner_repo = self._extract_owner_repo(package.get("repo_url", ""))
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {package.get('repo_url')}")
+        ref = self.forge.extract_ref(package.get("repo_url", ""))
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {package.get('repo_url')}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
         logger.info(f"Collecting deployment environment metrics for {repo_name}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             files, doc_text, tree = await asyncio.gather(
-                self._list_workflows(client, owner, repo),
-                self._read_platform_docs(client, owner, repo),
-                RepoTree.fetch(client, self.github_headers, owner, repo),
+                self._list_workflows(client, ref),
+                self._read_platform_docs(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
                 return_exceptions=True,
             )
             if isinstance(files, Exception):
@@ -174,13 +186,19 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
             if isinstance(doc_text, Exception):
                 logger.warning(f"Platform doc read failed: {doc_text}")
                 doc_text = ""
+            # GitLab CI files the forge's CI listing didn't already return.
+            # In a GitHub repository these are facility CI (often GPU and
+            # non-x86), read for architecture coverage only; in a GitLab
+            # repository they are more of the project's own CI.
+            listed = {f["path"] for f in files}
             gitlab_paths = (
-                tree.find(_GITLAB_CI_RE.pattern)[:_MAX_GITLAB_FILES]
+                [p for p in tree.find(_GITLAB_CI_RE.pattern) if p not in listed][:_MAX_GITLAB_FILES]
                 if isinstance(tree, RepoTree) else []
             )
+            own_gitlab_ci = self.forge.platform == "gitlab"
 
             contents = await asyncio.gather(
-                *[self._read_workflow(client, f["url"]) for f in files[:_MAX_WORKFLOW_FILES]],
+                *[self._read_workflow(client, ref, f["path"]) for f in files[:_MAX_WORKFLOW_FILES]],
                 return_exceptions=True,
             ) if files else []
             install_docs = []
@@ -190,20 +208,19 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
                                   key=lambda p: (p.count("/"), p))[:_MAX_INSTALL_DOCS]
                 install_docs = owned(_INSTALL_DOC) + owned(_PLATFORM_GUIDE)
             install_texts = await asyncio.gather(
-                *[self._read_workflow(
-                    client, f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
-                  for p in install_docs],
+                *[self._read_workflow(client, ref, p) for p in install_docs],
                 return_exceptions=True,
             ) if install_docs else []
             doc_text = "\n".join(
                 [doc_text] + [t for t in install_texts if isinstance(t, str)]
             )
             gitlab_contents = await asyncio.gather(
-                *[self._read_workflow(
-                    client, f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{p}")
-                  for p in gitlab_paths],
+                *[self._read_workflow(client, ref, p) for p in gitlab_paths],
                 return_exceptions=True,
             ) if gitlab_paths else []
+            if own_gitlab_ci:
+                contents = list(contents) + list(gitlab_contents)
+                gitlab_contents = []
 
         families: Dict[str, set] = {name: set() for name in _RUNNER_FAMILIES}
         for text in contents:
@@ -225,7 +242,13 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
                 if pattern.search(text):
                     accelerators.add(accel)
 
-        unstated_ci = bool(gitlab_paths) or (isinstance(tree, RepoTree) and bool(tree.find(_OTHER_CI)))
+        if own_gitlab_ci:
+            # GitLab runners are often named only by site-specific tags, so
+            # CI that exists but names no OS family is "unstated", not absent.
+            unstated_ci = bool(contents) and not any(families.values())
+        else:
+            unstated_ci = bool(gitlab_paths)
+        unstated_ci = unstated_ci or (isinstance(tree, RepoTree) and bool(tree.find(_OTHER_CI)))
         for text in contents:
             if isinstance(text, Exception) or not text:
                 continue
@@ -244,8 +267,8 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         )
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "workflow_count": len(files),
             "workflows_scanned": min(len(files), _MAX_WORKFLOW_FILES),
             "gitlab_ci_files_scanned": len(gitlab_paths),
@@ -258,51 +281,25 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         }
 
     async def _read_platform_docs(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> str:
         """README text, used to see which platforms the project claims to support."""
-        try:
-            resp = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}/readme",
-                headers=self.github_headers,
-            )
-            if resp.status_code != 200:
-                return ""
-            import base64
-            return base64.b64decode(resp.json().get("content", "")).decode("utf-8", "replace")
-        except Exception as e:
-            logger.debug(f"Could not read README: {e}")
-            return ""
+        text = await self.forge.readme(client, ref)
+        return text or ""
 
     async def _list_workflows(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict[str, str]]:
-        """Workflow definition files in .github/workflows."""
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{_WORKFLOWS_DIR}"
-        try:
-            resp = await client.get(url, headers=self.github_headers)
-            if resp.status_code != 200:
-                return []
-            entries = resp.json()
-            if not isinstance(entries, list):
-                return []
-            return [
-                {"name": e["name"], "url": e["download_url"]}
-                for e in entries
-                if e.get("name", "").endswith((".yml", ".yaml")) and e.get("download_url")
-            ]
-        except Exception as e:
-            logger.debug(f"Could not list workflows: {e}")
+        """CI definition files (GitHub workflows, .gitlab-ci.yml and its includes)."""
+        entries = await self.forge.ci_config_files(client, ref)
+        if not entries:
             return []
+        return [{"name": e["name"], "path": e["path"]} for e in entries]
 
-    async def _read_workflow(self, client: httpx.AsyncClient, url: str) -> Optional[str]:
-        """Fetch a workflow file's raw text."""
-        try:
-            resp = await client.get(url)
-            return resp.text if resp.status_code == 200 else None
-        except Exception as e:
-            logger.debug(f"Could not read workflow {url}: {e}")
-            return None
+    async def _read_workflow(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
+        """Fetch a CI or doc file's raw text (outside the REST API, so no
+        rate-limit quota is spent)."""
+        return await self.forge.raw_text(client, ref, path) or None
 
     def _calculate_score(
         self,
@@ -384,7 +381,7 @@ class DeploymentEnvironmentCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": repository,
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "workflow_count": 0,
             "workflows_scanned": 0,
             "os_families": {},

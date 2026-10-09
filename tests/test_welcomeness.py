@@ -8,11 +8,13 @@ from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.welcomeness import (
     WelcomenessCollector, _DECISION_PATHS, _DECISION_PATTERNS,
 )
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return WelcomenessCollector()
+    return WelcomenessCollector(GitHubForge())
 
 
 class TestScoring:
@@ -86,8 +88,8 @@ class TestScoringGapHandling:
 class TestGetPublicChannelsGapHandling:
     def test_gap_is_tracked(self, collector):
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
-                return await collector._get_public_channels(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
+                return await collector._get_public_channels(None, "o/r")
 
         channels, saw_gap = asyncio.run(go())
         assert channels == []
@@ -96,8 +98,8 @@ class TestGetPublicChannelsGapHandling:
     def test_confirmed_flags_are_not_a_gap(self, collector):
         async def go():
             data = {"has_discussions": True, "has_wiki": False, "has_pages": False}
-            with patch.object(collector, "_github_get", new=AsyncMock(side_effect=[data, None])):
-                return await collector._get_public_channels(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(side_effect=[data, None])):
+                return await collector._get_public_channels(None, "o/r")
 
         channels, saw_gap = asyncio.run(go())
         assert channels == ["GitHub Discussions"]
@@ -108,9 +110,9 @@ class TestGetPublicChannelsGapHandling:
         readme_data = {"content": base64.b64encode(readme.encode()).decode()} if readme else None
 
         async def go():
-            with patch.object(collector, "_github_get", new=AsyncMock(side_effect=[repo_flags, readme_data])), \
-                 patch("collectors.ecosystem.welcomeness.wiki_has_content", new=AsyncMock(return_value=wiki_pages)):
-                return await collector._get_public_channels(None, "o", "r")
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(side_effect=[repo_flags, readme_data])), \
+                 patch.object(collector.forge, "wiki_has_content", new=AsyncMock(return_value=wiki_pages)):
+                return await collector._get_public_channels(None, "o/r")
         return asyncio.run(go())[0]
 
     def test_empty_wiki_is_not_a_channel(self, collector):
@@ -145,7 +147,7 @@ class TestFindDecisionDocuments:
     def test_roadmap_found_at_an_unenumerated_name(self, collector):
         # CHIP-SPV/chipStar's actual filename -- no literal candidate list
         # would have enumerated this spelling.
-        tree = RepoTree("o", "r", ["docs/Devicelib_roadmap.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["docs/Devicelib_roadmap.md"], truncated=False)
         result = collector._find_decision_documents(tree)
         assert "Roadmap" in result["found"]
 
@@ -153,23 +155,23 @@ class TestFindDecisionDocuments:
         # llvm/llvm-project's flang subproject -- MeetingNotes/, not
         # "meetings".
         tree = RepoTree(
-            "o", "r", ["flang/docs/MeetingNotes/2025/2025-12-03.md"], truncated=False
+            FakeForge(), "o/r", ["flang/docs/MeetingNotes/2025/2025-12-03.md"], truncated=False
         )
         result = collector._find_decision_documents(tree)
         assert "Meeting notes" in result["found"]
 
     def test_governance_document_found(self, collector):
-        tree = RepoTree("o", "r", ["GOVERNANCE.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["GOVERNANCE.md"], truncated=False)
         result = collector._find_decision_documents(tree)
         assert "Governance document" in result["found"]
 
     def test_confirmed_absence_is_not_collected_free(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
         result = collector._find_decision_documents(tree)
         assert result["found"] == []
         assert result["not_collected"] == []
 
     def test_source_file_mentioning_roadmap_is_not_a_false_positive(self, collector):
-        tree = RepoTree("o", "r", ["src/Roadmapper.cpp"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["src/Roadmapper.cpp"], truncated=False)
         result = collector._find_decision_documents(tree)
         assert "Roadmap" not in result["found"]

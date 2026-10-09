@@ -11,11 +11,13 @@ from collectors.quality.supply_chain import (
     SupplyChainCollector, _parse_pinned_pypi_deps, _parse_uv_lock,
     _parse_poetry_lock, _parse_cargo_lock, _parse_go_sum, _parse_pipfile_lock,
 )
+from tests.fakes import FakeForge
+from forge.github import GitHubForge
 
 
 @pytest.fixture
 def collector():
-    return SupplyChainCollector()
+    return SupplyChainCollector(GitHubForge())
 
 
 class TestEmptyResult:
@@ -138,13 +140,13 @@ class TestCheckRootSbom:
     """
 
     def test_found(self, collector):
-        tree = RepoTree("o", "r", ["sbom.spdx.json"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["sbom.spdx.json"], truncated=False)
         url, saw_gap = collector._check_root_sbom(tree)
         assert url is not None
         assert saw_gap is False
 
     def test_not_found(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
         url, saw_gap = collector._check_root_sbom(tree)
         assert url is None
         assert saw_gap is False
@@ -155,7 +157,7 @@ class TestCheckRootSbom:
         assert saw_gap is True
 
     def test_match_is_case_insensitive(self, collector):
-        tree = RepoTree("o", "r", ["SBOM.SPDX.JSON"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["SBOM.SPDX.JSON"], truncated=False)
         url, saw_gap = collector._check_root_sbom(tree)
         assert url is not None
 
@@ -175,34 +177,34 @@ class TestFetchReleaseAssets:
             {"tag_name": "v1.0.0", "assets": [{"name": "sbom.json", "browser_download_url": "u2"}]},
         ]
         client = self._mock_client(200, releases)
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert len(assets) == 2
         assert assets[1]["release"] == "v1.0.0"
         assert is_gap is False
 
     def test_no_assets(self, collector):
         client = self._mock_client(200, [{"tag_name": "v1.0.0", "assets": []}])
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert assets == []
         assert is_gap is False
 
     def test_confirmed_404_is_a_real_empty_list_not_a_gap(self, collector):
         # A repo with no releases at all -- a real, trustworthy result.
         client = self._mock_client(404)
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert assets == []
         assert is_gap is False
 
     def test_request_failure_is_a_gap_not_a_confirmed_empty_list(self, collector):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(mock_client, "o", "r"))
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(mock_client, "o/r"))
         assert assets == []
         assert is_gap is True
 
     def test_rate_limited_after_retries_is_a_gap(self, collector):
         client = self._mock_client(403)
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o", "r"))
+        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert assets == []
         assert is_gap is True
 
@@ -305,14 +307,14 @@ class TestQueryOsvBatch:
 class TestCheckDependencyVulnerabilities:
     def test_gapped_tree_is_not_collected(self, collector):
         result = asyncio.run(
-            collector._check_dependency_vulnerabilities(None, "o", "r", COLLECTION_GAP)
+            collector._check_dependency_vulnerabilities(None, "o/r", COLLECTION_GAP)
         )
         assert result["not_collected"] is True
 
     def test_no_lockfile_passes(self, collector):
-        tree = RepoTree("o", "r", ["README.md"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
         result = asyncio.run(
-            collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            collector._check_dependency_vulnerabilities(None, "o/r", tree)
         )
         assert result["passing"] is True
         assert "No dependency lockfile" in result["value"]
@@ -320,15 +322,15 @@ class TestCheckDependencyVulnerabilities:
     def test_nested_requirements_txt_not_matched(self, collector):
         # docs/requirements.txt is Sphinx tooling, not the project's own
         # dependency surface -- deliberately out of scope.
-        tree = RepoTree("o", "r", ["docs/requirements.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["docs/requirements.txt"], truncated=False)
         result = asyncio.run(
-            collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+            collector._check_dependency_vulnerabilities(None, "o/r", tree)
         )
         assert result["passing"] is True
         assert "No dependency lockfile" in result["value"]
 
     def test_clean_scan_passes(self, collector):
-        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt"], truncated=False)
         content = base64.b64encode(b"numpy==1.24.0\n").decode()
 
         async def fake_get(client, url, params=None):
@@ -337,16 +339,16 @@ class TestCheckDependencyVulnerabilities:
         async def fake_batch(client, deps):
             return []
 
-        with patch.object(collector, "_github_get", side_effect=fake_get), \
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         assert result["passing"] is True
         assert "0 of 1" in result["value"]
 
     def test_vulnerable_dependency_fails(self, collector):
-        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt"], truncated=False)
         content = base64.b64encode(b"requests==2.6.0\n").decode()
 
         async def fake_get(client, url, params=None):
@@ -355,42 +357,42 @@ class TestCheckDependencyVulnerabilities:
         async def fake_batch(client, deps):
             return [("PyPI", "requests", "2.6.0")]
 
-        with patch.object(collector, "_github_get", side_effect=fake_get), \
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         assert result["passing"] is False
         assert result["detail"] == ["requests==2.6.0 (PyPI)"]
 
     def test_no_pinned_deps_still_passes(self, collector):
-        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt"], truncated=False)
         content = base64.b64encode(b"numpy>=1.20\nscipy\n").decode()
 
         async def fake_get(client, url, params=None):
             return {"content": content}
 
-        with patch.object(collector, "_github_get", side_effect=fake_get):
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         assert result["passing"] is True
         assert "no exactly-pinned/registry dependencies" in result["value"]
 
     def test_content_fetch_gap_is_not_collected(self, collector):
-        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt"], truncated=False)
 
         async def fake_get(client, url, params=None):
             return COLLECTION_GAP
 
-        with patch.object(collector, "_github_get", side_effect=fake_get):
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         assert result["not_collected"] is True
 
     def test_osv_query_gap_is_not_collected(self, collector):
-        tree = RepoTree("o", "r", ["requirements.txt"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt"], truncated=False)
         content = base64.b64encode(b"numpy==1.24.0\n").decode()
 
         async def fake_get(client, url, params=None):
@@ -399,17 +401,17 @@ class TestCheckDependencyVulnerabilities:
         async def fake_batch(client, deps):
             return COLLECTION_GAP
 
-        with patch.object(collector, "_github_get", side_effect=fake_get), \
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         assert result["not_collected"] is True
 
     def test_multiple_lockfiles_merged_into_one_query(self, collector):
         # A repo can pin dependencies more than one way -- Python bindings
         # via requirements.txt alongside a Rust component's Cargo.lock.
-        tree = RepoTree("o", "r", ["requirements.txt", "Cargo.lock"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt", "Cargo.lock"], truncated=False)
         py_content = base64.b64encode(b"numpy==1.24.0\n").decode()
         cargo_content = base64.b64encode(
             b'[[package]]\nname = "serde"\nversion = "1.0.0"\n'
@@ -427,16 +429,16 @@ class TestCheckDependencyVulnerabilities:
             seen.extend(deps)
             return []
 
-        with patch.object(collector, "_github_get", side_effect=fake_get), \
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         assert result["passing"] is True
         assert set(seen) == {("PyPI", "numpy", "1.24.0"), ("crates.io", "serde", "1.0.0")}
 
     def test_a_positive_finding_stands_despite_a_gap_on_another_lockfile(self, collector):
-        tree = RepoTree("o", "r", ["requirements.txt", "Cargo.lock"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt", "Cargo.lock"], truncated=False)
         py_content = base64.b64encode(b"requests==2.6.0\n").decode()
 
         async def fake_get(client, url, params=None):
@@ -447,16 +449,16 @@ class TestCheckDependencyVulnerabilities:
         async def fake_batch(client, deps):
             return [("PyPI", "requests", "2.6.0")]
 
-        with patch.object(collector, "_github_get", side_effect=fake_get), \
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         assert result["passing"] is False
         assert "not_collected" not in result
 
     def test_clean_result_with_a_gap_on_another_lockfile_is_not_collected(self, collector):
-        tree = RepoTree("o", "r", ["requirements.txt", "Cargo.lock"], truncated=False)
+        tree = RepoTree(FakeForge(), "o/r", ["requirements.txt", "Cargo.lock"], truncated=False)
         py_content = base64.b64encode(b"numpy==1.24.0\n").decode()
 
         async def fake_get(client, url, params=None):
@@ -467,10 +469,10 @@ class TestCheckDependencyVulnerabilities:
         async def fake_batch(client, deps):
             return []
 
-        with patch.object(collector, "_github_get", side_effect=fake_get), \
+        with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
             result = asyncio.run(
-                collector._check_dependency_vulnerabilities(None, "o", "r", tree)
+                collector._check_dependency_vulnerabilities(None, "o/r", tree)
             )
         # A clean scan of requirements.txt alone can't stand in for the
         # Cargo.lock that couldn't be read -- it might have held the issue.

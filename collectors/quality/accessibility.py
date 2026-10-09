@@ -14,15 +14,15 @@ Checks (per the report):
 """
 
 import asyncio
-import base64
 import httpx
 import logging
 import re
 from typing import Any, Dict, List, Optional
 
 from collectors.ecosystem.base import (
-    _VENDORED_DIR, COLLECTION_GAP, CONTAINER_FILE_PATTERNS, GitHubCollectorBase, RepoTree, RetryingTransport,
+    _VENDORED_DIR, COLLECTION_GAP, CONTAINER_FILE_PATTERNS, RepoTree, RetryingTransport,
 )
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -99,42 +99,44 @@ _TREE_PATTERNS = {
     for label, pattern in CONTAINER_FILE_PATTERNS.items() if label != "docker-compose"
 }
 
-class AccessibilityCollector(GitHubCollectorBase):
+class AccessibilityCollector:
     """Detects portable build systems and container configs (Section 4.3.5)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Checking accessibility / portability for {owner}/{repo}")
+        logger.info(f"Checking accessibility / portability for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            tree = await RepoTree.fetch(client, self.github_headers, owner, repo)
-            result = self._scan(tree, repo_name, owner, repo)
+            tree = await RepoTree.fetch(client, self.forge, ref)
+            result = self._scan(tree, repo_name, ref)
             if not result["has_portable_build_system"] and tree is not COLLECTION_GAP:
                 other = self._other_build(tree)
                 if other:
                     result["has_portable_build_system"] = True
                     result["other_build"] = other
             if not result["has_container"] and tree is not COLLECTION_GAP:
-                image = await self._e4s_image(client, owner, repo)
+                image = await self._e4s_image(client, ref)
                 if image:
                     result["has_container"] = True
                     result["container_image"] = image
             if not result["has_portable_build_system"] and tree is not COLLECTION_GAP:
-                package = await self._python_package(client, owner, repo, result)
+                package = await self._python_package(client, ref, result)
                 if package:
                     result["has_portable_build_system"] = True
                     result["python_package"] = package
             return result
 
-    async def _e4s_image(self, client: httpx.AsyncClient, owner: str, repo: str) -> Optional[str]:
+    async def _e4s_image(self, client: httpx.AsyncClient, ref: str) -> Optional[str]:
         """"E4S container image (Spack package <name>)" when the project's
         Spack recipe is in the E4S image environment, else None."""
         global _e4s_specs
@@ -150,7 +152,9 @@ class AccessibilityCollector(GitHubCollectorBase):
         # The same recipe lookup the collaboration collector uses: the repo's
         # own name, then recipes whose URLs are this repository.
         from collectors.ecosystem.collaboration import CollaborationCollector
-        names = [repo.lower()] + await CollaborationCollector()._main_spack_recipe(client, owner, repo)
+        owner, _, repo = ref.rpartition("/")
+        names = [repo.lower()] + await CollaborationCollector(self.forge)._main_spack_recipe(
+            client, owner, repo)
         for name in names:
             if name in _e4s_specs:
                 return f"E4S container image (Spack package {name})"
@@ -169,7 +173,7 @@ class AccessibilityCollector(GitHubCollectorBase):
         return None
 
     async def _python_package(
-        self, client: httpx.AsyncClient, owner: str, repo: str, result: Dict[str, Any]
+        self, client: httpx.AsyncClient, ref: str, result: Dict[str, Any]
     ) -> Optional[str]:
         """The file that makes the project pip-installable, or None.
 
@@ -185,19 +189,16 @@ class AccessibilityCollector(GitHubCollectorBase):
         path = details.get("pyproject.toml", {}).get("file")
         if not path:
             return None
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}")
-        if not isinstance(data, dict):
+        text = await self.forge.file_content(client, ref, path)
+        if not text:
             return None
-        text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
         return path if re.search(r"^\[(?:build-system|project)\]", text, re.M) else None
 
     def _scan(
         self,
         tree,
         repo_name: str,
-        owner: str,
-        repo: str,
+        ref: str,
     ) -> Dict[str, Any]:
         """Resolved against a RepoTree (or COLLECTION_GAP) rather than probed
         one literal path at a time -- see METRIC_BLIND_SPOTS.md class F1/F2.
@@ -258,8 +259,8 @@ class AccessibilityCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "has_container": has_container,
             "has_portable_build_system": has_portable_build,
             "categories": category_results,
@@ -275,7 +276,7 @@ class AccessibilityCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "has_container": False,
             "has_portable_build_system": False,
             "categories": {},

@@ -38,7 +38,6 @@ re-fetched.
 """
 
 import asyncio
-import base64
 import httpx
 import json
 import logging
@@ -46,7 +45,8 @@ import re
 import tomllib
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RepoTree, RetryingTransport
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
@@ -232,28 +232,30 @@ _LOCKFILE_SPECS: List[Tuple[str, List[str], Any]] = [
 ]
 
 
-class SupplyChainCollector(GitHubCollectorBase):
+class SupplyChainCollector:
     """Collects supply-chain transparency indicators (CASS Report Section 4.3.8)."""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
         repo_name = package.get("name", "Unknown")
         repo_url = package.get("repo_url", "")
 
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
 
-        owner, repo = owner_repo
-        logger.info(f"Collecting supply chain metrics for {owner}/{repo}")
+        logger.info(f"Collecting supply chain metrics for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             (release_assets, assets_gap), tree = await asyncio.gather(
-                self._fetch_release_assets(client, owner, repo),
-                RepoTree.fetch(client, self.github_headers, owner, repo),
+                self._fetch_release_assets(client, ref),
+                RepoTree.fetch(client, self.forge, ref),
             )
             root_sbom, root_gap = self._check_root_sbom(tree)
-            dep_vulns = await self._check_dependency_vulnerabilities(client, owner, repo, tree)
+            dep_vulns = await self._check_dependency_vulnerabilities(client, ref, tree)
 
         sbom = self._find_sbom(root_sbom, release_assets, root_gap or assets_gap)
         provenance = self._find_provenance(release_assets, assets_gap)
@@ -272,8 +274,8 @@ class SupplyChainCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "has_sbom": sbom["passing"],
             "has_build_provenance": provenance["passing"],
             "sub_metrics": sub_metrics,
@@ -294,18 +296,19 @@ class SupplyChainCollector(GitHubCollectorBase):
         return tree.match_url(_SBOM_ROOT_FILES), False
 
     async def _fetch_release_assets(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
         """Returns (flat list of {name, url, release}, is_gap). An empty
         list with is_gap=False is a real, confirmed result (no releases);
         is_gap=True means the release list itself couldn't be fetched, so
         an empty list here says nothing trustworthy about SBOM/provenance
         presence.
+
+        Reads each release's "assets" list ({name, browser_download_url}).
+        That is GitHub's native shape; GitLabForge.releases() maps GitLab's
+        release links onto it.
         """
-        releases = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/releases",
-            params={"per_page": _RELEASES_SAMPLE},
-        )
+        releases = await self.forge.releases(client, ref, per_page=_RELEASES_SAMPLE)
         if releases is COLLECTION_GAP:
             return [], True
 
@@ -322,7 +325,7 @@ class SupplyChainCollector(GitHubCollectorBase):
         return assets, False
 
     async def _check_dependency_vulnerabilities(
-        self, client: httpx.AsyncClient, owner: str, repo: str, tree
+        self, client: httpx.AsyncClient, ref: str, tree
     ) -> Dict[str, Any]:
         """Dependency Vulnerability Posture: known vulnerabilities in the
         project's own pinned dependencies, via OSV.dev's free, unauthenticated
@@ -350,15 +353,12 @@ class SupplyChainCollector(GitHubCollectorBase):
             path = tree.match(paths)
             if not path:
                 continue
-            data = await self._github_get(
-                client, f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
-            )
-            if data is COLLECTION_GAP:
+            text = await self.forge.file_content(client, ref, path)
+            if text is COLLECTION_GAP:
                 saw_gap = True
                 continue
-            if data is None:
+            if text is None:
                 continue
-            text = base64.b64decode(data.get("content", "")).decode("utf-8", "replace")
             found_files.append(path)
             all_deps.extend((ecosystem, name, version) for name, version in parser(text))
 
@@ -503,7 +503,7 @@ class SupplyChainCollector(GitHubCollectorBase):
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "has_sbom": False,
             "has_build_provenance": False,
             "sub_metrics": sub_metrics,

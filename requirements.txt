@@ -6,7 +6,6 @@ pyyaml>=6.0
 python-dotenv>=1.0.0
 
 # API clients
-PyGithub>=2.1.0
 requests>=2.31.0
 requests-cache>=1.1.0
 

@@ -29,7 +29,8 @@ import re
 import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
-from integrations.github_api import GitHubClient
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.interface import Forge
 from package_report import render_package_report
 
 # Setup logging
@@ -110,6 +111,12 @@ def _rescore_section(html: Optional[str]) -> Optional[str]:
     return _SCORE_LINE.sub(lambda _: f'<p><strong>Score:</strong> {shown}</p>', html, count=1)
 
 
+def _repo_stats(impact_sub: Dict) -> Dict:
+    """Stars/forks from the citation collector. Results stored before the
+    forge refactor carry them as "github_stats" with no platform."""
+    return impact_sub.get("repo_stats") or impact_sub.get("github_stats") or {}
+
+
 def _sanitize_package_config(data: Dict) -> Dict:
     """Coerce a package_config collectors:
     and overrides: blocks into well-formed dicts, dropping anything that
@@ -144,6 +151,12 @@ def _sanitize_package_config(data: Dict) -> Dict:
         }
     else:
         result.pop("overrides", None)
+
+    repo_type = result.get("repo_type")
+    if isinstance(repo_type, str) and repo_type.strip():
+        result["repo_type"] = repo_type.strip().lower()
+    else:
+        result.pop("repo_type", None)
 
     return result
 
@@ -435,22 +448,24 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Impact dimension for {package['name']}")
 
-        try:
-            from collectors.impact.citation import CitationMetricCollector
+        forge = self._forge_for_package(package)
+        if forge is not None:
+            try:
+                from collectors.impact.citation import CitationMetricCollector
 
-            collector = CitationMetricCollector(self.config)
-            result = await collector.collect(package)
-            score = result.get("score", 0) if result else 0
-            return {
-                "dimension": "impact",
-                "score": score,
-                "max_score": 100.0,
-                "sub_results": result,
-            }
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.error(f"Citation collection failed for {package['name']}: {e}")
+                collector = CitationMetricCollector(self.config, forge)
+                result = await collector.collect(package)
+                score = result.get("score", 0) if result else 0
+                return {
+                    "dimension": "impact",
+                    "score": score,
+                    "max_score": 100.0,
+                    "sub_results": result,
+                }
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.error(f"Citation collection failed for {package['name']}: {e}")
 
         # Fall back to dimension placeholder
         try:
@@ -511,34 +526,38 @@ class MetricsOrchestrator:
         token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
         return token if token else None
 
-    async def _confirm_repo_exists(self, repo_url: str) -> bool:
-        """Whether repo_name ("owner/repo") resolves to a real, accessible
-        GitHub repository.
+    def _forge_for_package(self, package: Dict) -> Optional[Forge]:
+        """The Forge for a package, chosen by its repo_type (see Forge.for_repo)."""
+        return Forge.for_repo(
+            package.get("repo_type"),
+            package.get("repo_url", ""),
+            self.config.get("api_credentials", {}),
+        )
+
+    async def _confirm_repo_exists(self, forge: Forge, repo_url: str) -> bool:
+        """Whether repo_url resolves to a real, accessible repository on its
+        forge.
 
         A catalog entry can point at a renamed, deleted, or mistranscribed
         repository. Without this check, every collector's own 404s on that
         path get read as a confirmed absence of each thing it looked for,
         rather than one clear "this repository doesn't exist."
 
-        Fails open (returns True) on anything other than a clean 404 -- a
-        network hiccup or rate limit here must not silently drop a valid
+        Fails open (returns True) on anything other than a confirmed absence
+        -- a network hiccup or rate limit here must not silently drop a valid
         package from the run; per-collector gap handling is the right tool
         for that uncertainty.
         """
+        ref = forge.extract_ref(repo_url)
+        if ref is None:
+            return False
         try:
-            owner, repo = GitHubClient.extract_owner_repo(repo_url)
-            headers = self._github_headers(
-                "https://api.github.com/", "application/vnd.github.v3+json"
-            )
-
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}", headers=headers
-                )
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                info = await forge.repo_info(client, ref)
         except Exception as e:
-            logger.warning(f"Could not verify {owner}/{repo} exists: {e!r} -- proceeding as if it does")
+            logger.warning(f"Could not verify {ref} exists: {e!r} -- proceeding as if it does")
             return True
-        return resp.status_code != 404
+        return info is not None
 
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
@@ -550,14 +569,16 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Ecosystem dimension for {package['name']}")
 
-        github_token = self._get_github_token()
+        forge = self._forge_for_package(package)
+        if forge is None:
+            return {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
         sub_results = {}
 
         # 4.2.1 CoC, Governance, and Contributor Guidelines
         if self._sub_enabled("ecosystem", "community_health", package):
             try:
                 from collectors.ecosystem.community_health import CommunityHealthCollector
-                collector = CommunityHealthCollector(github_token=github_token)
+                collector = CommunityHealthCollector(forge)
                 sub_results["governance"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Governance collection failed for {package['name']}: {e}")
@@ -566,7 +587,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "licensing", package):
             try:
                 from collectors.ecosystem.licensing import LicensingCollector
-                collector = LicensingCollector(github_token=github_token)
+                collector = LicensingCollector(forge)
                 sub_results["licensing"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Licensing collection failed for {package['name']}: {e}")
@@ -575,7 +596,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "active_maintenance", package):
             try:
                 from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
-                collector = ActiveMaintenanceCollector(github_token=github_token)
+                collector = ActiveMaintenanceCollector(forge)
                 sub_results["maintenance"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
@@ -584,7 +605,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "chaoss_activity", package):
             try:
                 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
-                collector = CHAOSSGovernanceCollector(github_token=github_token)
+                collector = CHAOSSGovernanceCollector(forge)
                 sub_results["chaoss_activity"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")
@@ -593,7 +614,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "openssf_badge", package):
             try:
                 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
-                collector = OpenSSFBadgeCollector(github_token=github_token)
+                collector = OpenSSFBadgeCollector(forge)
                 sub_results["openssf_badge"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
@@ -602,7 +623,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "engagement", package):
             try:
                 from collectors.ecosystem.engagement import EngagementCollector
-                collector = EngagementCollector(github_token=github_token)
+                collector = EngagementCollector(forge)
                 sub_results["engagement"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Engagement collection failed for {package['name']}: {e}")
@@ -611,7 +632,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "fair_licensing", package):
             try:
                 from collectors.ecosystem.fair_licensing import FairLicensingCollector
-                collector = FairLicensingCollector(github_token=github_token)
+                collector = FairLicensingCollector(forge)
                 sub_results["fair_licensing"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"FAIR licensing collection failed for {package['name']}: {e}")
@@ -620,7 +641,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "outreach", package):
             try:
                 from collectors.ecosystem.outreach import OutreachCollector
-                collector = OutreachCollector(github_token=github_token)
+                collector = OutreachCollector(forge)
                 sub_results["outreach"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Outreach collection failed for {package['name']}: {e}")
@@ -629,7 +650,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "welcomeness", package):
             try:
                 from collectors.ecosystem.welcomeness import WelcomenessCollector
-                collector = WelcomenessCollector(github_token=github_token)
+                collector = WelcomenessCollector(forge)
                 sub_results["welcomeness"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Welcomeness collection failed for {package['name']}: {e}")
@@ -638,7 +659,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "collaboration", package):
             try:
                 from collectors.ecosystem.collaboration import CollaborationCollector
-                collector = CollaborationCollector(github_token=github_token)
+                collector = CollaborationCollector(forge)
                 sub_results["collaboration"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Collaboration collection failed for {package['name']}: {e}")
@@ -647,7 +668,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "funding", package):
             try:
                 from collectors.ecosystem.funding import FundingCollector
-                collector = FundingCollector(github_token=github_token)
+                collector = FundingCollector(forge)
                 sub_results["funding"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Funding collection failed for {package['name']}: {e}")
@@ -656,7 +677,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("ecosystem", "openssf_scorecard", package):
             try:
                 from collectors.ecosystem.openssf_scorecard import OpenSSFScorecardCollector
-                collector = OpenSSFScorecardCollector(github_token=github_token)
+                collector = OpenSSFScorecardCollector(forge)
                 sub_results["openssf_scorecard"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")
@@ -736,14 +757,16 @@ class MetricsOrchestrator:
 
         logger.info(f"Collecting Quality dimension for {package['name']}")
 
-        github_token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
+        forge = self._forge_for_package(package)
+        if forge is None:
+            return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
         sub_results = {}
 
         # 4.3.2 Development Practices — CI/CD metrics
         if self._sub_enabled("quality", "ci_cd", package):
             try:
                 from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
-                collector = CICDMetricsCollector(self.config)
+                collector = CICDMetricsCollector(forge)
                 sub_results["ci_cd"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
@@ -752,7 +775,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "reproducibility", package):
             try:
                 from collectors.quality.reproducibility import ReproducibilityCollector
-                collector = ReproducibilityCollector(github_token=github_token)
+                collector = ReproducibilityCollector(forge)
                 sub_results["reproducibility"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Reproducibility collection failed for {package['name']}: {e}")
@@ -761,7 +784,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "accessibility", package):
             try:
                 from collectors.quality.accessibility import AccessibilityCollector
-                collector = AccessibilityCollector(github_token=github_token)
+                collector = AccessibilityCollector(forge)
                 sub_results["accessibility"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
@@ -770,7 +793,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "test_coverage", package):
             try:
                 from collectors.quality.test_coverage import TestCoverageCollector
-                collector = TestCoverageCollector(github_token=github_token)
+                collector = TestCoverageCollector(forge)
                 sub_results["test_coverage"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
@@ -779,7 +802,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "usability", package):
             try:
                 from collectors.quality.usability import UsabilityCollector
-                collector = UsabilityCollector(github_token=github_token)
+                collector = UsabilityCollector(forge)
                 sub_results["usability"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Usability collection failed for {package['name']}: {e}")
@@ -788,7 +811,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "reliability", package):
             try:
                 from collectors.quality.reliability import ReliabilityCollector
-                collector = ReliabilityCollector(github_token=github_token)
+                collector = ReliabilityCollector(forge)
                 sub_results["reliability"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Reliability collection failed for {package['name']}: {e}")
@@ -797,7 +820,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "maintainability", package):
             try:
                 from collectors.quality.maintainability import MaintainabilityCollector
-                collector = MaintainabilityCollector(github_token=github_token)
+                collector = MaintainabilityCollector(forge)
                 sub_results["maintainability"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Maintainability collection failed for {package['name']}: {e}")
@@ -806,7 +829,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "deployment_environments", package):
             try:
                 from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
-                collector = DeploymentEnvironmentCollector(github_token=github_token)
+                collector = DeploymentEnvironmentCollector(forge)
                 sub_results["deployment_environments"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Deployment environment collection failed for {package['name']}: {e}")
@@ -815,7 +838,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "dev_tooling", package):
             try:
                 from collectors.quality.development_practices.dev_tooling import DevToolingCollector
-                collector = DevToolingCollector(github_token=github_token)
+                collector = DevToolingCollector(forge)
                 sub_results["dev_tooling"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Dev tooling collection failed for {package['name']}: {e}")
@@ -824,7 +847,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "static_analysis", package):
             try:
                 from collectors.quality.static_analysis import StaticAnalysisCollector
-                collector = StaticAnalysisCollector(github_token=github_token)
+                collector = StaticAnalysisCollector(forge)
                 sub_results["static_analysis"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
@@ -833,7 +856,7 @@ class MetricsOrchestrator:
         if self._sub_enabled("quality", "supply_chain", package):
             try:
                 from collectors.quality.supply_chain import SupplyChainCollector
-                collector = SupplyChainCollector(github_token=github_token)
+                collector = SupplyChainCollector(forge)
                 sub_results["supply_chain"] = await collector.collect(package)
             except Exception as e:
                 logger.warning(f"Supply chain collection failed for {package['name']}: {e}")
@@ -905,19 +928,21 @@ class MetricsOrchestrator:
             f"Starting metrics collection for {package['name']} ({package['repo_url']})"
         )
 
-        if str(package.get("repo_type", "")).lower() != "github":
-            # Every collector assumes GitHub
-            # Leave all sub-metrics unset ("not yet collected" downstream)
-            # rather than let each one silently 404 against the wrong host
-            # and report a false "not found"/"failing" result.
+        forge = self._forge_for_package(package)
+        if forge is None:
+            # Not on a supported platform. Leave all sub-metrics unset ("not
+            # yet collected" downstream) rather than let each collector
+            # silently 404 against the wrong host and report a false
+            # "not found"/"failing" result.
             logger.info(
                 f"Skipping collection for {package['name']}: "
-                f"{package['repo_url']} is not a GitHub repo, not yet supported"
+                f"repo_type {package.get('repo_type')!r} at {package['repo_url']} "
+                f"is not a supported platform"
             )
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
-        elif not await self._confirm_repo_exists(package["repo_url"]):
+        elif not await self._confirm_repo_exists(forge, package["repo_url"]):
             logger.error(
                 f"Skipping collection for {package['name']}: "
                 f"{package['repo_url']} does not exist"
@@ -1178,20 +1203,21 @@ class MetricsOrchestrator:
             # The citation collector's "dependent_packages" is the fork
             # count (GitHub exposes no used-by count); the real reverse
             # dependencies are the Reverse-Dependency Analysis row below.
-            # It is already listed as GitHub Forks, so it isn't repeated
+            # It is already listed as Forks below, so it isn't repeated
             # under a name that claims more than it measures.
             dois = sub_metrics.get("doi_resolutions", {})
             if dois.get("raw_value", 0) > 0:
                 citation_lines.append(
                     f'<p><strong>DOI Resolutions:</strong> {dois["raw_value"]:,}</p>'
                 )
-            github_stats = impact_sub.get("github_stats", {})
-            if github_stats.get("stars", 0) > 0 or github_stats.get("forks", 0) > 0:
+            repo_stats = _repo_stats(impact_sub)
+            if repo_stats.get("stars", 0) > 0 or repo_stats.get("forks", 0) > 0:
+                platform = repo_stats.get("platform") or "GitHub"
                 citation_lines.append(
-                    f'<p><strong>GitHub Stars:</strong> {github_stats.get("stars", 0):,}</p>'
+                    f'<p><strong>{platform} Stars:</strong> {repo_stats.get("stars", 0):,}</p>'
                 )
                 citation_lines.append(
-                    f'<p><strong>GitHub Forks:</strong> {github_stats.get("forks", 0):,}</p>'
+                    f'<p><strong>{platform} Forks:</strong> {repo_stats.get("forks", 0):,}</p>'
                 )
             # Reverse-Dependency Analysis and Package-Manager Download Telemetry
             # (new measurement methods, PDF §4.1.1) — sourced from the same
@@ -1844,9 +1870,10 @@ class MetricsOrchestrator:
                 if static_analysis.get("has_codeql"):
                     rel_pts += 1
                     url = static_analysis.get("workflow_url", "")
-                    text = ("CodeQL enabled (default setup)"
+                    scanner = static_analysis.get("scanner") or "CodeQL"
+                    text = (f"{scanner} enabled (default setup)"
                             if static_analysis.get("workflow_file") == "CodeQL default setup"
-                            else "CodeQL enabled")
+                            else f"{scanner} enabled")
                     link = f'<a href="{url}">{text}</a>' if url else text
                     section_431_lines.append(f'<p><strong>Enhanced Security Analysis:</strong> {link} ✓</p>')
                 elif static_analysis.get("not_collected"):
@@ -1857,7 +1884,8 @@ class MetricsOrchestrator:
                     )
                 else:
                     section_431_lines.append(
-                        '<p><strong>Enhanced Security Analysis:</strong> No CodeQL workflow found ✗</p>'
+                        '<p><strong>Enhanced Security Analysis:</strong> No '
+                        f'{static_analysis.get("scanners_checked") or "CodeQL"} workflow found ✗</p>'
                     )
             else:
                 section_431_lines.append('<p><strong>Enhanced Security Analysis:</strong> Not yet collected</p>')
@@ -2240,7 +2268,7 @@ class MetricsOrchestrator:
         section_436_data = self._apply_section_overrides(section_436_data, ov.get("4.3.6", {}))
         section_438_data = self._apply_section_overrides(section_438_data, ov.get("4.3.8", {}))
 
-        github_stats = impact_sub.get("github_stats", {})
+        repo_stats = _repo_stats(impact_sub)
 
         # Sub-collector keys turned off by package_config/ or the project's
         # own file (not by the operator's global config) -- lets the
@@ -2252,8 +2280,8 @@ class MetricsOrchestrator:
         }
 
         result = {
-            "stars": github_stats.get("stars", 0),
-            "forks": github_stats.get("forks", 0),
+            "stars": repo_stats.get("stars", 0),
+            "forks": repo_stats.get("forks", 0),
             "config_exclusions": config_exclusions,
             "impact": {
                 "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},

@@ -6,9 +6,21 @@ from unittest.mock import AsyncMock, MagicMock
 from collectors.ecosystem.openssf_scorecard import OpenSSFScorecardCollector
 
 
+class FakeForge:
+    """Minimal stand-in for GitHubForge/GitLabForge."""
+
+    host = "github.com"
+
+    def extract_ref(self, repo_url):
+        return None if repo_url == "not-a-url" else "owner/repo"
+
+    def get_timestamp(self):
+        return "2026-01-01T00:00:00+00:00"
+
+
 @pytest.fixture
 def collector():
-    return OpenSSFScorecardCollector()
+    return OpenSSFScorecardCollector(FakeForge())
 
 
 SAMPLE_SCORECARD = {
@@ -33,7 +45,7 @@ class TestEmptyResult:
 
 class TestNoScorecardResult:
     def test_structure(self, collector):
-        result = collector._no_scorecard_result("MyPkg", "owner", "repo")
+        result = collector._no_scorecard_result("MyPkg", "owner/repo")
         assert result["scorecard_exists"] is False
         assert result["score"] is None
         assert "recommendation" in result
@@ -50,7 +62,7 @@ class TestFetchScorecard:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_scorecard(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_scorecard(mock_client, "MyPkg", "owner/repo")
         )
 
         assert result["scorecard_exists"] is True
@@ -69,7 +81,7 @@ class TestFetchScorecard:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         result = asyncio.run(
-            collector._fetch_scorecard(mock_client, "MyPkg", "owner", "repo")
+            collector._fetch_scorecard(mock_client, "MyPkg", "owner/repo")
         )
         assert result["scorecard_exists"] is False
         assert "recommendation" in result

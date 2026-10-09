@@ -13,15 +13,18 @@ import asyncio
 import httpx
 import logging
 from typing import Dict, Any, Optional, List
-import re
 
-from collectors.ecosystem.base import COLLECTION_GAP, GitHubCollectorBase, RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
 
-class LicensingCollector(GitHubCollectorBase):
+class LicensingCollector:
     """Collects licensing metrics from GitHub repositories"""
+
+    def __init__(self, forge: Forge):
+        self.forge = forge
 
     # Common license file patterns
     LICENSE_PATTERNS = [
@@ -147,21 +150,18 @@ class LicensingCollector(GitHubCollectorBase):
 
         logger.info(f"Collecting licensing metrics for {repo_name}")
 
-        # Extract owner/repo from URL
-        owner_repo = self._extract_owner_repo(repo_url)
-        if not owner_repo:
-            logger.error(f"Could not extract owner/repo from {repo_url}")
+        ref = self.forge.extract_ref(repo_url)
+        if not ref:
+            logger.error(f"Could not extract a repo reference from {repo_url}")
             return self._empty_result(repo_name)
-
-        owner, repo = owner_repo
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             # Try GitHub License API first (most accurate)
-            license_api_result = await self._get_license_from_api(client, owner, repo)
+            license_api_result = await self._get_license_from_api(client, ref)
 
             # Fallback: Check for license files manually
             if not license_api_result.get("found"):
-                license_file_result = await self._check_license_file(client, owner, repo)
+                license_file_result = await self._check_license_file(client, ref)
                 # Neither step found a license -- only a real negative if
                 # neither step gapped either; a gap on either one means the
                 # license could be there and we just couldn't confirm it.
@@ -178,8 +178,8 @@ class LicensingCollector(GitHubCollectorBase):
 
         return {
             "package_name": repo_name,
-            "repository": f"{owner}/{repo}",
-            "timestamp": self._get_timestamp(),
+            "repository": ref,
+            "timestamp": self.forge.get_timestamp(),
             "license_info": license_file_result,
             "license_analysis": license_analysis,
             "compliance_score": self._calculate_compliance_score(
@@ -188,44 +188,41 @@ class LicensingCollector(GitHubCollectorBase):
         }
 
     async def _get_license_from_api(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """
         Get license information from GitHub License API
         This is the most accurate method as GitHub detects license type
         """
-        logger.info(f"Checking GitHub License API for {owner}/{repo}")
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/license"
-        )
+        logger.info(f"Checking GitHub License API for {ref}")
+        data = await self.forge.license(client, ref)
         if data is COLLECTION_GAP:
             return {"found": False, "source": "github_api", "not_collected": True}
         if data is None:
             return {"found": False, "source": "github_api"}
 
-        license_data = data.get("license") or {}
         return {
             "found": True,
             "source": "github_api",
-            "file_path": data.get("name", "LICENSE"),
-            "url": data.get("html_url", ""),
-            "size": data.get("size", 0),
-            "license_key": license_data.get("key", "unknown"),
-            "license_name": license_data.get("name", "Unknown"),
-            "spdx_id": license_data.get("spdx_id"),
-            "download_url": data.get("download_url", ""),
+            "file_path": data["file_path"],
+            "url": data["html_url"],
+            "size": data["size"],
+            "license_key": data["key"],
+            "license_name": data["name"],
+            "spdx_id": data["spdx_id"],
+            "download_url": data["download_url"],
             "content": None,  # Will fetch if needed
         }
 
     async def _check_license_file(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         """Check for license file manually by trying common patterns"""
-        logger.info(f"Manually checking for license files in {owner}/{repo}")
+        logger.info(f"Manually checking for license files in {ref}")
 
         saw_gap = False
         for pattern in self.LICENSE_PATTERNS:
-            result = await self._probe_license_file(client, owner, repo, pattern)
+            result = await self.forge.file_metadata(client, ref, pattern)
             if result is COLLECTION_GAP:
                 saw_gap = True
                 continue
@@ -238,7 +235,7 @@ class LicensingCollector(GitHubCollectorBase):
                     "found": True,
                     "source": "manual_check",
                     "file_path": pattern,
-                    "url": result["url"],
+                    "url": result["html_url"],
                     "size": result.get("size", 0),
                     "content": content,
                     "license_key": None,
@@ -250,27 +247,6 @@ class LicensingCollector(GitHubCollectorBase):
         if saw_gap:
             result["not_collected"] = True
         return result
-
-    async def _probe_license_file(
-        self, client: httpx.AsyncClient, owner: str, repo: str, file_path: str
-    ):
-        """Check if a file exists, returning its metadata, None if confirmed
-        absent, or COLLECTION_GAP if we couldn't tell. Unlike the base
-        _check_file_exists, this also returns size/download_url, which the
-        manual fallback needs to fetch content for license-type detection.
-        """
-        data = await self._github_get(
-            client, f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
-        )
-        if data is COLLECTION_GAP:
-            return COLLECTION_GAP
-        if data is None or isinstance(data, list):
-            return None
-        return {
-            "url": data.get("html_url", ""),
-            "size": data.get("size", 0),
-            "download_url": data.get("download_url", ""),
-        }
 
     async def _get_file_content(
         self, client: httpx.AsyncClient, download_url: str, max_size: int = 50000
@@ -459,28 +435,12 @@ class LicensingCollector(GitHubCollectorBase):
             "category": analysis.get("category", "Unknown"),
         }
 
-    def _extract_owner_repo(self, repo_url: str) -> Optional[tuple]:
-        """Extract owner and repo name from GitHub URL"""
-        patterns = [
-            r"github\.com/([^/]+)/([^/]+)",
-            r"github\.com:([^/]+)/([^/]+)",
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, repo_url)
-            if match:
-                owner = match.group(1)
-                repo = match.group(2).replace(".git", "")
-                return (owner, repo)
-
-        return None
-
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         """Return empty result structure"""
         return {
             "package_name": repo_name,
             "repository": "unknown",
-            "timestamp": self._get_timestamp(),
+            "timestamp": self.forge.get_timestamp(),
             "license_info": {"found": False},
             "license_analysis": {
                 "license_type": None,
@@ -497,9 +457,3 @@ class LicensingCollector(GitHubCollectorBase):
                 "category": "Unknown",
             },
         }
-
-    def _get_timestamp(self) -> str:
-        """Get current timestamp"""
-        from datetime import datetime
-
-        return datetime.utcnow().isoformat() + "Z"
