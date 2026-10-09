@@ -118,21 +118,21 @@ with a few metrics GitLab genuinely cannot supply -- these render as "not
 yet collected", never as a zero or a failing result, so don't mistake them
 for bugs:
 
-- **Cross-repo issue search** (`search_issues`, feeding defect-trend and
-  newcomer-issue metrics) -- GitLab's instance-wide search API is
-  materially different from GitHub's, and may be disabled entirely by a
-  self-hosted instance's admin. Not implemented.
+- **Large issue counts** -- GitLab can't OR labels in one query, so label
+  counts (newcomer issues, defect trend) list matching issues per label
+  and combine them. Past 2,000 issues for one label or date window the
+  count is reported as not collected rather than undercounted. GitLab has
+  no "Bug" issue type, so the defect trend always uses labels there.
 - **Per-workflow CI breakdown** -- GitHub Actions has named workflows as a
   first-class concept; GitLab Pipelines don't have an equivalent grouping.
   `ci_workflows`/`ci_workflow_runs` always return empty for GitLab repos.
-- **Issues closed in a date window** -- GitLab's issues API can't filter
-  by close date, so the opened-versus-closed comparison in 4.2.4 is not
-  collected; the resolution cohort still is.
-- **Maintainer vs. outside contributor** -- GitLab has no author
-  association field, so membership comes from the project members API,
-  which needs a token on most instances. Without one, every author counts
-  as an outside contributor. Set the host's token under
-  `api_credentials.gitlab.<host>`.
+- **Token-gated lookups** -- some GitLab instances (gitlab.kitware.com
+  among them) require a token to list a project's members or labels.
+  Without one, every author counts as an outside contributor (GitLab has no
+  author association field, so membership is the only signal), and label
+  counts fall back to conventional names (`good first issue`, `bug`) instead
+  of the project's own (ParaView's `triage:easy`). Set the host's token
+  under `api_credentials.gitlab.<host>`.
 - **Community profile** (`/community/profile`) -- a GitHub-only aggregate
   endpoint. GitLab repos rely entirely on `community_health.py`'s own
   direct file checks (CODE_OF_CONDUCT, GOVERNANCE, CONTRIBUTING), which run

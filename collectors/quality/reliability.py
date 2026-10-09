@@ -393,32 +393,23 @@ class ReliabilityCollector:
         recent_start = today - timedelta(days=_TREND_WINDOW_DAYS)
         prev_start = today - timedelta(days=_TREND_WINDOW_DAYS * 2)
 
-        # A label containing a space or colon has to be quoted, or the search
-        # parser splits it and silently drops the rest of the label list —
-        # which returned 0 for every project until it was caught.
-        labels = ",".join(
-            f'"{l}"' if (" " in l or ":" in l) else l
-            for l in (await self._repo_defect_labels(client, ref) or _DEFECT_LABELS)
-        )
+        labels = await self._repo_defect_labels(client, ref) or _DEFECT_LABELS
 
-        async def count(qualifier: str, date_range: str) -> tuple:
-            q = f'repo:{ref} is:issue {qualifier} created:{date_range}'
-            total = await self.forge.search_issues(client, q)
+        async def count(start, end, **match) -> tuple:
+            total = await self.forge.count_issues(
+                client, ref, created_after=str(start), created_before=str(end), **match)
             if total is None:
                 # Exhausted retries or a non-200: we don't know the real
                 # count, so this is not the same as a confirmed 0.
                 return 0, True
             return total, False
 
-        recent_range = f"{recent_start}..{today}"
-        prev_range = f"{prev_start}..{recent_start}"
 
         # Issue types first, since a project using them generally does not also
         # label defects.
-        type_expr = ",".join(_DEFECT_ISSUE_TYPES)
         (recent, recent_gap), (previous, previous_gap) = await asyncio.gather(
-            count(f"type:{type_expr}", recent_range),
-            count(f"type:{type_expr}", prev_range),
+            count(recent_start, today, issue_types=_DEFECT_ISSUE_TYPES),
+            count(prev_start, recent_start, issue_types=_DEFECT_ISSUE_TYPES),
         )
         saw_gap = recent_gap or previous_gap
         source = "issue type"
@@ -436,8 +427,8 @@ class ReliabilityCollector:
             # if the type search gapped, since it's an independent query --
             # any gap it hits is merged into saw_gap below either way.
             (label_recent, recent_gap), (label_previous, previous_gap) = await asyncio.gather(
-                count(f"label:{labels}", recent_range),
-                count(f"label:{labels}", prev_range),
+                count(recent_start, today, labels=labels),
+                count(prev_start, recent_start, labels=labels),
             )
             saw_gap = saw_gap or recent_gap or previous_gap
             # Keep whichever convention actually carries the project's

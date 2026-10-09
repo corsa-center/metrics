@@ -77,13 +77,6 @@ _MAX_CONTRIBUTOR_PAGES = 5
 _MAX_COMMIT_PAGES = 10
 
 
-def _label_query(labels: List[str]) -> str:
-    """Labels for one label: qualifier. Comma-separated values are ORed, so
-    all labels take one search per state; a label with a space or colon must
-    be quoted or the parser splits it."""
-    return ",".join(f'"{l}"' if re.search(r"[\s:]", l) else l for l in labels)
-
-
 class OutreachCollector:
     """Collects contributor-growth metrics (Section 4.2.5)."""
 
@@ -207,11 +200,9 @@ class OutreachCollector:
         two requests and return an exact total instead of a page count.
         """
         queried = await self._newcomer_labels(client, ref)
-        labels = _label_query(queried)
 
         async def count(state: str) -> tuple:
-            q = f'repo:{ref} is:issue state:{state} label:{labels}'
-            total = await self.forge.search_issues(client, q)
+            total = await self.forge.count_issues(client, ref, state=state, labels=queried)
             if total is None:
                 return 0, True
             return total, False

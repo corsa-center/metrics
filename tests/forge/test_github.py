@@ -406,3 +406,36 @@ class TestNewSemanticMethods:
         wf = asyncio.run(forge.ci_workflows(client, "o/r"))
         assert wf == [{"id": 1, "name": "CodeQL", "path": "dynamic/github-code-scanning/codeql",
                        "state": "active", "html_url": "h"}]
+
+
+class TestCountIssues:
+    def _query(self, forge, monkeypatch, **filters):
+        import forge.github as gh
+        from urllib.parse import unquote
+        seen = {}
+
+        async def fake_search_get(client, url, headers):
+            seen["url"] = unquote(url)
+            return _resp(200, {"total_count": 12})
+        monkeypatch.setattr(gh, "search_get", fake_search_get)
+        n = asyncio.run(forge.count_issues(AsyncMock(), "o/r", **filters))
+        return n, seen["url"]
+
+    def test_labels_state_and_dates(self, forge, monkeypatch):
+        n, url = self._query(forge, monkeypatch, state="open", labels=["good first issue", "help-wanted"],
+                             created_after="2025-01-01", created_before="2025-12-31")
+        assert n == 12
+        assert ('repo:o/r is:issue state:open label:"good first issue",help-wanted '
+                'created:2025-01-01..2025-12-31') in url
+
+    def test_issue_types(self, forge, monkeypatch):
+        _, url = self._query(forge, monkeypatch, issue_types=["Bug", "Defect"])
+        assert "type:Bug,Defect" in url
+
+    def test_search_failure_is_unknown(self, forge, monkeypatch):
+        import forge.github as gh
+
+        async def fake_search_get(client, url, headers):
+            return None
+        monkeypatch.setattr(gh, "search_get", fake_search_get)
+        assert asyncio.run(forge.count_issues(AsyncMock(), "o/r", labels=["bug"])) is None

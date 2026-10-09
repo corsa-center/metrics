@@ -170,9 +170,8 @@ class TestLabelQuoting:
     def test_labels_with_spaces_are_quoted(self):
         # Unquoted, a label containing a space splits the search query and
         # silently drops the rest of the list — every project returned 0.
-        quoted = ",".join(
-            f'"{l}"' if (" " in l or ":" in l) else l for l in _DEFECT_LABELS
-        )
+        from forge.github import _label_query
+        quoted = _label_query(_DEFECT_LABELS)
         assert '"type: bug"' in quoted
         assert '"bug report"' in quoted
         assert quoted.startswith("bug,defect")

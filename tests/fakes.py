@@ -50,8 +50,8 @@ class FakeForge(Forge):
         self.first_commit: Optional[str] = None
         self.languages_data: Dict[str, int] = {}
         self.community: Dict[str, Any] = {}
-        # Issue search: query -> total, or a callable(query) -> total/None.
-        self.search: Union[Dict[str, Optional[int]], Callable[[str], Optional[int]]] = {}
+        # count_issues: callable(**filters) -> total or None.
+        self.issue_count: Callable[..., Optional[int]] = lambda **filters: 0
         self.opened_between: Optional[Dict[str, Any]] = {"total_count": 0, "items": []}
         self.closed_between: Optional[int] = 0
         self.recent_issue_pages: List[Optional[List[Dict[str, Any]]]] = []
@@ -231,11 +231,9 @@ class FakeForge(Forge):
     async def pr_reviews(self, client, ref, number, *, per_page=1):
         return []
 
-    async def search_issues(self, client, query, *, per_page=1):
-        self.calls.append(("search_issues", query))
-        if callable(self.search):
-            return self.search(query)
-        return self.search.get(query, 0)
+    async def count_issues(self, client, ref, **filters):
+        self.calls.append(("count_issues", filters))
+        return self.issue_count(**filters)
 
     async def issues_opened_between(self, client, ref, start, end, *, per_page=100):
         return self.opened_between

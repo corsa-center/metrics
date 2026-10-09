@@ -35,6 +35,14 @@ def _is_bot_login(login: str) -> bool:
     return login.endswith("[bot]") or login.endswith("-bot")
 
 
+def _label_query(values: List[str]) -> str:
+    """Values for one label:/type: search qualifier. Comma-separated values
+    are ORed; a value with a space or colon must be quoted, or the search
+    parser splits it and silently drops the rest of the list -- which once
+    returned 0 for every project."""
+    return ",".join(f'"{v}"' if re.search(r"[\s:]", v) else v for v in values)
+
+
 class GitHubForge(Forge):
     """Provides shared GitHub API utilities for ecosystem/quality collectors."""
 
@@ -626,23 +634,30 @@ class GitHubForge(Forge):
             params={"per_page": per_page},
         )
 
-    async def search_issues(self, client: httpx.AsyncClient, query: str, *, per_page: int = 1):
-        """Total count of issues/PRs matching a GitHub search query, or None
-        if the search couldn't be completed (rate limited after retries, or
-        a network error) -- deliberately not the same as a confirmed 0.
-
-        `query` is the raw GitHub search qualifier string (e.g.
-        'repo:o/r is:issue label:bug created:2026-01-01..2026-02-01'),
-        URL-encoded here. Uses the shared cross-collector search rate
-        limiter in collectors/rate_limit.py -- GitHub's search API has a
-        much tighter budget (30/min) than its core REST API, and that
-        limiter is process-wide on purpose, not per-forge-instance.
-        GitLab's search API has different semantics entirely and may be
-        disabled instance-wide on self-hosted installs -- no attempt at
-        parity here yet.
-        """
+    async def count_issues(
+        self, client: httpx.AsyncClient, ref: str, *,
+        state: Optional[str] = None,
+        labels: Optional[List[str]] = None,
+        issue_types: Optional[List[str]] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+    ) -> Optional[int]:
+        """See Forge.count_issues. One issue search: comma-separated values
+        in a label:/type: qualifier are ORed, so any number of labels costs
+        one request. Uses the shared cross-collector search rate limiter in
+        collectors/rate_limit.py -- GitHub's search API has a much tighter
+        budget (30/min) than its core REST API."""
+        q = f"repo:{ref} is:issue"
+        if state:
+            q += f" state:{state}"
+        if issue_types:
+            q += f" type:{_label_query(issue_types)}"
+        if labels:
+            q += f" label:{_label_query(labels)}"
+        if created_after or created_before:
+            q += f" created:{created_after or '*'}..{created_before or '*'}"
         resp = await search_get(
-            client, f"https://api.github.com/search/issues?q={quote(query)}&per_page={per_page}",
+            client, f"https://api.github.com/search/issues?q={quote(q)}&per_page=1",
             self.github_headers,
         )
         if resp is None:

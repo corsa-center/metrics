@@ -20,17 +20,14 @@ from GitHub's -- see especially:
     deployment's outcome inline, unlike GitHub's separate statuses_url
     follow-up -- deployments() smuggles the status string through that same
     field name so no second request is needed.
-  - `search_issues`: NOT IMPLEMENTED (always returns None, i.e. "not
-    collected"). GitHub's compound search-qualifier query string
-    (`repo:x is:issue label:y created:date..date`) has no equivalent
-    GitLab query language; GitLab's Issues API takes structured params
-    (created_after/created_before/labels/state) instead. Translating the
-    two properly means changing search_issues' own signature (structured
-    kwargs instead of a raw query string) and updating both callers
-    (reliability.py, outreach.py) -- real design work, not a mechanical
-    port, deliberately left undone rather than guessed at. This means
-    reliability.py's defect trend and outreach.py's newcomer-issue counts
-    both read as "not collected" for GitLab repos until this lands.
+  - `count_issues`: GitLab's issues API ANDs the labels in one request,
+    so each label is listed separately and the issue numbers unioned (an
+    issue with two matching labels counts once). GitLab has no "Bug"-style
+    issue types (its types are issue/incident/test case/task), so a count
+    by issue type is a confirmed 0, which lets callers fall back to labels.
+  - `issues_closed_between`: the API can't filter by close date; closed
+    issues updated since the window opened are paged and filtered by
+    closed_at, giving up (None) past a page cap.
   - `pages_url`: best-effort gitlab.io URL pattern, correct for gitlab.com,
     unverified for self-hosted instances (which often serve Pages from a
     separately configured wildcard domain this forge has no way to know).
@@ -60,6 +57,9 @@ _MAX_STATS_PAGES = 10
 # entries (120 pages); this covers 30k. RepoTree.fetch caches the result
 # per package, so the cost is paid once, not once per collector.
 _MAX_TREE_PAGES = 300
+# Paging cap for counting issues by listing them (count_issues with labels,
+# issues_closed_between): 2,000 issues per query.
+_MAX_ISSUE_COUNT_PAGES = 20
 
 # GitLab issue/MR states that read as "closed" in GitHub's two-state model
 # (GitHub represents "merged" as state=closed + a populated merged_at,
@@ -686,11 +686,63 @@ class GitLabForge(Forge):
             return None
         return data.get("approved_by", []) or []
 
-    async def search_issues(self, client: httpx.AsyncClient, query: str, *, per_page: int = 1):
-        """Not implemented -- see module docstring. Always returns None
-        (a gap, not a confirmed 0), so callers correctly render
-        "not collected" rather than a fabricated zero."""
+    async def _issue_iids(self, client: httpx.AsyncClient, ref: str, params: Dict[str, Any]):
+        """iids of every issue matching params, or None past the page cap or
+        on any failure (a partial set would undercount)."""
+        iids: set = set()
+        for page in range(1, _MAX_ISSUE_COUNT_PAGES + 1):
+            data = await self._gitlab_get(
+                client, f"/projects/{self._project_path(ref)}/issues",
+                params={**params, "per_page": 100, "page": page},
+            )
+            if not isinstance(data, list):
+                return None
+            iids.update(i.get("iid") for i in data)
+            if len(data) < 100:
+                return iids
+        logger.warning(f"Issue count for {ref} exceeds {_MAX_ISSUE_COUNT_PAGES * 100}; not collected")
         return None
+
+    async def count_issues(
+        self, client: httpx.AsyncClient, ref: str, *,
+        state: Optional[str] = None,
+        labels: Optional[List[str]] = None,
+        issue_types: Optional[List[str]] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+    ) -> Optional[int]:
+        """See Forge.count_issues and the module docstring."""
+        if issue_types:
+            return 0
+        params: Dict[str, Any] = {}
+        if state:
+            params["state"] = {"open": "opened"}.get(state, state)
+        if created_after:
+            params["created_after"] = f"{created_after}T00:00:00Z"
+        if created_before:
+            params["created_before"] = f"{created_before}T23:59:59Z"
+        if not labels:
+            # One request; the total is in the X-Total header (omitted by
+            # GitLab for very large result sets, then counted by paging).
+            url = f"{self.api_base}/projects/{self._project_path(ref)}/issues"
+            try:
+                resp = await client.get(url, headers=self.headers, params={**params, "per_page": 1})
+            except Exception as e:
+                logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
+                return None
+            if resp.status_code != 200:
+                return None
+            if resp.headers.get("X-Total"):
+                return int(resp.headers["X-Total"])
+            iids = await self._issue_iids(client, ref, params)
+            return None if iids is None else len(iids)
+        union: set = set()
+        for label in labels:
+            iids = await self._issue_iids(client, ref, {**params, "labels": label})
+            if iids is None:
+                return None
+            union |= iids
+        return len(union)
 
     async def user(self, client: httpx.AsyncClient, login: str):
         """GitLab user profile -- see GitHubForge.user.
@@ -914,8 +966,26 @@ class GitLabForge(Forge):
     async def issues_closed_between(
         self, client: httpx.AsyncClient, ref: str, start: str, end: str
     ) -> Optional[int]:
-        """Not available: GitLab's issues API can't filter by close date, so
-        this is always None (not collected), never a guessed count."""
+        """See Forge.issues_closed_between. GitLab can't filter by close
+        date, but an issue closed in the window was updated at or after it
+        opened, so closed issues updated since `start` are paged (newest
+        update first) and counted by closed_at. None past the page cap,
+        rather than an undercount."""
+        lo, hi = f"{start}T00:00:00", f"{end}T23:59:59"
+        count = 0
+        for page in range(1, _MAX_ISSUE_COUNT_PAGES + 1):
+            data = await self._gitlab_get(
+                client, f"/projects/{self._project_path(ref)}/issues",
+                params={"state": "closed", "updated_after": f"{start}T00:00:00Z",
+                        "order_by": "updated_at", "sort": "desc",
+                        "per_page": 100, "page": page},
+            )
+            if not isinstance(data, list):
+                return None
+            count += sum(1 for i in data if lo <= (i.get("closed_at") or "")[:19] <= hi)
+            if len(data) < 100:
+                return count
+        logger.warning(f"Closed-issue count for {ref} exceeds the page cap; not collected")
         return None
 
     async def labels(

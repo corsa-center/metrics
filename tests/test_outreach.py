@@ -129,15 +129,12 @@ class TestScoring:
 
 
 class TestNewcomerLabelQuery:
-    def test_all_labels_go_in_one_query(self):
-        # Comma-separated values in a label: qualifier are ORed, so all
-        # labels take one search per state.
-        from collectors.ecosystem.outreach import _NEWCOMER_LABELS, _label_query
-        assert _label_query(_NEWCOMER_LABELS) == '"good first issue","help wanted",good-first-issue,newcomer'
-
-    def test_spaced_and_namespaced_labels_are_quoted(self):
-        from collectors.ecosystem.outreach import _label_query
-        assert _label_query(["is:good-first-issue", "good-first-issue"]) == '"is:good-first-issue",good-first-issue'
+    def test_counts_ask_for_any_of_the_labels(self, collector):
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
+        asyncio.run(collector._get_newcomer_issues(None, "o/r"))
+        filters = [c[1] for c in collector.forge.calls if c[0] == "count_issues"]
+        assert sorted(f["state"] for f in filters) == ["closed", "open"]
+        assert all(f["labels"] == _NEWCOMER_LABELS for f in filters)
 
     def test_repository_labels_in_their_own_naming_are_used(self, collector):
         labels = [{"name": n} for n in ["bug", "is:good-first-issue", "is:help-wanted",
@@ -258,12 +255,12 @@ class TestRecentCommitWindow:
 
 class TestGetNewcomerIssuesGapHandling:
     def test_open_search_failure_with_zero_is_not_collected(self, collector):
-        collector.forge.search = lambda q: None if "state:open" in q else 3
+        collector.forge.issue_count = lambda **f: None if f["state"] == "open" else 3
         result = asyncio.run(collector._get_newcomer_issues(None, "o/r"))
         assert result["not_collected"] is True
 
     def test_open_confirmed_nonzero_survives_a_closed_gap(self, collector):
-        collector.forge.search = lambda q: 4 if "state:open" in q else None
+        collector.forge.issue_count = lambda **f: 4 if f["state"] == "open" else None
         result = asyncio.run(collector._get_newcomer_issues(None, "o/r"))
         assert result["open"] == 4
         assert "not_collected" not in result

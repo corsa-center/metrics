@@ -309,9 +309,21 @@ class Forge(ABC):
     ): ...
 
     @abstractmethod
-    async def search_issues(
-        self, client: httpx.AsyncClient, query: str, *, per_page: int = 1
-    ): ...
+    async def count_issues(
+        self, client: httpx.AsyncClient, ref: str, *,
+        state: Optional[str] = None,
+        labels: Optional[List[str]] = None,
+        issue_types: Optional[List[str]] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+    ) -> Optional[int]:
+        """How many issues (never pull/merge requests) match, or None if the
+        count couldn't be determined -- deliberately not the same as 0.
+
+        state: "open" or "closed" (None: both). labels / issue_types: match
+        ANY of them (None: no filter). created_after / created_before:
+        YYYY-MM-DD, inclusive.
+        """
 
     # ------------------------------------------------------------------ #
     # CI/CD and deployments

@@ -339,10 +339,31 @@ class TestPrReviews:
         assert bool(result) is False
 
 
-class TestSearchIssues:
-    def test_always_none(self, forge):
-        result = asyncio.run(forge.search_issues(None, "anything"))
-        assert result is None
+class TestCountIssues:
+    def test_no_labels_uses_x_total(self, forge):
+        client = _client_seq((200, [{"iid": 1}], {"X-Total": "37"}))
+        assert asyncio.run(forge.count_issues(client, "g/p", state="open")) == 37
+        _, kwargs = client.get.call_args
+        assert kwargs["params"]["state"] == "opened"
+
+    def test_labels_are_ored_and_deduplicated(self, forge):
+        client = _client_seq(
+            (200, [{"iid": 1}, {"iid": 2}]),   # label "bug"
+            (200, [{"iid": 2}, {"iid": 3}]),   # label "crash"
+        )
+        n = asyncio.run(forge.count_issues(client, "g/p", labels=["bug", "crash"],
+                                           created_after="2025-01-01", created_before="2025-12-31"))
+        assert n == 3
+        first = client.get.call_args_list[0].kwargs["params"]
+        assert first["labels"] == "bug" and first["created_after"] == "2025-01-01T00:00:00Z"
+        assert first["created_before"] == "2025-12-31T23:59:59Z"
+
+    def test_any_failed_label_query_is_unknown(self, forge):
+        client = _client_seq((200, [{"iid": 1}]), (503, None))
+        assert asyncio.run(forge.count_issues(client, "g/p", labels=["a", "b"])) is None
+
+    def test_issue_types_are_a_confirmed_zero(self, forge):
+        assert asyncio.run(forge.count_issues(AsyncMock(), "g/p", issue_types=["Bug"])) == 0
 
 
 class TestUser:
@@ -631,8 +652,17 @@ class TestIssueWindows:
         client = _client_seq((200, [{"iid": 1}]))
         assert asyncio.run(forge.issues_opened_between(client, "g/p", "2025-01-01", "2025-12-31")) is None
 
-    def test_closed_between_is_not_available(self, forge):
-        assert asyncio.run(forge.issues_closed_between(AsyncMock(), "g/p", "a", "b")) is None
+    def test_closed_between_counts_by_closed_at(self, forge):
+        client = _client_seq((200, [
+            {"iid": 1, "closed_at": "2025-06-01T10:00:00.000Z"},
+            {"iid": 2, "closed_at": "2024-12-31T23:00:00.000Z"},   # before the window
+            {"iid": 3, "closed_at": "2026-01-02T00:00:00.000Z"},   # after it
+        ]))
+        assert asyncio.run(forge.issues_closed_between(client, "g/p", "2025-01-01", "2025-12-31")) == 1
+
+    def test_closed_between_failure_is_unknown(self, forge):
+        client = _client_seq((503, None))
+        assert asyncio.run(forge.issues_closed_between(client, "g/p", "2025-01-01", "2025-12-31")) is None
 
 
 class TestPlatformPaths:
