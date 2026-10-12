@@ -162,6 +162,7 @@ class TestCommits:
             "message": "Fix the thing\n\nLonger body here.",
             "subject": "Fix the thing",
             "author_identity": "janedoe",
+            "author_account": "janedoe",
             "date": "2026-01-01T00:00:00Z",
             "committer_date": "2026-01-02T00:00:00Z",
         }]
@@ -439,3 +440,15 @@ class TestCountIssues:
             return None
         monkeypatch.setattr(gh, "search_get", fake_search_get)
         assert asyncio.run(forge.count_issues(AsyncMock(), "o/r", labels=["bug"])) is None
+
+
+class TestCommitAccount:
+    def test_author_account_is_the_login_or_none(self, forge):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_resp(200, [
+            {"sha": "1", "author": {"login": "octo"}, "commit": {"message": "m", "author": {"name": "Octo Cat"}}},
+            {"sha": "2", "author": None, "commit": {"message": "m", "author": {"name": "No Account"}}},
+        ]))
+        commits = asyncio.run(forge.commits(client, "o/r"))
+        assert [c["author_account"] for c in commits] == ["octo", None]
+        assert [c["author_identity"] for c in commits] == ["octo", "No Account"]

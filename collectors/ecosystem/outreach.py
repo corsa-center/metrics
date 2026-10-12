@@ -184,7 +184,11 @@ class OutreachCollector:
             if not batch:
                 break
             for commit in batch:
-                identity = commit.get("author_identity")
+                # Only commits attributable to a contributor-list entry: a
+                # commit with no linked account (author_account None) can
+                # never appear there, and counting it by display name made
+                # every such author read as "beyond the contributor list".
+                identity = commit.get("author_account")
                 if identity:
                     counts[identity] = counts.get(identity, 0) + 1
             if len(batch) < 100:

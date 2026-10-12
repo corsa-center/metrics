@@ -414,6 +414,9 @@ class GitLabForge(Forge):
                 "message": message,
                 "subject": c.get("title") or message.split("\n")[0],
                 "author_identity": c.get("author_name"),
+                # contributors() groups by author name too, so the name is
+                # the key that matches its `identity`.
+                "author_account": c.get("author_name"),
                 "date": c.get("authored_date"),
                 "committer_date": c.get("committed_date"),
             })

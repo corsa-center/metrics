@@ -240,7 +240,7 @@ class TestGetContributorsGapHandling:
 
 class TestRecentCommitWindow:
     def _walk(self, collector, total_commits):
-        collector.forge.commit_list = [{"author_identity": "a"}] * total_commits
+        collector.forge.commit_list = [{"author_identity": "a", "author_account": "a"}] * total_commits
         return asyncio.run(collector._get_recent_commit_authors(None, "o/r"))
 
     def test_hitting_the_page_cap_is_truncation(self, collector):
@@ -346,3 +346,19 @@ class TestReadmeOnboarding:
             result = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
         readme.assert_not_called()
         assert len(result["onboarding"]["found"]) == 4
+
+
+class TestCommitsWithoutAnAccount:
+    def test_unlinked_commits_are_not_counted_as_unlisted_authors(self, collector):
+        # ADIOS2 regression: commits whose author has no GitHub account were
+        # counted by display name, which never matches the contributor list
+        # (keyed by login), so Retention and Lifecycle read "not measurable".
+        collector.forge.commit_list = (
+            [{"author_identity": "alice", "author_account": "alice"}] * 3
+            + [{"author_identity": f"Jane Doe {i}", "author_account": None} for i in range(6)]
+        )
+        counts, gap, truncated = asyncio.run(collector._get_recent_commit_authors(None, "o/r"))
+        assert counts == {"alice": 3}
+        growth = collector._analyze_contributor_growth(
+            [{"identity": "alice", "commit_count": 40}], counts)
+        assert growth["contributor_list_truncated"] is False

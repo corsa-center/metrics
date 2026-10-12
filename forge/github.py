@@ -322,6 +322,9 @@ class GitHubForge(Forge):
         """List commits (newest first), or None/COLLECTION_GAP.
 
         Each item: {sha, message, subject (first line), author_identity,
+        author_account (the key contributors() reports as `identity` --
+        the GitHub login -- or None when the commit isn't linked to an
+        account, so it can't be matched against the contributor list),
         date, committer_date} -- unwraps GitHub's nested
         commit.author.{name,date} / top-level author.login (when the
         committer has a GitHub account) into one identity field, matching
@@ -355,6 +358,7 @@ class GitHubForge(Forge):
                 "message": message,
                 "subject": message.split("\n")[0],
                 "author_identity": author.get("login") or commit_author.get("name"),
+                "author_account": author.get("login"),
                 "date": commit_author.get("date"),
                 "committer_date": commit_committer.get("date"),
             })

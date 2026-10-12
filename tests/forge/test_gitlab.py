@@ -201,6 +201,7 @@ class TestCommits:
             "message": "Fix the thing\n\nBody.",
             "subject": "Fix the thing",
             "author_identity": "Jane Doe",
+            "author_account": "Jane Doe",
             "date": "2026-01-01T00:00:00Z",
             "committer_date": "2026-01-02T00:00:00Z",
         }]
