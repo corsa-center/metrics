@@ -29,7 +29,7 @@ import re
 import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
-from forge.base import COLLECTION_GAP, RetryingTransport
+from forge.base import RetryingTransport, get_default_repo_info
 from forge.interface import Forge
 from package_report import render_package_report
 
@@ -559,6 +559,17 @@ class MetricsOrchestrator:
             return True
         return info is not None
 
+    async def _get_repo_info(self, forge: Forge, repo_url: str) -> Dict:
+        ref = forge.extract_ref(repo_url)
+        if ref is None:
+            return {}
+        try:
+            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+                return await forge.repo_info(client, ref)
+        except Exception as e:
+            logger.warning(f"Could not get {ref}: {e!r}")
+            return {}
+
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
 
@@ -928,6 +939,9 @@ class MetricsOrchestrator:
             f"Starting metrics collection for {package['name']} ({package['repo_url']})"
         )
 
+        # Always include the default repo metadata
+        repo_info = get_default_repo_info()
+
         forge = self._forge_for_package(package)
         if forge is None:
             # Not on a supported platform. Leave all sub-metrics unset ("not
@@ -942,26 +956,45 @@ class MetricsOrchestrator:
             impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
             ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
             quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
-        elif not await self._confirm_repo_exists(forge, package["repo_url"]):
-            logger.error(
-                f"Skipping collection for {package['name']}: "
-                f"{package['repo_url']} does not exist"
-            )
-            impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
-            ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
-            quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
         else:
-            # Collect all 3 dimensions in parallel
-            (
-                impact_metrics,
-                ecosystem_metrics,
-                quality_metrics,
-            ) = await asyncio.gather(
-                self.collect_impact_dimension(package),
-                self.collect_ecosystem_dimension(package),
-                self.collect_quality_dimension(package),
-                return_exceptions=True,
-            )
+            real_repo_info = await self._get_repo_info(forge, package["repo_url"])
+            if not real_repo_info:
+                logger.error(
+                    f"Skipping collection for {package['name']}: "
+                    f"{package['repo_url']} does not exist"
+                )
+                impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
+                ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
+                quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+            else:
+                repo_info = real_repo_info
+
+                # Collect all 3 dimensions in parallel
+                (
+                    impact_metrics,
+                    ecosystem_metrics,
+                    quality_metrics,
+                ) = await asyncio.gather(
+                    self.collect_impact_dimension(package),
+                    self.collect_ecosystem_dimension(package),
+                    self.collect_quality_dimension(package),
+                    return_exceptions=True,
+                )
+
+        # Add metadata keys that are of interest (overwrites any specified in the package
+        # config file). Note we only update metadata here, some repo_info keys are metrics
+        # so we assume they have been dealt with by collectors.
+        package["description"] = repo_info["description"]
+        package["homepage"] = repo_info["homepage"]
+        package["archived"] = repo_info["archived"]
+        package["disabled"] = repo_info["disabled"]
+        package["language"] = repo_info["language"]
+        package["size_kb"] = repo_info["size_kb"]
+        package["created_at"] = repo_info["created_at"]
+        package["updated_at"] = repo_info["updated_at"]
+        package["pushed_at"] = repo_info["pushed_at"]
+        package["default_branch"] = repo_info["default_branch"]
+        package["license"] = repo_info["license"]
 
         # Handle exceptions
         if isinstance(impact_metrics, Exception):

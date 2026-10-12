@@ -3,7 +3,7 @@
 Only _report is tested here -- everything else in the tool is a thin,
 network-driven wrapper around already-tested collector code (RepoTree,
 ReproducibilityCollector._check_semantic_versioning,
-MetricsOrchestrator._confirm_repo_exists), by design (see the module
+MetricsOrchestrator._get_repo_info), by design (see the module
 docstring): reusing that logic rather than re-deriving it is the point,
 so there's nothing new to unit-test there beyond what those modules'
 own test suites already cover.

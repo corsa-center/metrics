@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from forge.base import COLLECTION_GAP
+from forge.base import COLLECTION_GAP, get_default_repo_info
 from forge.gitlab import GitLabForge
 from orchestrator import MetricsOrchestrator
 from tests.fakes import FakeForge
@@ -66,7 +66,7 @@ class TestCollectAllMetricsSkipsMissingRepo:
     def test_confirmed_missing_repo_skips_the_three_dimensions(self, orchestrator):
         async def go():
             with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
-                 patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=False)), \
+                 patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value={})), \
                  patch.object(orchestrator, "collect_impact_dimension") as impact, \
                  patch.object(orchestrator, "collect_ecosystem_dimension") as eco, \
                  patch.object(orchestrator, "collect_quality_dimension") as qual:
@@ -83,7 +83,7 @@ class TestCollectAllMetricsSkipsMissingRepo:
 
         async def go():
             with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
-                 patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)), \
+                 patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=get_default_repo_info())), \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
@@ -96,7 +96,7 @@ class TestCollectAllMetricsSkipsMissingRepo:
         # A host no forge supports shouldn't trigger an existence lookup at all.
         async def go():
             with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
-                 patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)) as confirm, \
+                 patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=get_default_repo_info())) as confirm, \
                  patch.object(orchestrator, "collect_impact_dimension") as impact:
                 pkg = {"name": "Elsewhere", "repo_type": "bitbucket",
                        "repo_url": "https://bitbucket.org/owner/thing"}
@@ -113,7 +113,7 @@ class TestCollectAllMetricsSkipsMissingRepo:
 
         async def go():
             with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
-                 patch.object(orchestrator, "_confirm_repo_exists", new=AsyncMock(return_value=True)) as confirm, \
+                 patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=get_default_repo_info())) as confirm, \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):

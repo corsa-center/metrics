@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlencode
 
 from collectors.rate_limit import search_get
-from forge.base import COLLECTION_GAP, is_release_tag
+from forge.base import COLLECTION_GAP, is_release_tag, get_default_repo_info
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -193,30 +193,30 @@ class GitHubForge(Forge):
         if data is COLLECTION_GAP or data is None:
             return data
         license_data = data.get("license") or {}
-        return {
-            "stars": data.get("stargazers_count", 0),
-            "forks": data.get("forks_count", 0),
-            "watchers": data.get("subscribers_count", 0),
-            "open_issues": data.get("open_issues_count", 0),
-            "description": data.get("description"),
-            "homepage": (data.get("homepage") or "").strip() or None,
-            "has_wiki": bool(data.get("has_wiki")),
-            "has_pages": bool(data.get("has_pages")),
-            "has_discussions": bool(data.get("has_discussions")),
-            "archived": bool(data.get("archived")),
-            "disabled": bool(data.get("disabled")),
-            "language": data.get("language"),
-            "size_kb": data.get("size", 0),
-            "created_at": data.get("created_at"),
-            "updated_at": data.get("updated_at"),
-            "pushed_at": data.get("pushed_at"),
-            "default_branch": data.get("default_branch") or "HEAD",
-            "license": {
-                "spdx_id": license_data.get("spdx_id"),
-                "name": license_data.get("name"),
-                "key": license_data.get("key"),
-            } if license_data else None,
-        }
+        repo_info = get_default_repo_info()
+        repo_info["stars"] = data.get("stargazers_count", 0)
+        repo_info["forks"] = data.get("forks_count", 0)
+        repo_info["watchers"] = data.get("subscribers_count", 0)
+        repo_info["open_issues"] = data.get("open_issues_count", 0)
+        repo_info["description"] = data.get("description")
+        repo_info["homepage"] = (data.get("homepage") or "").strip() or None
+        repo_info["has_wiki"] = bool(data.get("has_wiki"))
+        repo_info["has_pages"] = bool(data.get("has_pages"))
+        repo_info["has_discussions"] = bool(data.get("has_discussions"))
+        repo_info["archived"] = bool(data.get("archived"))
+        repo_info["disabled"] = bool(data.get("disabled"))
+        repo_info["language"] = data.get("language")
+        repo_info["size_kb"] = data.get("size", 0)
+        repo_info["created_at"] = data.get("created_at")
+        repo_info["updated_at"] = data.get("updated_at")
+        repo_info["pushed_at"] = data.get("pushed_at")
+        repo_info["default_branch"] = data.get("default_branch") or "HEAD"
+        repo_info["license"] = {
+            "spdx_id": license_data.get("spdx_id"),
+            "name": license_data.get("name"),
+            "key": license_data.get("key")
+        } if license_data else None
+        return repo_info
 
     async def file_metadata(self, client: httpx.AsyncClient, ref: str, path: str):
         """Like file_exists, but returns {html_url, size, download_url} for a

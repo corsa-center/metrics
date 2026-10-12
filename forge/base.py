@@ -14,6 +14,38 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Normalized repository info, or None (confirmed absent) / COLLECTION_GAP.
+# Canonical keys, stable across forges: stars, forks, watchers,
+# open_issues, description, homepage, has_wiki, has_pages,
+# has_discussions, archived, disabled, language, size_kb, created_at,
+# updated_at, pushed_at, default_branch, license ({spdx_id, name,
+# key} or None). `has_discussions` is GitHub-only -- GitLabForge
+# always returns False for it, a real answer (GitLab has no
+# Discussions feature), not a gap.
+_DEFAULT_REPO_INFO = {
+    "stars": 0,
+    "forks": 0,
+    "watchers": 0,
+    "open_issues": 0,
+    "description": None,
+    "homepage": None,
+    "has_wiki": False,
+    "has_pages": False,
+    "has_discussions": False,
+    "archived": False,
+    "disabled": False,
+    "language": None,
+    "size_kb": 0,
+    "created_at": None,
+    "updated_at": None,
+    "pushed_at": None,
+    "default_branch": "HEAD",
+    "license": None,
+}
+
+def get_default_repo_info() -> Dict:
+    return {**_DEFAULT_REPO_INFO}
+
 # Statuses worth retrying. 429/5xx are unambiguous; 403 is GitHub's shared
 # code for both a real permission error and its *secondary* (abuse-detection)
 # rate limit, so it needs the extra check below before retrying.
