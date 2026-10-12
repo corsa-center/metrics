@@ -391,6 +391,7 @@ class MetricsOrchestrator:
         filter_software: Optional[str] = None,
         group: Optional[int] = None,
         group_count: Optional[int] = None,
+        max_packages: Optional[int] = None,
     ) -> Tuple[Dict, List[Dict]]:
         """Prepare list of software packages to process
 
@@ -430,6 +431,9 @@ class MetricsOrchestrator:
             software_list.sort(key=lambda p: p["name"])
             software_list = software_list[group::group_count]
             logger.info(f"Group {group}/{group_count}: {len(software_list)} packages")
+
+        if max_packages and max_packages > 0:
+            software_list = software_list[:max_packages]
 
         logger.info(f"Prepared {len(software_list)} software packages for processing")
         return catalog, software_list
@@ -534,41 +538,12 @@ class MetricsOrchestrator:
             self.config.get("api_credentials", {}),
         )
 
-    async def _confirm_repo_exists(self, forge: Forge, repo_url: str) -> bool:
-        """Whether repo_url resolves to a real, accessible repository on its
-        forge.
-
-        A catalog entry can point at a renamed, deleted, or mistranscribed
-        repository. Without this check, every collector's own 404s on that
-        path get read as a confirmed absence of each thing it looked for,
-        rather than one clear "this repository doesn't exist."
-
-        Fails open (returns True) on anything other than a confirmed absence
-        -- a network hiccup or rate limit here must not silently drop a valid
-        package from the run; per-collector gap handling is the right tool
-        for that uncertainty.
-        """
-        ref = forge.extract_ref(repo_url)
-        if ref is None:
-            return False
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                info = await forge.repo_info(client, ref)
-        except Exception as e:
-            logger.warning(f"Could not verify {ref} exists: {e!r} -- proceeding as if it does")
-            return True
-        return info is not None
-
     async def _get_repo_info(self, forge: Forge, repo_url: str) -> Dict:
         ref = forge.extract_ref(repo_url)
         if ref is None:
             return {}
-        try:
-            async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                return await forge.repo_info(client, ref)
-        except Exception as e:
-            logger.warning(f"Could not get {ref}: {e!r}")
-            return {}
+        async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
+            return await forge.repo_info(client, ref)
 
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
@@ -982,19 +957,11 @@ class MetricsOrchestrator:
                 )
 
         # Add metadata keys that are of interest (overwrites any specified in the package
-        # config file). Note we only update metadata here, some repo_info keys are metrics
-        # so we assume they have been dealt with by collectors.
-        package["description"] = repo_info["description"]
-        package["homepage"] = repo_info["homepage"]
-        package["archived"] = repo_info["archived"]
-        package["disabled"] = repo_info["disabled"]
-        package["language"] = repo_info["language"]
-        package["size_kb"] = repo_info["size_kb"]
-        package["created_at"] = repo_info["created_at"]
-        package["updated_at"] = repo_info["updated_at"]
-        package["pushed_at"] = repo_info["pushed_at"]
-        package["default_branch"] = repo_info["default_branch"]
-        package["license"] = repo_info["license"]
+        # config file as long as the repo info is present). Note we only update metadata
+        # here, some repo_info keys are metrics so we assume they have been dealt with by collectors.
+        metadata_keys = ["description", "homepage", "archived", "disabled", "language", "size_kb", "created_at",
+                         "updated_at", "pushed_at", "default_branch", "license"]
+        package.update((k, repo_info[k]) for k in metadata_keys if repo_info.get(k))
 
         # Handle exceptions
         if isinstance(impact_metrics, Exception):
@@ -1073,6 +1040,7 @@ class MetricsOrchestrator:
         dry_run: bool = False,
         group: Optional[int] = None,
         group_count: Optional[int] = None,
+        max_packages: Optional[int] = None,
     ) -> Dict:
         """Process all software packages
 
@@ -1085,7 +1053,7 @@ class MetricsOrchestrator:
         Returns:
             Dictionary of all metrics keyed by repository name
         """
-        catalog, software_list = await self.prepare_software_list(filter_software, group, group_count)
+        catalog, software_list = await self.prepare_software_list(filter_software, group, group_count, max_packages)
         all_metrics = {}
 
         # Packages are independent, and each one spends nearly all its time
@@ -2461,6 +2429,10 @@ async def main():
         "--group-count", type=int, default=None,
         help="Split the catalog into this many slices; used with --group",
     )
+    parser.add_argument(
+        "--max-packages", type=int, default=None,
+        help="Stop processing after this many packages",
+    )
 
     args = parser.parse_args()
 
@@ -2471,6 +2443,7 @@ async def main():
             dry_run=args.dry_run,
             group=args.group,
             group_count=args.group_count,
+            max_packages=args.max_packages
         )
 
         logger.info(f"\n{'='*60}")

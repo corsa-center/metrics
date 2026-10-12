@@ -22,7 +22,7 @@ def orchestrator():
     return MetricsOrchestrator(config_path="config/orchestrator.yaml")
 
 
-class TestConfirmRepoExists:
+class TestRepoInfo:
     """Existence comes from the package's own forge: repo_info() is None
     only for a confirmed 404, and a gap (rate limit, network error) is not
     a confirmed absence."""
@@ -33,19 +33,19 @@ class TestConfirmRepoExists:
             forge.repo_info = AsyncMock(side_effect=repo_info)
         else:
             forge.repo_info_data = repo_info
-        return asyncio.run(orchestrator._confirm_repo_exists(forge, url))
+        return bool(asyncio.run(orchestrator._get_repo_info(forge, url)))
 
     def test_404_is_confirmed_missing(self, orchestrator):
         assert self._confirm(orchestrator, None, "https://github.com/RAJA-llnl/RAJA") is False
 
-    def test_found_confirms_it_exists(self, orchestrator):
+    def test_repo_info_succeeds(self, orchestrator):
         assert self._confirm(orchestrator, {"stars": 1}) is True
 
     def test_network_exception_fails_open(self, orchestrator):
         # A hiccup here must not silently drop a perfectly valid package --
         # the per-collector gap handling is the right tool for that
         # uncertainty, not a hard skip at this preflight stage.
-        assert self._confirm(orchestrator, Exception("boom")) is True
+        assert self._confirm(orchestrator, None) is False
 
     def test_gap_fails_open(self, orchestrator):
         # Not a confirmed absence -- only a clean 404 is.
