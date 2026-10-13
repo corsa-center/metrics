@@ -23,36 +23,35 @@ def orchestrator():
 
 
 class TestRepoInfo:
-    """Existence comes from the package's own forge: repo_info() is None
-    only for a confirmed 404, and a gap (rate limit, network error) is not
+    """repo_info() is None only for a confirmed 404, and a gap (rate limit, network error) is not
     a confirmed absence."""
 
-    def _confirm(self, orchestrator, repo_info, url="https://github.com/LLNL/RAJA"):
+    def _repo_info(self, orchestrator, repo_info, url="https://github.com/LLNL/RAJA"):
         forge = FakeForge()
         if isinstance(repo_info, Exception):
             forge.repo_info = AsyncMock(side_effect=repo_info)
         else:
             forge.repo_info_data = repo_info
-        return bool(asyncio.run(orchestrator._get_repo_info(forge, url)))
+        return asyncio.run(orchestrator._get_repo_info(forge, url))
 
     def test_404_is_confirmed_missing(self, orchestrator):
-        assert self._confirm(orchestrator, None, "https://github.com/RAJA-llnl/RAJA") is False
+        assert self._repo_info(orchestrator, None, "https://github.com/RAJA-llnl/RAJA") is None
 
     def test_repo_info_succeeds(self, orchestrator):
-        assert self._confirm(orchestrator, {"stars": 1}) is True
+        assert bool(self._repo_info(orchestrator, {"stars": 1})) is True
 
     def test_network_exception_fails_open(self, orchestrator):
         # A hiccup here must not silently drop a perfectly valid package --
         # the per-collector gap handling is the right tool for that
         # uncertainty, not a hard skip at this preflight stage.
-        assert self._confirm(orchestrator, None) is False
+        assert bool(self._repo_info(orchestrator, {})) is False
 
     def test_gap_fails_open(self, orchestrator):
         # Not a confirmed absence -- only a clean 404 is.
-        assert self._confirm(orchestrator, COLLECTION_GAP) is True
+        assert bool(self._repo_info(orchestrator, COLLECTION_GAP)) is False
 
     def test_unparseable_url_is_missing(self, orchestrator):
-        assert self._confirm(orchestrator, {"stars": 1}, "not-a-url") is False
+        assert bool(self._repo_info(orchestrator, {"stars": 1}, "not-a-url")) is False
 
 
 class TestCollectAllMetricsSkipsMissingRepo:
