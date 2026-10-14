@@ -42,7 +42,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
-from forge.base import COLLECTION_GAP, is_release_tag
+from forge.base import COLLECTION_GAP, is_release_tag, get_default_repo_info
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -205,30 +205,25 @@ class GitLabForge(Forge):
         license_data = data.get("license") or {}
         statistics = data.get("statistics") or {}
         pages_level = data.get("pages_access_level")
-        return {
-            "stars": data.get("star_count", 0),
-            "forks": data.get("forks_count", 0),
-            "watchers": 0,
-            "open_issues": data.get("open_issues_count", 0),
-            "description": data.get("description"),
-            "homepage": None,
-            "has_wiki": bool(data.get("wiki_enabled")),
-            "has_pages": pages_level not in (None, "disabled"),
-            "has_discussions": False,
-            "archived": bool(data.get("archived")),
-            "disabled": False,
-            "language": None,
-            "size_kb": round(statistics.get("repository_size", 0) / 1024) if statistics else 0,
-            "created_at": data.get("created_at"),
-            "updated_at": data.get("last_activity_at"),
-            "pushed_at": data.get("last_activity_at"),
-            "default_branch": data.get("default_branch") or "HEAD",
-            "license": {
-                "spdx_id": None,
-                "name": license_data.get("name"),
-                "key": license_data.get("key"),
-            } if license_data else None,
-        }
+        repo_info = get_default_repo_info()
+        repo_info["stars"] = data.get("star_count", 0)
+        repo_info["forks"] = data.get("forks_count", 0)
+        repo_info["open_issues"] = data.get("open_issues_count", 0)
+        repo_info["description"] = data.get("description")
+        repo_info["has_wiki"] = bool(data.get("wiki_enabled"))
+        repo_info["has_pages"] = pages_level not in (None, "disabled")
+        repo_info["archived"] = bool(data.get("archived"))
+        repo_info["size_kb"] = round(statistics.get("repository_size", 0) / 1024) if statistics else 0
+        repo_info["created_at"] = data.get("created_at")
+        repo_info["updated_at"] = data.get("last_activity_at")
+        repo_info["pushed_at"] = data.get("last_activity_at")
+        repo_info["default_branch"] = data.get("default_branch") or "HEAD"
+        repo_info["license"] = {
+            "spdx_id": None,
+            "name": license_data.get("name"),
+            "key": license_data.get("key")
+        } if license_data else None
+        return repo_info
 
     async def file_metadata(self, client: httpx.AsyncClient, ref: str, path: str):
         """Like GitHubForge.file_metadata. GitLab's Files API returns

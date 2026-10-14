@@ -342,7 +342,6 @@ class TestChaossScoreNone:
         assert "<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>" in section
 
     def test_one_failing_package_does_not_drop_the_others(self, orchestrator, tmp_path, monkeypatch):
-        orchestrator.output_path = tmp_path
         real = orchestrator._transform_for_dashboard
 
         def transform(metrics, overrides):
@@ -351,13 +350,23 @@ class TestChaossScoreNone:
             return real(metrics, overrides)
         monkeypatch.setattr(orchestrator, "_transform_for_dashboard", transform)
         with pytest.raises(RuntimeError, match="bad/pkg"):
-            orchestrator._write_dashboard_output({"bad/pkg": {"overrides":{"bad": True}}, "good/pkg": {}}, {"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
+            orchestrator._write_dashboard_output(tmp_path, {"bad/pkg": {"overrides":{"bad": True}}, "good/pkg": {}}, {"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
         assert (tmp_path / "pkg-metrics" / "metrics.json").exists()
 
     def test_same_named_packages_are_reported(self, orchestrator, tmp_path, caplog):
-        orchestrator.output_path = tmp_path
-        orchestrator._write_dashboard_output({"A/tool": {}, "a/Tool": {}}, {"A/tool": _base_metrics(), "a/Tool": _base_metrics()})
+        orchestrator._write_dashboard_output(tmp_path, {"A/tool": {}, "a/Tool": {}}, {"A/tool": _base_metrics(), "a/Tool": _base_metrics()})
         assert "both write tool-metrics/metrics.json" in caplog.text.lower()
+
+
+class TestWriteMetrics:
+    def test_output_directory_is_created(self, orchestrator, tmp_path):
+        # write_metrics creates the directory rather than main() doing it,
+        # so a dry run leaves the filesystem untouched.
+        out = tmp_path / "nested" / "output"
+        metrics = {"org/pkg": {**_base_metrics(), "overall_score": 42}}
+        orchestrator.write_metrics(out, {"org/pkg": {}}, metrics)
+        assert (out / "orchestrator_summary.json").exists()
+        assert (out / "pkg-metrics" / "metrics.json").exists()
 
 
 class TestPlatformLabels:

@@ -14,6 +14,61 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Normalized repository info, or None (confirmed absent) / COLLECTION_GAP.
+# The dict below is the canonical key list -- keys are stable across forges,
+# and each forge's repo_info() fills in from these defaults rather than
+# restating them, so a new key only has to be added here. `license` is
+# {spdx_id, name, key} or None. `has_discussions` is GitHub-only --
+# GitLabForge always returns False for it, a real answer (GitLab has no
+# Discussions feature), not a gap.
+_DEFAULT_REPO_INFO = {
+    "stars": 0,
+    "forks": 0,
+    "watchers": 0,
+    "open_issues": 0,
+    "description": None,
+    "homepage": None,
+    "has_wiki": False,
+    "has_pages": False,
+    "has_discussions": False,
+    "archived": False,
+    "disabled": False,
+    "language": None,
+    "size_kb": 0,
+    "created_at": None,
+    "updated_at": None,
+    "pushed_at": None,
+    "default_branch": "HEAD",
+    "license": None,
+}
+
+def get_default_repo_info() -> Dict:
+    return {**_DEFAULT_REPO_INFO}
+
+
+# The subset of _DEFAULT_REPO_INFO describing the repository itself rather
+# than a metric. The orchestrator copies these onto the package so they
+# reach the dashboard; the remaining keys are scored by collectors instead.
+#
+# Split by whether a falsy value carries information. For
+# NULLABLE_METADATA_KEYS it doesn't -- None or "" means the repo has no
+# such field, which reads the same as never having looked, and
+# default_branch falls back to a placeholder "HEAD" -- so a falsy value is
+# skipped and any curated catalog value survives. For
+# DEFINITE_METADATA_KEYS False/0 are real answers worth recording ("not
+# archived", "empty repo"), so only None is skipped.
+NULLABLE_METADATA_KEYS = (
+    "description",
+    "homepage",
+    "language",
+    "created_at",
+    "updated_at",
+    "pushed_at",
+    "default_branch",
+    "license",
+)
+DEFINITE_METADATA_KEYS = ("archived", "disabled", "size_kb")
+
 # Statuses worth retrying. 429/5xx are unambiguous; 403 is GitHub's shared
 # code for both a real permission error and its *secondary* (abuse-detection)
 # rate limit, so it needs the extra check below before retrying.

@@ -31,7 +31,7 @@ def orch():
 async def _prepare(orch, catalog, **kwargs):
     with patch.object(orch, "load_software_catalog", new=AsyncMock(return_value=catalog)):
         result = await orch.prepare_software_list(**kwargs)
-        return result[1]
+        return set(result[1])
 
 
 class TestNoGrouping:
@@ -56,16 +56,16 @@ class TestGrouping:
         catalog = _catalog([f"pkg{i}" for i in range(11)])  # odd count
         group0 = asyncio.run(_prepare(orch, catalog, group=0, group_count=2))
         group1 = asyncio.run(_prepare(orch, catalog, group=1, group_count=2))
-        names0 = {p["name"] for p in group0}
-        names1 = {p["name"] for p in group1}
-        assert names0.isdisjoint(names1)
-        assert names0 | names1 == {f"pkg{i}" for i in range(11)}
+        # names0 = {p["name"] for p in group0}
+        # names1 = {p["name"] for p in group1}
+        assert group0.isdisjoint(group1)
+        assert group0 | group1 == {f"pkg{i}" for i in range(11)}
 
     def test_slicing_is_stable_regardless_of_catalog_order(self, orch):
         names = [f"pkg{i}" for i in range(10)]
         forward = asyncio.run(_prepare(orch, _catalog(names), group=0, group_count=2))
         backward = asyncio.run(_prepare(orch, _catalog(list(reversed(names))), group=0, group_count=2))
-        assert [p["name"] for p in forward] == [p["name"] for p in backward]
+        assert forward == backward
 
     def test_filter_software_bypasses_grouping(self, orch):
         # Targeting one package by name should never depend on which
@@ -75,7 +75,50 @@ class TestGrouping:
             orch, catalog, filter_software="kokkos", group=1, group_count=2
         ))
         assert len(result) == 1
-        assert result[0]["name"] == "kokkos"
+        assert "kokkos" in result
+
+
+class TestMaxPackages:
+    def test_none_keeps_everything(self, orch):
+        result = asyncio.run(_prepare(orch, _catalog(["a", "b", "c"]), max_packages=None))
+        assert len(result) == 3
+
+    def test_a_limit_truncates(self, orch):
+        result = asyncio.run(_prepare(orch, _catalog(["a", "b", "c"]), max_packages=2))
+        assert len(result) == 2
+
+    def test_zero_means_none_not_unlimited(self, orch):
+        result = asyncio.run(_prepare(orch, _catalog(["a", "b", "c"]), max_packages=0))
+        assert result == set()
+
+
+class TestSingleRepo:
+    """--repo/--repo-type/--name scan one repository without a catalog, so
+    an individual maintainer can run this against their own project."""
+
+    def test_builds_a_one_entry_catalog_without_the_catalog_url(self, orch):
+        async def go():
+            # Patched to blow up: the catalog must not be fetched at all.
+            with patch.object(orch, "load_software_catalog", new=AsyncMock(side_effect=AssertionError)):
+                return await orch.prepare_software_list(
+                    repo="https://github.com/HDFGroup/hdf5", repo_type="github", name="HDF5"
+                )
+
+        catalog, software_list = asyncio.run(go())
+        assert software_list == ["HDF5"]
+        assert catalog == {"HDF5": {
+            "name": "HDF5",
+            "repo_url": "https://github.com/HDFGroup/hdf5",
+            "repo_type": "github",
+        }}
+
+    def test_a_repo_without_a_name_is_rejected(self, orch):
+        # The name keys both the catalog and the metrics output, so a None
+        # would otherwise travel all the way to a `None-metrics/` directory.
+        with pytest.raises(ValueError, match="name is required"):
+            asyncio.run(orch.prepare_software_list(
+                repo="https://github.com/HDFGroup/hdf5", repo_type="github"
+            ))
 
 
 class TestCatalogFetchFailure:

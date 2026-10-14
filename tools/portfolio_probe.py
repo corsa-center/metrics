@@ -66,7 +66,7 @@ async def _probe_one(
             result["unsupported"] = True
             return result
 
-        exists = await orchestrator._confirm_repo_exists(forge, repo_url)
+        exists = await orchestrator._get_repo_info(forge, repo_url) is not None
         result["exists"] = exists
         if not exists:
             return result
@@ -158,8 +158,7 @@ def _report(results: List[Dict[str, Any]]) -> int:
         print(
             "\nThese repositories 404 -- the catalog entry is stale (renamed, "
             "deleted, or mistranscribed). The pipeline already skips them "
-            "safely (orchestrator.py's _confirm_repo_exists), but the entries "
-            "themselves need correcting at the source "
+            "safely, but the entries themselves need correcting at the source "
             "(dashboard/explore/github-data/intReposInfo.json)."
         )
         return 1
