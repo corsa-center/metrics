@@ -78,6 +78,49 @@ class TestGrouping:
         assert "kokkos" in result
 
 
+class TestMaxPackages:
+    def test_none_keeps_everything(self, orch):
+        result = asyncio.run(_prepare(orch, _catalog(["a", "b", "c"]), max_packages=None))
+        assert len(result) == 3
+
+    def test_a_limit_truncates(self, orch):
+        result = asyncio.run(_prepare(orch, _catalog(["a", "b", "c"]), max_packages=2))
+        assert len(result) == 2
+
+    def test_zero_means_none_not_unlimited(self, orch):
+        result = asyncio.run(_prepare(orch, _catalog(["a", "b", "c"]), max_packages=0))
+        assert result == set()
+
+
+class TestSingleRepo:
+    """--repo/--repo-type/--name scan one repository without a catalog, so
+    an individual maintainer can run this against their own project."""
+
+    def test_builds_a_one_entry_catalog_without_the_catalog_url(self, orch):
+        async def go():
+            # Patched to blow up: the catalog must not be fetched at all.
+            with patch.object(orch, "load_software_catalog", new=AsyncMock(side_effect=AssertionError)):
+                return await orch.prepare_software_list(
+                    repo="https://github.com/HDFGroup/hdf5", repo_type="github", name="HDF5"
+                )
+
+        catalog, software_list = asyncio.run(go())
+        assert software_list == ["HDF5"]
+        assert catalog == {"HDF5": {
+            "name": "HDF5",
+            "repo_url": "https://github.com/HDFGroup/hdf5",
+            "repo_type": "github",
+        }}
+
+    def test_a_repo_without_a_name_is_rejected(self, orch):
+        # The name keys both the catalog and the metrics output, so a None
+        # would otherwise travel all the way to a `None-metrics/` directory.
+        with pytest.raises(ValueError, match="name is required"):
+            asyncio.run(orch.prepare_software_list(
+                repo="https://github.com/HDFGroup/hdf5", repo_type="github"
+            ))
+
+
 class TestCatalogFetchFailure:
     def test_unreachable_catalog_raises_instead_of_returning_empty(self, orch):
         # An empty dict made a scheduled run report success with 0 packages.

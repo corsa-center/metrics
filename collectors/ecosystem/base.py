@@ -137,7 +137,8 @@ class RepoTree:
     async def fetch(cls, client: httpx.AsyncClient, forge: Forge, ref: str):
         """A RepoTree for the default branch, or COLLECTION_GAP if the tree
         couldn't be fetched (including a confirmed-missing repository, which
-        _confirm_repo_exists screens out before collection anyway).
+        the orchestrator's _update_repo_info preflight screens out before
+        collection anyway).
 
         Cached per (platform, host, ref) and de-duplicated while in flight;
         see _tree_cache."""

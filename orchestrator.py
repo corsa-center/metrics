@@ -29,7 +29,12 @@ import re
 import yaml
 
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
-from forge.base import RetryingTransport, get_default_repo_info, COLLECTION_GAP
+from forge.base import (
+    COLLECTION_GAP,
+    DEFINITE_METADATA_KEYS,
+    NULLABLE_METADATA_KEYS,
+    RetryingTransport,
+)
 from forge.interface import Forge
 from package_report import render_package_report
 
@@ -411,16 +416,19 @@ class MetricsOrchestrator:
                 scheduled run picks a group. Ignored when filter_software
                 is set, since targeting one package should never depend on
                 which group it happens to fall in.
-            max_packages: Max number of packages to process in one run.
-            name: Name of package to scan
-            repo: URL of a single repo to scan
+            max_packages: Stop after this many packages; 0 processes none.
+            name: Catalog name for the package, required with repo since it
+                keys the metrics output.
+            repo: URL of a single repo to scan instead of the catalog
             repo_type: Type of repo to scan, must be provided if repo is specified
 
         Returns:
-            Software catalog and list of software packages to process
+            Software catalog and names of the packages to process
         """
         if repo:
-            catalog = {name : {"name": name, "repo_url": repo, "repo_type": repo_type}}
+            if not name:
+                raise ValueError("name is required when repo is given")
+            catalog = {name: {"name": name, "repo_url": repo, "repo_type": repo_type}}
         else:
             catalog = await self.load_software_catalog()
 
@@ -441,7 +449,8 @@ class MetricsOrchestrator:
             software_list = software_list[group::group_count]
             logger.info(f"Group {group}/{group_count}: {len(software_list)} packages")
 
-        if max_packages and max_packages > 0:
+        # `is not None` so --max-packages 0 means none, not "no limit".
+        if max_packages is not None and max_packages >= 0:
             software_list = software_list[:max_packages]
 
         logger.info(f"Prepared {len(software_list)} software packages for processing")
@@ -553,24 +562,34 @@ class MetricsOrchestrator:
             return {}
         try:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                 return await forge.repo_info(client, ref)
+                return await forge.repo_info(client, ref)
         except Exception as e:
+            # repo_info's own helpers already absorb 404s, rate limits and
+            # 5xx, so reaching here means something unexpected (a malformed
+            # 200 body, for one). Report it as a gap rather than a confirmed
+            # absence, but don't let it vanish -- a silent gap looks exactly
+            # like a healthy repo with nothing to say.
+            logger.warning(f"repo_info failed for {repo_url}: {e!r}")
             return COLLECTION_GAP
 
-    async def _update_repo_info(self, package) -> Tuple[bool, str]:
-        """Get information about the repository and update the package metadata if available.
+    async def _update_repo_info(self, package: Dict) -> Tuple[bool, str]:
+        """Copy repository metadata onto the package, and say whether to collect.
+
+        Doubles as the catalog-identity preflight (METRIC_BLIND_SPOTS.md
+        F13): one lookup answers both "does this repository exist?" and
+        "what does it say about itself?".
+
         Args:
-            package: package to update
+            package: package to update, in place
 
         Returns:
-            True if this succeeded or False if there was an error with the forge or a network
-            error that was not temporary.
+            (collect, reason). collect is False only when we know collection
+            is pointless -- an unsupported platform, or a repository the
+            forge confirms isn't there. A gap (rate limit, network trouble)
+            returns True: we don't know, so the collectors run and report
+            their own "not collected" rather than scoring a false zero.
+            reason explains a False, and is "" otherwise.
         """
-
-        # Update metadata keys that are of interest.
-        metadata_keys = ["description", "homepage", "archived", "disabled", "language", "size_kb", "created_at",
-                         "updated_at", "pushed_at", "default_branch", "license"]
-
         forge = self._forge_for_package(package)
         if forge is None:
             # Not on a supported platform. This will leave all sub-metrics unset ("not
@@ -582,8 +601,17 @@ class MetricsOrchestrator:
 
         repo_info = await self._get_repo_info(forge, package["repo_url"])
         if repo_info:
-            # Update package with real information
-            package.update((k, repo_info[k]) for k in metadata_keys if repo_info.get(k))
+            # Only when the lookup actually returned data -- on a gap the
+            # defaults would overwrite curated catalog values, and write a
+            # default_branch of "HEAD" for a repo we never reached.
+            package.update(
+                (k, repo_info[k]) for k in NULLABLE_METADATA_KEYS if repo_info.get(k)
+            )
+            package.update(
+                (k, repo_info[k])
+                for k in DEFINITE_METADATA_KEYS
+                if repo_info.get(k) is not None
+            )
 
         if repo_info is not COLLECTION_GAP and not repo_info:
             return False, f"unable to access {package['repo_url']}"
@@ -992,7 +1020,10 @@ class MetricsOrchestrator:
             if isinstance(quality_metrics, Exception):
                 logger.error(f"Quality dimension error: {quality_metrics}")
         else:
-            logger.info(f"Skipping collection for {package['name']}: {err}")
+            # Loud on purpose: a repository that has been renamed or deleted
+            # out from under the catalog is the F13 symptom this preflight
+            # exists to surface, and it needs a human to fix the entry.
+            logger.error(f"Skipping collection for {package['name']}: {err}")
 
         # Calculate overall score (weighted average of 3 dimensions)
         overall_score = self._calculate_overall_score(
@@ -1056,14 +1087,12 @@ class MetricsOrchestrator:
         self,
         catalog: Dict,
         software_list: List[str],
-        dry_run: bool = False,
     ) -> Dict:
         """Process all software packages
 
         Args:
             catalog: Software catalog
-            software_list: List of software packages to process
-            dry_run: If True, don't write output files
+            software_list: Names of the packages to process, keys of catalog
 
         Returns:
             Dictionary of all metrics keyed by repository name
@@ -1107,13 +1136,15 @@ class MetricsOrchestrator:
 
         return all_metrics
 
-    def write_metrics(self, output_path: Path, catalog, metrics) -> None:
+    def write_metrics(self, output_path: Path, catalog: Dict, metrics: Dict) -> None:
         """Write metrics and metrics summary reports
+
         Args:
-            output_path: Verified path to output directory
+            output_path: Output directory, created if it doesn't exist
             catalog: Software catalog
             metrics: Package metrics
-            """
+        """
+        output_path.mkdir(parents=True, exist_ok=True)
         self._write_summary_report(output_path, metrics)
         self._write_dashboard_output(output_path, catalog, metrics)
 
@@ -2454,33 +2485,37 @@ async def main():
         help="Stop processing after this many packages",
     )
     parser.add_argument(
-        "--output-path", type=str, default="./output",
-        help="Path to output directory (overrides configuration file)",
+        "--output-path", type=str, default=None,
+        help="Path to output directory (overrides output_path in the configuration file)",
     )
     parser.add_argument(
         "--repo", type=str, default=None,
-        help="URL of a repository to scan (overrides configuration file)",
+        help="URL of a single repository to scan instead of the catalog",
     )
     parser.add_argument(
         "--repo-type", type=str, default=None,
-        help="Type of repository to scan (github|gitlab)",
+        choices=["github", "gitlab"],
+        help="Type of repository to scan; required with --repo",
     )
     parser.add_argument(
         "--name", type=str, default=None,
-        help="Name of repository to scan",
+        help="Name to record the --repo results under; required with --repo",
     )
 
     args = parser.parse_args()
 
     if args.repo and not (args.repo_type and args.name):
-        logger.error(f"--repo-type and --name must be specified when using the --repo argument")
+        logger.error("--repo-type and --name must be specified when using --repo")
         sys.exit(1)
 
     try:
-        output_path = Path(args.output_path)
-        output_path.mkdir(parents=True, exist_ok=True)
-
         orchestrator = MetricsOrchestrator(args.config)
+        # --output-path wins, then the config file, then ./output. The
+        # directory itself is created by write_metrics, so a dry run leaves
+        # the filesystem untouched.
+        output_path = Path(
+            args.output_path or orchestrator.config.get("output_path") or "./output"
+        )
         catalog, software_list = await orchestrator.prepare_software_list(
             filter_software=args.software,
             group=args.group,

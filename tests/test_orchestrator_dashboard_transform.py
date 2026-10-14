@@ -358,6 +358,17 @@ class TestChaossScoreNone:
         assert "both write tool-metrics/metrics.json" in caplog.text.lower()
 
 
+class TestWriteMetrics:
+    def test_output_directory_is_created(self, orchestrator, tmp_path):
+        # write_metrics creates the directory rather than main() doing it,
+        # so a dry run leaves the filesystem untouched.
+        out = tmp_path / "nested" / "output"
+        metrics = {"org/pkg": {**_base_metrics(), "overall_score": 42}}
+        orchestrator.write_metrics(out, {"org/pkg": {}}, metrics)
+        assert (out / "orchestrator_summary.json").exists()
+        assert (out / "pkg-metrics" / "metrics.json").exists()
+
+
 class TestPlatformLabels:
     """Stars, forks and code scanning are labelled by the package's forge,
     so a GitLab project isn't reported as having "GitHub Stars"."""
