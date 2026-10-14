@@ -66,7 +66,7 @@ async def _probe_one(
             result["unsupported"] = True
             return result
 
-        exists = not await orchestrator._get_repo_info(forge, repo_url)
+        exists = await orchestrator._get_repo_info(forge, repo_url) is not None
         result["exists"] = exists
         if not exists:
             return result

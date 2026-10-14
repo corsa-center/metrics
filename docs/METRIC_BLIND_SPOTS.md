@@ -9,7 +9,7 @@ They are not seven bugs. They are six recurring defect classes, and the same
 code paths are already mis-scoring most of the portfolio.
 
 > [!IMPORTANT]
-> Every one of these defects is the same shape: **the framework asks "is the
+> Every one of these defects is the same: **the framework asks "is the
 > file at this exact path?" when it should ask "what is actually here?"** A
 > literal path list can only match spellings somebody thought to write down, and
 > there are ~112 such literals across 14 collectors.
@@ -445,8 +445,9 @@ detect, not a bug in the detector.
 
 ### Phase 5 — Validate the catalog before every run — landed (metrics side)
 
-**Removes F13's silent-zero symptom.** `collect_all_metrics` now checks
-`_confirm_repo_exists` before running any of the three CASS dimensions:
+**Removes F13's silent-zero symptom.** `collect_all_metrics` now updates
+repo metadata which has the side effect of checking that the repo actually
+exists before running any of the three CASS dimensions:
 
 - one `GET /repos/{owner}/{repo}` per package, ahead of everything else;
 - a confirmed `404` skips collection entirely for that package (same

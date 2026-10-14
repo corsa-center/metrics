@@ -31,7 +31,7 @@ def orch():
 async def _prepare(orch, catalog, **kwargs):
     with patch.object(orch, "load_software_catalog", new=AsyncMock(return_value=catalog)):
         result = await orch.prepare_software_list(**kwargs)
-        return result[1]
+        return set(result[1])
 
 
 class TestNoGrouping:
@@ -56,16 +56,16 @@ class TestGrouping:
         catalog = _catalog([f"pkg{i}" for i in range(11)])  # odd count
         group0 = asyncio.run(_prepare(orch, catalog, group=0, group_count=2))
         group1 = asyncio.run(_prepare(orch, catalog, group=1, group_count=2))
-        names0 = {p["name"] for p in group0}
-        names1 = {p["name"] for p in group1}
-        assert names0.isdisjoint(names1)
-        assert names0 | names1 == {f"pkg{i}" for i in range(11)}
+        # names0 = {p["name"] for p in group0}
+        # names1 = {p["name"] for p in group1}
+        assert group0.isdisjoint(group1)
+        assert group0 | group1 == {f"pkg{i}" for i in range(11)}
 
     def test_slicing_is_stable_regardless_of_catalog_order(self, orch):
         names = [f"pkg{i}" for i in range(10)]
         forward = asyncio.run(_prepare(orch, _catalog(names), group=0, group_count=2))
         backward = asyncio.run(_prepare(orch, _catalog(list(reversed(names))), group=0, group_count=2))
-        assert [p["name"] for p in forward] == [p["name"] for p in backward]
+        assert forward == backward
 
     def test_filter_software_bypasses_grouping(self, orch):
         # Targeting one package by name should never depend on which
@@ -75,7 +75,7 @@ class TestGrouping:
             orch, catalog, filter_software="kokkos", group=1, group_count=2
         ))
         assert len(result) == 1
-        assert result[0]["name"] == "kokkos"
+        assert "kokkos" in result
 
 
 class TestCatalogFetchFailure:

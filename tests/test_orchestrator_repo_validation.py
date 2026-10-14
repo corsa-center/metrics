@@ -22,9 +22,9 @@ def orchestrator():
     return MetricsOrchestrator(config_path="config/orchestrator.yaml")
 
 
-class TestRepoInfo:
-    """repo_info() is None only for a confirmed 404, and a gap (rate limit, network error) is not
-    a confirmed absence."""
+class TestGetRepoInfo:
+    """_update_repo_info() returns True unless there is a network problem that is not a gap (rate limit, network error)
+    """
 
     def _repo_info(self, orchestrator, repo_info, url="https://github.com/LLNL/RAJA"):
         forge = FakeForge()
@@ -34,21 +34,8 @@ class TestRepoInfo:
             forge.repo_info_data = repo_info
         return asyncio.run(orchestrator._get_repo_info(forge, url))
 
-    def test_404_is_confirmed_missing(self, orchestrator):
-        assert self._repo_info(orchestrator, None, "https://github.com/RAJA-llnl/RAJA") is None
-
     def test_repo_info_succeeds(self, orchestrator):
         assert bool(self._repo_info(orchestrator, {"stars": 1})) is True
-
-    def test_network_exception_fails_open(self, orchestrator):
-        # A hiccup here must not silently drop a perfectly valid package --
-        # the per-collector gap handling is the right tool for that
-        # uncertainty, not a hard skip at this preflight stage.
-        assert bool(self._repo_info(orchestrator, {})) is False
-
-    def test_gap_fails_open(self, orchestrator):
-        # Not a confirmed absence -- only a clean 404 is.
-        assert bool(self._repo_info(orchestrator, COLLECTION_GAP)) is False
 
     def test_unparseable_url_is_missing(self, orchestrator):
         assert bool(self._repo_info(orchestrator, {"stars": 1}, "not-a-url")) is False
@@ -90,6 +77,35 @@ class TestCollectAllMetricsSkipsMissingRepo:
 
         result = asyncio.run(go())
         assert result["dimensions"]["impact"]["score"] == 42.0
+
+    def test_gap_still_collects_normally(self, orchestrator):
+        fake_dim = {"dimension": "x", "score": 42.0, "max_score": 100.0}
+
+        async def go():
+            with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
+                 patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=COLLECTION_GAP)), \
+                 patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                return await orchestrator.collect_all_metrics(self._package("HDFGroup/hdf5"))
+
+        result = asyncio.run(go())
+        assert result["dimensions"]["impact"]["score"] == 42.0
+
+    def test_404_skips_collection(self, orchestrator):
+        async def go():
+            with patch.object(orchestrator, "_fetch_package_config", new=AsyncMock(return_value={})), \
+                 patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=None)), \
+                 patch.object(orchestrator, "collect_impact_dimension") as impact, \
+                 patch.object(orchestrator, "collect_ecosystem_dimension") as eco, \
+                 patch.object(orchestrator, "collect_quality_dimension") as qual:
+                return await orchestrator.collect_all_metrics(self._package())
+
+        result = asyncio.run(go())
+        # None of the three dimension collectors should have been called at all.
+        assert result["dimensions"]["impact"]["score"] == 0.0
+        assert result["dimensions"]["ecosystem"]["score"] == 0.0
+        assert result["dimensions"]["quality"]["score"] == 0.0
 
     def test_unsupported_platform_skips_before_the_existence_check(self, orchestrator):
         # A host no forge supports shouldn't trigger an existence lookup at all.
