@@ -56,6 +56,14 @@ class TestExtractRef:
     def test_non_github_url_is_none(self, forge):
         assert forge.extract_ref("https://gitlab.com/owner/repo") is None
 
+    def test_non_https_path_stripped(self, forge):
+        assert forge.extract_ref("git://github.com/owner/repo") is None
+
+    def test_non_github_host_containing_github_com_is_none(self, forge):
+        assert forge.extract_ref("https://gitlab.com/owner/repo/github.com/a/b/c") is None
+
+    def test_github_host_containing_github_com(self, forge):
+        assert forge.extract_ref("https://github.com/owner/repo/github.com/a/b") == "owner/repo"
 
 class TestCheckFileExists:
     def _client(self, status_code, json_body=None):
