@@ -90,6 +90,7 @@ class GitHubForge(Forge):
         """Extract (owner, repo) from a GitHub URL."""
         patterns = [
             r"github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
+            r"github\.com/([^/]+)/([^/]+)(?:/[^/])?",
             r"github\.com:([^/]+)/([^/]+?)(?:\.git)?/?$",
         ]
         for pattern in patterns:

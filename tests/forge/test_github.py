@@ -50,6 +50,9 @@ class TestExtractRef:
     def test_trailing_slash_stripped(self, forge):
         assert forge.extract_ref("https://github.com/owner/repo/") == "owner/repo"
 
+    def test_trailing_path_stripped(self, forge):
+        assert forge.extract_ref("https://github.com/owner/repo/a/b/c") == "owner/repo"
+
     def test_non_github_url_is_none(self, forge):
         assert forge.extract_ref("https://gitlab.com/owner/repo") is None
 
