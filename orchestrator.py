@@ -2562,7 +2562,7 @@ async def main():
             logger.error("--repo-type and --name must be specified when using --repo")
             sys.exit(1)
 
-        if args.summary_as_filter:
+        if args.use_summary_as_filter:
             logger.error("--repo and --use-summary-as-filter cannot be used at the same time")
             sys.exit(1)
 
