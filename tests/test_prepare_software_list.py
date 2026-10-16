@@ -77,6 +77,7 @@ class TestGrouping:
         assert len(result) == 1
         assert "kokkos" in result
 
+
 class TestProcessedPackagesFilter:
     def test_processed_packages_filter(self, orch):
         catalog = _catalog([f"pkg{i}" for i in range(11)])
@@ -87,6 +88,7 @@ class TestProcessedPackagesFilter:
         catalog = _catalog([f"pkg{i}" for i in range(11)])
         result = asyncio.run(_prepare(orch, catalog, max_packages=3, processed_packages={'pkg4': 4, 'pkg5': 5, 'pkg6': 6}))
         assert len(result) == 3
+
 
 class TestMaxPackages:
     def test_none_keeps_everything(self, orch):

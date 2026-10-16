@@ -381,6 +381,7 @@ class TestWriteMetrics:
         assert "org/pkg" in all_packages
         assert "org/pkg2" in all_packages
 
+
 class TestPlatformLabels:
     """Stars, forks and code scanning are labelled by the package's forge,
     so a GitLab project isn't reported as having "GitHub Stars"."""

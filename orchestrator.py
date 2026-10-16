@@ -21,7 +21,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -399,7 +399,7 @@ class MetricsOrchestrator:
         name: Optional[str] = None,
         repo: Optional[str] = None,
         repo_type: Optional[str] = None,
-        processed_packages: Optional[dict] = None,
+        processed_packages: Optional[Dict] = None,
     ) -> Tuple[Dict, List[str]]:
         """Prepare list of software packages to process. There are a number of ways
         that this list can be generated.
@@ -414,7 +414,7 @@ class MetricsOrchestrator:
            been processed so that these are not processed again. This is usually combined
            with the max_packages to limit how many package a processed in a batch. The
            orchestrator can then be repeatedly called until all packages have been processed.
-           The filter_software option can't be used in this case.
+           It's not expected that the filter_software option would be used in this case.
 
         3. For a single package using the repo, repo-type, and name options. The filter_software
            option doesn't make sense in this case.
@@ -1166,11 +1166,11 @@ class MetricsOrchestrator:
         try:
             with open(summary_file, "r") as f:
                 return json.load(f)
-        except Exception as e:
+        except Exception:
             return {}
 
     def write_summary(self, summary_file: Path, metrics: Dict, all_packages: Dict):
-        """Write summary report"""
+        """Write summary report. This overwrites an existing summary report with the updated version."""
 
         # Update all packages that have been processed
         for k, v in metrics.items():
@@ -1203,7 +1203,8 @@ class MetricsOrchestrator:
                 reverse=True,
             )[:10],
             "total_packages_overall": len(all_packages),
-            "avg_overall_score_overall": sum(v for v in all_packages.values()) / len(all_packages),
+            "avg_overall_score_overall": sum(v for v in all_packages.values()) / len(
+                all_packages) if all_packages else 0,
             "packages_by_score_overall": {
                 "excellent (80-100)": sum(
                     1 for v in all_packages.values() if v >= 80
@@ -2568,9 +2569,7 @@ async def main():
 
     try:
         orchestrator = MetricsOrchestrator(args.config)
-        # --output-path wins, then the config file, then ./output. The
-        # directory itself is created by write_metrics, so a dry run leaves
-        # the filesystem untouched.
+
         output_path = Path(
             args.output_path or orchestrator.config.get("output_path") or "./output"
         )
