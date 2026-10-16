@@ -88,15 +88,12 @@ class GitHubForge(Forge):
 
     def _extract_owner_repo(self, repo_url: str) -> Optional[tuple]:
         """Extract (owner, repo) from a GitHub URL."""
-        patterns = [
-            r"github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
-            r"github\.com:([^/]+)/([^/]+?)(?:\.git)?/?$",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, repo_url)
-            if match:
-                return (match.group(1), match.group(2).replace(".git", ""))
-        return None
+        match = re.search(
+            r"^(?:[a-z][a-z0-9+.-]*://)?(?:[\w.-]+@)?(?:www\.)?github\.com[:/]"
+            r"([^/]+)/([^/]+?)(?:\.git)?(?:/|$)",
+            repo_url,
+        )
+        return (match.group(1), match.group(2)) if match else None
 
     async def _check_file_exists(
         self, client: httpx.AsyncClient, owner: str, repo: str, path: str

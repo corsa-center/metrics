@@ -50,8 +50,35 @@ class TestExtractRef:
     def test_trailing_slash_stripped(self, forge):
         assert forge.extract_ref("https://github.com/owner/repo/") == "owner/repo"
 
+    def test_trailing_path_stripped(self, forge):
+        assert forge.extract_ref("https://github.com/owner/repo/a/b/c") == "owner/repo"
+
     def test_non_github_url_is_none(self, forge):
         assert forge.extract_ref("https://gitlab.com/owner/repo") is None
+
+    def test_git_protocol_url(self, forge):
+        assert forge.extract_ref("git://github.com/owner/repo") == "owner/repo"
+
+    def test_ssh_protocol_url(self, forge):
+        assert forge.extract_ref("ssh://git@github.com/owner/repo") == "owner/repo"
+
+    def test_ssh_protocol_url_with_git_suffix(self, forge):
+        assert forge.extract_ref("ssh://git@github.com/owner/repo.git") == "owner/repo"
+
+    def test_scp_syntax_with_trailing_path(self, forge):
+        assert forge.extract_ref("git@github.com:owner/repo/tree/main") == "owner/repo"
+
+    def test_dot_git_only_stripped_as_suffix(self, forge):
+        assert forge.extract_ref("https://github.com/owner/my.github.io") == "owner/my.github.io"
+
+    def test_non_github_host_containing_github_com_is_none(self, forge):
+        assert forge.extract_ref("https://gitlab.com/owner/repo/github.com/a/b/c") is None
+
+    def test_scheme_does_not_defeat_host_anchor(self, forge):
+        assert forge.extract_ref("https://evil.com/github.com/owner/repo") is None
+
+    def test_github_host_containing_github_com(self, forge):
+        assert forge.extract_ref("https://github.com/owner/repo/github.com/a/b") == "owner/repo"
 
 
 class TestCheckFileExists:
