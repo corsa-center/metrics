@@ -89,7 +89,7 @@ class GitHubForge(Forge):
     def _extract_owner_repo(self, repo_url: str) -> Optional[tuple]:
         """Extract (owner, repo) from a GitHub URL."""
         match = re.search(
-            r"^(?:https?://)?(?:[\w.-]+@)?(?:www\.)?github\.com[:/]"
+            r"^(?:[a-z][a-z0-9+.-]*://)?(?:[\w.-]+@)?(?:www\.)?github\.com[:/]"
             r"([^/]+)/([^/]+?)(?:\.git)?(?:/|$)",
             repo_url,
         )
