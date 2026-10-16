@@ -412,7 +412,7 @@ class MetricsOrchestrator:
 
         2. The processed_packages option uses the summary report to record which packages have
            been processed so that these are not processed again. This is usually combined
-           with the max_packages to limit how many package a processed in a batch. The
+           with the max_packages to limit how many packages are processed in a batch. The
            orchestrator can then be repeatedly called until all packages have been processed.
            It's not expected that the filter_software option would be used in this case.
 
@@ -2552,7 +2552,7 @@ async def main():
         "--use-summary-as-filter", action="store_true",
         help="Use the summary file to filter which packages to process. Packages listed in the summary "
              "will be excluded from the results. Can be combined with the --max-packages option to restrict "
-             "how many packages to process in one run. If no summary file exists, a new on will be created, "
+             "how many packages to process in one run. If no summary file exists, a new one will be created, "
              "otherwise the summary file will be updated with the new packages."
     )
 
