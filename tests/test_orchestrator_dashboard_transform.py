@@ -11,6 +11,7 @@ regression here fails locally instead of on the next scheduled run.
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -350,23 +351,35 @@ class TestChaossScoreNone:
             return real(metrics, overrides)
         monkeypatch.setattr(orchestrator, "_transform_for_dashboard", transform)
         with pytest.raises(RuntimeError, match="bad/pkg"):
-            orchestrator._write_dashboard_output(tmp_path, {"bad/pkg": {"overrides":{"bad": True}}, "good/pkg": {}}, {"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
+            orchestrator.write_metrics(tmp_path, {"bad/pkg": {"overrides":{"bad": True}}, "good/pkg": {}}, {"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
         assert (tmp_path / "pkg-metrics" / "metrics.json").exists()
 
     def test_same_named_packages_are_reported(self, orchestrator, tmp_path, caplog):
-        orchestrator._write_dashboard_output(tmp_path, {"A/tool": {}, "a/Tool": {}}, {"A/tool": _base_metrics(), "a/Tool": _base_metrics()})
+        orchestrator.write_metrics(tmp_path, {"A/tool": {}, "a/Tool": {}}, {"A/tool": _base_metrics(), "a/Tool": _base_metrics()})
         assert "both write tool-metrics/metrics.json" in caplog.text.lower()
 
 
 class TestWriteMetrics:
-    def test_output_directory_is_created(self, orchestrator, tmp_path):
-        # write_metrics creates the directory rather than main() doing it,
-        # so a dry run leaves the filesystem untouched.
-        out = tmp_path / "nested" / "output"
+    def test_metrics_file_is_created(self, orchestrator, tmp_path):
         metrics = {"org/pkg": {**_base_metrics(), "overall_score": 42}}
-        orchestrator.write_metrics(out, {"org/pkg": {}}, metrics)
-        assert (out / "orchestrator_summary.json").exists()
-        assert (out / "pkg-metrics" / "metrics.json").exists()
+        orchestrator.write_metrics(tmp_path, {"org/pkg": {}}, metrics)
+        assert (tmp_path / "pkg-metrics" / "metrics.json").exists()
+
+    def test_summary_file_is_created(self, orchestrator, tmp_path):
+        summary_file = tmp_path / "orchestrator_summary.json"
+        metrics = {"org/pkg": {**_base_metrics(), "overall_score": 42}}
+        orchestrator.write_summary(summary_file, metrics, {})
+        assert summary_file.exists()
+
+    def test_summary_file_is_updated(self, orchestrator, tmp_path):
+        summary_file = tmp_path / "orchestrator_summary.json"
+        metrics = {"org/pkg": {**_base_metrics(), "overall_score": 42}}
+        packages = {"org/pkg2": 82}
+        orchestrator.write_summary(summary_file, metrics, packages)
+        with open(summary_file, "r") as f:
+            all_packages = json.load(f).get("all_packages", {})
+        assert "org/pkg" in all_packages
+        assert "org/pkg2" in all_packages
 
 
 class TestPlatformLabels:

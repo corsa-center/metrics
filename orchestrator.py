@@ -351,7 +351,7 @@ class MetricsOrchestrator:
         return None
 
     async def load_software_catalog(self) -> Dict:
-        """Load software catalog from the metrics_data directory
+        """Load the full software catalog from the catalog_url
         Returns: dictionary containing catalog metadata
         """
         if not self.catalog_url:
@@ -399,8 +399,25 @@ class MetricsOrchestrator:
         name: Optional[str] = None,
         repo: Optional[str] = None,
         repo_type: Optional[str] = None,
+        processed_packages: Optional[Dict] = None,
     ) -> Tuple[Dict, List[str]]:
-        """Prepare list of software packages to process
+        """Prepare list of software packages to process. There are a number of ways
+        that this list can be generated.
+
+        1. Using the group and group_count options to process packages in a round-robin
+           fashion. This can be used to limit processing to avoid overloading APIs or
+           timeouts (e.g. by a GitHub action). The current group will need to be saved
+           externally somewhere. The filter_software and max_packages options can be
+           used to restrict packages further.
+
+        2. The processed_packages option uses the summary report to record which packages have
+           been processed so that these are not processed again. This is usually combined
+           with the max_packages to limit how many packages are processed in a batch. The
+           orchestrator can then be repeatedly called until all packages have been processed.
+           It's not expected that the filter_software option would be used in this case.
+
+        3. For a single package using the repo, repo-type, and name options. The filter_software
+           option doesn't make sense in this case.
 
         Args:
             filter_software: Optional name filter for specific software
@@ -421,6 +438,8 @@ class MetricsOrchestrator:
                 keys the metrics output.
             repo: URL of a single repo to scan instead of the catalog
             repo_type: Type of repo to scan, must be provided if repo is specified
+            processed_packages: Names of packages that have already been processed
+                to use to filter which packages to process.
 
         Returns:
             Software catalog and names of the packages to process
@@ -437,8 +456,11 @@ class MetricsOrchestrator:
             if not package.get("repo_url", 0):
                 logger.warning(f"Skipping {name} because no repository url found")
                 continue
-                # Apply filter if specified
+            # Apply filter if specified
             if filter_software and filter_software.lower() not in name.lower():
+                continue
+            # Skip package already processed
+            if processed_packages and name in processed_packages:
                 continue
             software_list.append(name)
 
@@ -1097,6 +1119,11 @@ class MetricsOrchestrator:
         Returns:
             Dictionary of all metrics keyed by repository name
         """
+
+        total = len(software_list)
+        if total == 0:
+            return {}
+
         all_metrics = {}
 
         # Packages are independent, and each one spends nearly all its time
@@ -1115,7 +1142,6 @@ class MetricsOrchestrator:
         delay = self.config.get("rate_limiting", {}).get("delay_between_packages", 2)
         semaphore = asyncio.Semaphore(max(1, concurrency))
         completed = 0
-        total = len(software_list)
 
         async def process(package: Dict) -> None:
             nonlocal completed
@@ -1136,23 +1162,21 @@ class MetricsOrchestrator:
 
         return all_metrics
 
-    def write_metrics(self, output_path: Path, catalog: Dict, metrics: Dict) -> None:
-        """Write metrics and metrics summary reports
+    def read_summary(self, summary_file: Path) -> Dict:
+        try:
+            with open(summary_file, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
-        Args:
-            output_path: Output directory, created if it doesn't exist
-            catalog: Software catalog
-            metrics: Package metrics
-        """
-        output_path.mkdir(parents=True, exist_ok=True)
-        self._write_summary_report(output_path, metrics)
-        self._write_dashboard_output(output_path, catalog, metrics)
+    def write_summary(self, summary_file: Path, metrics: Dict, all_packages: Dict):
+        """Write summary report. This overwrites an existing summary report with the updated version."""
 
-    def _write_summary_report(self, output_path: Path, metrics: Dict):
-        """Write summary report"""
-        output_file = output_path / "orchestrator_summary.json"
+        # Update all packages that have been processed
+        for k, v in metrics.items():
+            all_packages[k] = v["overall_score"]
 
-        summary = {
+        summary_report = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_packages": len(metrics),
             "avg_overall_score": sum(m["overall_score"] for m in metrics.values())
@@ -1178,12 +1202,35 @@ class MetricsOrchestrator:
                 key=lambda x: x[1],
                 reverse=True,
             )[:10],
+            "total_packages_overall": len(all_packages),
+            "avg_overall_score_overall": sum(v for v in all_packages.values()) / len(
+                all_packages) if all_packages else 0,
+            "packages_by_score_overall": {
+                "excellent (80-100)": sum(
+                    1 for v in all_packages.values() if v >= 80
+                ),
+                "good (60-79)": sum(
+                    1 for v in all_packages.values() if 60 <= v < 80
+                ),
+                "fair (40-59)": sum(
+                    1 for v in all_packages.values() if 40 <= v < 60
+                ),
+                "needs_improvement (0-39)": sum(
+                    1 for v in all_packages.values() if v < 40
+                ),
+            },
+            "top_packages_overall": sorted(
+                [(k, v) for k, v in all_packages.items()],
+                key=lambda x: x[1],
+                reverse=True,
+            )[:10],
+            "all_packages": all_packages
         }
 
-        with open(output_file, "w") as f:
-            json.dump(summary, f, indent=2)
+        with open(summary_file, "w") as f:
+            json.dump(summary_report, f, indent=2)
 
-        logger.info(f"Summary report written to {output_file}")
+        logger.info(f"Summary report written to {summary_file}")
 
     def _transform_for_dashboard(self, metrics: Dict, overrides: Dict[str, Dict[str, str]]) -> Dict:
         """Transform internal metrics into the per-package CASS v3 format.
@@ -2390,7 +2437,7 @@ class MetricsOrchestrator:
             repo = repo[:-4]
         return repo
 
-    def _write_dashboard_output(self, output_path: Path, catalog: Dict, all_metrics: Dict):
+    def write_metrics(self, output_path: Path, catalog: Dict, all_metrics: Dict):
         """Write per-package metrics.json files for the dashboard.
 
         Creates: {output_path}/{repo-name}-metrics/metrics.json for each package,
@@ -2501,21 +2548,42 @@ async def main():
         "--name", type=str, default=None,
         help="Name to record the --repo results under; required with --repo",
     )
+    parser.add_argument(
+        "--use-summary-as-filter", action="store_true",
+        help="Use the summary file to filter which packages to process. Packages listed in the summary "
+             "will be excluded from the results. Can be combined with the --max-packages option to restrict "
+             "how many packages to process in one run. If no summary file exists, a new one will be created, "
+             "otherwise the summary file will be updated with the new packages."
+    )
 
     args = parser.parse_args()
 
-    if args.repo and not (args.repo_type and args.name):
-        logger.error("--repo-type and --name must be specified when using --repo")
-        sys.exit(1)
+    if args.repo:
+        if not (args.repo_type and args.name):
+            logger.error("--repo-type and --name must be specified when using --repo")
+            sys.exit(1)
+
+        if args.use_summary_as_filter:
+            logger.error("--repo and --use-summary-as-filter cannot be used at the same time")
+            sys.exit(1)
 
     try:
         orchestrator = MetricsOrchestrator(args.config)
-        # --output-path wins, then the config file, then ./output. The
-        # directory itself is created by write_metrics, so a dry run leaves
-        # the filesystem untouched.
+
         output_path = Path(
             args.output_path or orchestrator.config.get("output_path") or "./output"
         )
+
+        if not args.dry_run:
+            output_path.mkdir(parents=True, exist_ok=True)
+
+        summary_file = output_path / "orchestrator_summary.json"
+
+        processed = {}
+        if args.use_summary_as_filter:
+            summary = orchestrator.read_summary(summary_file)
+            processed = summary.get("all_packages", {})
+
         catalog, software_list = await orchestrator.prepare_software_list(
             filter_software=args.software,
             group=args.group,
@@ -2524,11 +2592,14 @@ async def main():
             repo=args.repo,
             repo_type=args.repo_type,
             name=args.name,
+            processed_packages=processed,
         )
+
         metrics = await orchestrator.process_all_software(catalog, software_list)
 
-        if not args.dry_run:
+        if not args.dry_run and metrics:
             orchestrator.write_metrics(output_path, catalog, metrics)
+            orchestrator.write_summary(summary_file, metrics, processed)
 
         logger.info(f"\n{'='*60}")
         logger.info("Orchestration complete!")

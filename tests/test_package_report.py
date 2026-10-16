@@ -123,7 +123,7 @@ class TestHtmlOutput:
     def test_metrics_json_keeps_the_dashboards_flat_layout(self, orchestrator, tmp_path):
         # js/catalog.js and get_repos_info.py read these from the top level.
         catalog = {"HDF5": {"name": "HDF5", "repo_url": "https://github.com/HDFGroup/hdf5"}}
-        orchestrator._write_dashboard_output(tmp_path, catalog, {"HDF5": _metrics()})
+        orchestrator.write_metrics(tmp_path, catalog, {"HDF5": _metrics()})
         data = json.loads((tmp_path / "hdf5-metrics" / "metrics.json").read_text())
         for key in ("stars", "forks", "config_exclusions", "impact", "ecosystem", "quality"):
             assert key in data
@@ -135,7 +135,7 @@ class TestHtmlOutput:
             excluded_by_config=["funding"],
             score_components={"governance": 66.7, "licensing": 100},
         )
-        orchestrator._write_dashboard_output(tmp_path, {"repo": {}}, {"repo": metrics})
+        orchestrator.write_metrics(tmp_path, {"repo": {}}, {"repo": metrics})
         page = (tmp_path / "repo-metrics" / "report.html").read_text()
 
         assert page.startswith("<!doctype html>")
