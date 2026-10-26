@@ -2,33 +2,27 @@
 
 ## Overview
 
-The **orchestrator** is the coordination program that:
-1. Reads the software catalog from the dashboard repository
-2. Collects metrics for each software package (citations, community, licensing)
-3. Transforms data to dashboard format
-4. Exports to the dashboard repository
-
-This eliminates manual coordination between the metrics and dashboard repositories.
+The **orchestrator** is the collection program. It:
+1. Reads the package catalog from the
+   [metrics_packages](https://github.com/corsa-center/metrics_packages)
+   repository (`package_config/*.yaml`, see [PACKAGE_CONFIG.md](PACKAGE_CONFIG.md))
+2. Collects metrics for each package across the three CASS dimensions
+3. Writes one `{repo}-metrics/metrics.json` (and `report.html`) per package
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    ORCHESTRATOR                         │
-│          (orchestrator.py + config.yaml)                │
-└────────────┬────────────────────────────┬───────────────┘
-             │                            │
-             ↓                            ↓
-   ┌─────────────────┐          ┌─────────────────┐
-   │ Metrics Repo    │          │ Dashboard Repo  │
-   │ - Collectors    │          │ - Catalog       │
-   │ - APIs          │←─reads───│ - Categories    │
-   │ - Processing    │          │                 │
-   └────────┬────────┘          └─────────┬───────┘
-            │                              ↑
-            └──────────writes──────────────┘
-                 ecosystemMetrics.json
+metrics_packages            metrics (this repo)             metrics_data (private)
+package_config/*.yaml ──→  orchestrator.py, collectors ──→  data/YYYYMMDD/{repo}-metrics/
+                           tools/dashboard_data.py     ──→  data/YYYYMMDD/intReposInfo.json, ...
+                           tools/spack_dependencies.py            │
+                                                                  ↓
+                                                    dashboard: update.yml copies the
+                                                    newest data into explore/github-data/
 ```
+
+The workflows that run the code live in metrics_data and check out this
+repository's `main`; see [Automation](#automation-via-github-actions).
 
 ## Installation
 
@@ -47,9 +41,6 @@ pip install pyyaml  # For config handling
 Edit `../config/orchestrator.yaml`:
 
 ```yaml
-# Set repository paths
-dashboard_repo_path: "../dashboard"
-
 # Enable collectors you want to use
 collectors:
   citation: true
@@ -176,21 +167,13 @@ python orchestrator.py --config config/orchestrator.yaml --dry-run
 
 The orchestrator creates several files:
 
-### 1. Dashboard Output
-**Location:** `../dashboard/explore/github-data/ecosystemMetrics.json`
+### 1. Per-Package Metrics
+**Location:** `{output_path}/{repo}-metrics/metrics.json` (`./output` by default)
 
-Format:
-```json
-{
-  "HDFGroup/hdf5": {
-    "overall_score": 75,
-    "impact_metrics": { ... },
-    "community_metrics": { ... },
-    "licensing_metrics": { ... },
-    "last_updated": "2025-10-10T21:00:00Z"
-  }
-}
-```
+The package's catalog entry (`metadata`), `stars`, `forks`, `generated_at`,
+each CASS section keyed by number under `impact`, `ecosystem` and `quality`
+(a `title` and an HTML `data` string), and the dashboard data described in
+[Dashboard Data Files](#5-dashboard-data-files).
 
 ### 2. Summary Report
 **Location:** `../output/orchestrator_summary.json`
@@ -259,27 +242,19 @@ Unpublished packages are kept, with `"published": false` on their
 
 ## Automation via GitHub Actions
 
-The workflow `../.github/workflows/collect-and-sync.yml` automates the orchestrator:
+Collection and generation run in the
+[metrics_data](https://github.com/corsa-center/metrics_data) repository,
+each checking out this repository's `main`:
 
-### Schedule
-- Runs every Sunday at 00:00 UTC
-- Automatically pushes updates to dashboard
+- **Collect Metrics** (`collect-and-sync.yml`, every 4 hours) runs the
+  orchestrator with `--use-summary-as-filter --max-packages 50`, so each day's
+  first runs cover every package once, and commits the results to
+  `data/YYYYMMDD/`.
+- **Generate Dashboard Data** (`generate-dashboard-data.yml`, daily at 12:30
+  UTC) writes the four dashboard files beside them.
 
-### Manual Trigger
-Go to GitHub Actions → "Collect Metrics and Sync to Dashboard" → Run workflow
-
-Options:
-- **Software Filter:** Run for specific software only
-- **Dry Run:** Test without pushing changes
-
-### Workflow Steps
-
-1. **Checkout** both repositories
-2. **Install** Python dependencies
-3. **Run orchestrator** with configured collectors
-4. **Commit changes** to dashboard repository
-5. **Upload artifacts** (reports, logs)
-6. **Create summary** in GitHub Actions UI
+The dashboard's daily update (13:30 UTC) copies the newest of both into its
+`explore/github-data/`.
 
 ## Configuration Options
 
@@ -379,16 +354,15 @@ filters:
 
 ## Workflow Examples
 
-### Example 1: Weekly Full Update
+### Example 1: Full Update
 
 ```bash
-# Every Sunday, GitHub Actions runs:
+# Collect every package in the catalog:
 python orchestrator.py --config config/orchestrator.yaml
 
 # Results:
-# - All CASS software metrics collected
-# - Dashboard updated automatically
-# - Summary report generated
+# - output/{repo}-metrics/metrics.json and report.html per package
+# - output/orchestrator_summary.json
 ```
 
 ### Example 2: Test New Software
@@ -424,7 +398,9 @@ python orchestrator.py --config config/orchestrator.yaml
 ## Troubleshooting
 
 ### Issue: "Catalog not found"
-**Solution:** Check `dashboard_repo_path` in config points to correct location
+**Solution:** Check that `catalog_url` in config points to the
+`package_config` directory of corsa-center/metrics_packages, and that
+`GITHUB_TOKEN` is set if you are rate limited
 
 ### Issue: API rate limits exceeded
 **Solution:**
@@ -455,8 +431,8 @@ tail -f orchestrator.log
 # Check summary
 cat output/orchestrator_summary.json | jq '.'
 
-# Verify dashboard output
-ls -lh ../dashboard/explore/github-data/ecosystemMetrics.json
+# Verify per-package output
+ls output/*-metrics/
 ```
 
 ### GitHub Actions Monitoring
