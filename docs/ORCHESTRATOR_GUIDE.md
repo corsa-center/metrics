@@ -225,6 +225,31 @@ be linked from the package's dashboard page:
 It is rendered from the same per-section data as `metrics.json`, so it
 always matches the dashboard. See `../package_report.py`.
 
+### 5. Dashboard Data Files
+
+Each `metrics.json` also carries the raw inputs for the dashboard's
+repository and dependency views:
+
+- `repo_info` -- the repository in the dashboard's `intReposInfo.json` shape
+  (GitHub GraphQL field names; GitLab is mapped onto the same names)
+- `dependencies` -- the GitHub dependency graph, in the
+  `intRepos_Dependencies.json` shape (`null` on GitLab, which has none)
+
+A key is left out when its lookup failed, rather than written empty.
+
+The metrics_data repository's daily "Generate dashboard data" workflow turns
+those into four files beside the day's metrics, in `data/YYYYMMDD/`:
+
+```bash
+# intReposInfo.json and intRepos_Dependencies.json -- no API calls; uses
+# each package's newest metrics.json from the last 7 days
+python tools/dashboard_data.py --data-dir data --output data/20261026
+
+# spackPackageDependencies.json and spackPackageDependents.json
+spack python tools/spack_dependencies.py \
+  --repo-info data/20261026/intReposInfo.json --output data/20261026
+```
+
 ## Automation via GitHub Actions
 
 The workflow `../.github/workflows/collect-and-sync.yml` automates the orchestrator:

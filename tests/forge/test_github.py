@@ -479,3 +479,68 @@ class TestCommitAccount:
         commits = asyncio.run(forge.commits(client, "o/r"))
         assert [c["author_account"] for c in commits] == ["octo", None]
         assert [c["author_identity"] for c in commits] == ["octo", "No Account"]
+
+
+class TestDashboardGraphQL:
+    def test_repo_info_needs_a_token(self, forge):
+        assert asyncio.run(forge.dashboard_repo_info(AsyncMock(), "o/r")) is COLLECTION_GAP
+
+    def test_repo_info_returns_the_repository(self):
+        forge = GitHubForge("tok")
+        client = AsyncMock()
+        client.post = AsyncMock(return_value=_resp(200, {"data": {"repository": {"nameWithOwner": "o/r"}}}))
+        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) == {"nameWithOwner": "o/r"}
+
+    def test_not_found_is_none(self):
+        forge = GitHubForge("tok")
+        client = AsyncMock()
+        client.post = AsyncMock(return_value=_resp(200, {
+            "data": {"repository": None}, "errors": [{"type": "NOT_FOUND"}]}))
+        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is None
+
+    def test_other_errors_and_statuses_are_gaps(self):
+        forge = GitHubForge("tok")
+        client = AsyncMock()
+        client.post = AsyncMock(return_value=_resp(200, {"errors": [{"type": "RATE_LIMITED"}]}))
+        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+        client.post = AsyncMock(return_value=_resp(502))
+        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+        client.post = AsyncMock(side_effect=httpx.ConnectError("down"))
+        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+
+    def test_dependency_graph_pages_through_manifests(self):
+        forge = GitHubForge("tok")
+        lang = {"nodes": [{"name": "C", "color": "#555555"}]}
+
+        def page(nodes, more, cursor=None):
+            return _resp(200, {"data": {"repository": {"languages": lang, "dependencyGraphManifests": {
+                "nodes": nodes, "pageInfo": {"hasNextPage": more, "endCursor": cursor}}}}})
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=[page([{"m": 1}], True, "c1"), page([{"m": 2}], False)])
+        result = asyncio.run(forge.dependency_graph(client, "o/r"))
+        assert result == {"languages": lang, "dependencyGraphManifests": {"nodes": [{"m": 1}, {"m": 2}]}}
+        second = client.post.call_args_list[1]
+        assert second.kwargs["json"]["variables"]["c"] == "c1"
+        assert "hawkgirl" in second.kwargs["headers"]["Accept"]
+
+    def test_dependency_graph_gap_mid_pagination_is_a_gap(self):
+        forge = GitHubForge("tok")
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=[
+            _resp(200, {"data": {"repository": {"dependencyGraphManifests": {
+                "nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}}}}),
+            _resp(502),
+        ])
+        assert asyncio.run(forge.dependency_graph(client, "o/r")) is COLLECTION_GAP
+
+    def test_server_side_timeout_is_retried(self, monkeypatch):
+        import forge.github as gh
+        monkeypatch.setattr(gh, "_GRAPHQL_RETRY_DELAY", 0)
+        forge = GitHubForge("tok")
+        timeout = _resp(200, {"errors": [{"message": "Something went wrong while executing your query"}]})
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=[timeout, _resp(200, {"data": {"repository": {"nameWithOwner": "o/r"}}})])
+        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) == {"nameWithOwner": "o/r"}
+        client.post = AsyncMock(return_value=timeout)
+        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+        assert client.post.call_count == gh._GRAPHQL_ATTEMPTS

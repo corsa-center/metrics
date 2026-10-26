@@ -413,3 +413,27 @@ class TestPlatformLabels:
             "has_codeql": False, "scanners_checked": "CodeQL or GitLab SAST"}})
         assert ("No CodeQL or GitLab SAST workflow found"
                 in orchestrator._transform_for_dashboard(missing, {})["quality"]["4.3.1"]["data"])
+
+
+class TestDashboardInfo:
+    PACKAGE = {"name": "P", "repo_type": "github", "repo_url": "https://github.com/o/r"}
+
+    def _collect(self, orchestrator, forge):
+        from unittest.mock import patch
+        with patch.object(orchestrator, "_forge_for_package", return_value=forge):
+            return asyncio.run(orchestrator.collect_dashboard_info(dict(self.PACKAGE)))
+
+    def test_both_keys_collected(self, orchestrator):
+        forge = FakeForge(dashboard_info={"nameWithOwner": "o/r"}, dependency_data=None)
+        assert self._collect(orchestrator, forge) == {"repo_info": {"nameWithOwner": "o/r"}, "dependencies": None}
+
+    def test_a_gap_leaves_the_key_out(self, orchestrator):
+        forge = FakeForge(dashboard_info={"nameWithOwner": "o/r"}, gaps={"dependency_graph"})
+        assert self._collect(orchestrator, forge) == {"repo_info": {"nameWithOwner": "o/r"}}
+
+    def test_written_into_metrics_json(self, orchestrator, tmp_path):
+        metrics = {**_base_metrics(), "dashboard_info": {"repo_info": {"nameWithOwner": "o/r"}}}
+        orchestrator.write_metrics(tmp_path, {"o/r": {"repo_url": "https://github.com/o/r"}}, {"o/r": metrics})
+        data = json.loads((tmp_path / "r-metrics" / "metrics.json").read_text())
+        assert data["repo_info"] == {"nameWithOwner": "o/r"}
+        assert "dependencies" not in data

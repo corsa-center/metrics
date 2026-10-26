@@ -197,6 +197,22 @@ class Forge(ABC):
     @abstractmethod
     async def repo_tree(self, client: httpx.AsyncClient, ref: str): ...
 
+    @abstractmethod
+    async def dashboard_repo_info(self, client: httpx.AsyncClient, ref: str):
+        """The repository in the shape of the dashboard's intReposInfo.json
+        entries (GitHub GraphQL field names: nameWithOwner, owner{login,
+        avatarUrl}, licenseInfo, forks{totalCount}, issues_Open, ...), or
+        None (confirmed absent) / COLLECTION_GAP."""
+
+    @abstractmethod
+    async def dependency_graph(self, client: httpx.AsyncClient, ref: str):
+        """The repository in the shape of the dashboard's
+        intRepos_Dependencies.json entries: {languages: {nodes: [{name,
+        color}]}, dependencyGraphManifests: {nodes: [{dependencies: {nodes:
+        [{packageName, packageManager, repository}]}}]}}. None when the
+        platform has no dependency graph or the repository is absent;
+        COLLECTION_GAP when it couldn't be read."""
+
     # ------------------------------------------------------------------ #
     # History, releases, contributors
     # ------------------------------------------------------------------ #

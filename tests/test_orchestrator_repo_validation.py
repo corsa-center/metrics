@@ -143,7 +143,8 @@ class TestCollectAllMetricsSkipsMissingRepo:
                  patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=get_default_repo_info())), \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
-                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_dashboard_info", new=AsyncMock(return_value={})):
                 return await orchestrator.collect_all_metrics(self._package("HDFGroup/hdf5"))
 
         result = asyncio.run(go())
@@ -157,7 +158,8 @@ class TestCollectAllMetricsSkipsMissingRepo:
                  patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=COLLECTION_GAP)), \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
-                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_dashboard_info", new=AsyncMock(return_value={})):
                 return await orchestrator.collect_all_metrics(self._package("HDFGroup/hdf5"))
 
         result = asyncio.run(go())
@@ -204,7 +206,8 @@ class TestCollectAllMetricsSkipsMissingRepo:
                  patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=get_default_repo_info())) as confirm, \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
-                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_dashboard_info", new=AsyncMock(return_value={})):
                 pkg = {"name": "GitLabThing", "repo_type": "gitlab",
                        "repo_url": "https://gitlab.com/owner/thing"}
                 result = await orchestrator.collect_all_metrics(pkg)

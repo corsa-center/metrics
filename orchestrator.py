@@ -640,6 +640,31 @@ class MetricsOrchestrator:
 
         return True, ""
 
+    async def collect_dashboard_info(self, package: Dict) -> Dict:
+        """Repository data the dashboard's intReposInfo.json and
+        intRepos_Dependencies.json are generated from (see
+        tools/dashboard_data.py). A key is left out when its lookup was a
+        gap, so the generator can keep an earlier day's entry instead of
+        publishing a blank one.
+        """
+        forge = self._forge_for_package(package)
+        ref = forge.extract_ref(package["repo_url"]) if forge else None
+        if ref is None:
+            return {}
+        async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
+            repo_info, dependencies = await asyncio.gather(
+                forge.dashboard_repo_info(client, ref),
+                forge.dependency_graph(client, ref),
+                return_exceptions=True,
+            )
+        info = {}
+        for key, value in (("repo_info", repo_info), ("dependencies", dependencies)):
+            if isinstance(value, Exception):
+                logger.warning(f"{key} failed for {package['repo_url']}: {value!r}")
+            elif value is not COLLECTION_GAP:
+                info[key] = value
+        return info
+
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
 
@@ -1018,6 +1043,7 @@ class MetricsOrchestrator:
         # invalid, or the repo type is not supported, in which case we do not continue with collection.
         # If it was successful or if there is a temporary error (COLLECTION_GAP) we continue with collection.
         collect, err = await self._update_repo_info(package)
+        dashboard_info: Dict = {}
 
         if collect:
             # Collect all 3 dimensions in parallel
@@ -1025,12 +1051,18 @@ class MetricsOrchestrator:
                 impact_metrics,
                 ecosystem_metrics,
                 quality_metrics,
+                dashboard_info,
             ) = await asyncio.gather(
                 self.collect_impact_dimension(package),
                 self.collect_ecosystem_dimension(package),
                 self.collect_quality_dimension(package),
+                self.collect_dashboard_info(package),
                 return_exceptions=True,
             )
+
+            if isinstance(dashboard_info, Exception):
+                logger.error(f"Dashboard info error: {dashboard_info}")
+                dashboard_info = {}
 
             # Use defaults if any exceptions
             if isinstance(impact_metrics, Exception):
@@ -1061,6 +1093,7 @@ class MetricsOrchestrator:
                 "ecosystem": ecosystem_metrics,
                 "quality": quality_metrics,
             },
+            "dashboard_info": dashboard_info,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -2464,6 +2497,9 @@ class MetricsOrchestrator:
                     "package": package_name,
                     "metadata": catalog[package_name],
                     **section_data,
+                    # Raw inputs for tools/dashboard_data.py's intReposInfo.json
+                    # and intRepos_Dependencies.json.
+                    **metrics.get("dashboard_info", {}),
                 }
             except Exception as e:
                 logger.error(f"Could not render dashboard output for {package_name}: {e!r}", exc_info=True)

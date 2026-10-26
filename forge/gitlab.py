@@ -804,6 +804,80 @@ class GitLabForge(Forge):
         (percentages, not byte counts -- see GitHubForge's caveat)."""
         return await self._gitlab_get(client, f"/projects/{self._project_path(ref)}/languages")
 
+    async def _total(self, client: httpx.AsyncClient, path: str, params: Dict[str, Any]) -> Optional[int]:
+        """X-Total of a list endpoint, or None when GitLab omits it (very
+        large result sets) or the request fails."""
+        url = f"{self.api_base}{path}"
+        try:
+            resp = await client.get(url, headers=self.headers, params={**params, "per_page": 1})
+        except Exception as e:
+            logger.warning(f"COLLECTION-GAP url={url} status=exception reason={e!r}")
+            return None
+        if resp.status_code != 200 or not resp.headers.get("X-Total"):
+            return None
+        return int(resp.headers["X-Total"])
+
+    async def dashboard_repo_info(self, client: httpx.AsyncClient, ref: str):
+        """See Forge.dashboard_repo_info. GitLab has no mentionable-users or
+        topic-count equivalent and no fork parent in the project object's
+        GitHub shape, so those keys are left out; counts GitLab doesn't
+        report come back as None."""
+        project_path = f"/projects/{self._project_path(ref)}"
+        data = await self._gitlab_get(client, project_path, params={"license": "true"})
+        if data is COLLECTION_GAP or data is None:
+            return data
+        languages = await self.languages(client, ref) or {}
+        stats = await self._gitlab_get(client, f"{project_path}/issues_statistics")
+        counts = ((stats or {}).get("statistics") or {}).get("counts") or {}
+        mr_path = f"{project_path}/merge_requests"
+        mr_open, mr_closed, mr_merged = await asyncio.gather(
+            self._total(client, mr_path, {"state": "opened"}),
+            self._total(client, mr_path, {"state": "closed"}),
+            self._total(client, mr_path, {"state": "merged"}),
+        )
+        namespace = data.get("namespace") or {}
+        avatar = namespace.get("avatar_url")
+        if avatar and avatar.startswith("/"):
+            # Uploaded avatars come back host-relative.
+            avatar = f"https://{self.host}{avatar}"
+        license_data = data.get("license") or {}
+        forked_from = data.get("forked_from_project")
+        return {
+            "nameWithOwner": data.get("path_with_namespace", ref),
+            "name": data.get("name", ""),
+            "owner": {"login": namespace.get("full_path", ""), "avatarUrl": avatar},
+            "url": data.get("web_url"),
+            "homepageUrl": data.get("web_url"),
+            "description": data.get("description") or "",
+            "createdAt": data.get("created_at"),
+            "defaultBranchRef": {"name": data.get("default_branch")},
+            "licenseInfo": {
+                "name": license_data.get("name"),
+                "nickname": license_data.get("nickname"),
+                "spdxId": None,  # see repo_info: GitLab's key isn't a guaranteed SPDX id
+                "url": license_data.get("source_url"),
+            } if license_data else None,
+            "forks": {"totalCount": data.get("forks_count", 0)},
+            "primaryLanguage": {"name": max(languages, key=languages.get)} if languages else None,
+            "languages": {"totalCount": len(languages)},
+            "parent": {
+                "nameWithOwner": forked_from.get("path_with_namespace"),
+                "name": forked_from.get("name"),
+                "owner": {"login": (forked_from.get("namespace") or {}).get("full_path")},
+            } if forked_from else None,
+            "pullRequests_Open": {"totalCount": mr_open},
+            "pullRequests_Closed": {"totalCount": mr_closed},
+            "pullRequests_Merged": {"totalCount": mr_merged},
+            "issues_Open": {"totalCount": counts.get("opened")},
+            "issues_Closed": {"totalCount": counts.get("closed")},
+        }
+
+    async def dependency_graph(self, client: httpx.AsyncClient, ref: str):
+        """See Forge.dependency_graph. GitLab's dependency list is an
+        Ultimate-tier security feature with no public equivalent -- always
+        None."""
+        return None
+
     def raw_url(self, ref: str, path: str) -> str:
         return f"https://{self.host}/{ref}/-/raw/HEAD/{path}"
 
