@@ -2497,6 +2497,8 @@ class MetricsOrchestrator:
                     "package": package_name,
                     "metadata": catalog[package_name],
                     **section_data,
+                    # The dashboard's "last updated" (js/catalog.js).
+                    "generated_at": metrics.get("last_updated"),
                     # Raw inputs for tools/dashboard_data.py's intReposInfo.json
                     # and intRepos_Dependencies.json.
                     **metrics.get("dashboard_info", {}),
