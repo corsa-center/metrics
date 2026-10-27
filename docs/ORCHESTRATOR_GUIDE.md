@@ -229,8 +229,8 @@ always matches the dashboard. See `../package_report.py`.
 
 Besides the catalog entry, `metadata` records what the forge reports about
 the repository: description, homepage, language, license, dates, `topics`,
-`owner_avatar_url`, `parent` (the upstream of a fork), and the activity
-counts `pull_requests` (`open`/`closed`/`merged`), `issues`
+`owner_avatar_url`, `parent` (the upstream of a fork), and the counts
+`stars`, `forks`, `pull_requests` (`open`/`closed`/`merged`), `issues`
 (`open`/`closed`) and `mentionable_users`. Each `metrics.json` also has:
 
 - `dependencies` -- the GitHub dependency graph (`null` on GitLab, which

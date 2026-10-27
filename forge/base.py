@@ -72,7 +72,7 @@ NULLABLE_METADATA_KEYS = (
     "owner_avatar_url",
     "parent",
 )
-DEFINITE_METADATA_KEYS = ("archived", "disabled", "size_kb", "topics")
+DEFINITE_METADATA_KEYS = ("archived", "disabled", "size_kb", "topics", "stars", "forks")
 
 # Statuses worth retrying. 429/5xx are unambiguous; 403 is GitHub's shared
 # code for both a real permission error and its *secondary* (abuse-detection)

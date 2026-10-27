@@ -6,15 +6,14 @@ Builds the dashboard's intReposInfo.json, intRepos_Dependencies.json,
 spackPackageDependencies.json and spackPackageDependents.json from the
 per-package metrics.json files the orchestrator commits to the
 metrics_data repository (data/YYYYMMDD/<repo>-metrics/metrics.json). No API
-calls: everything comes from the `metadata`, `stars`, `forks`,
-`dependencies` and `spack` the collector already wrote. All the
+calls: everything comes from the `metadata`, `dependencies` and `spack` the collector already wrote. All the
 dashboard-specific shaping lives here, so the metrics files stay neutral
 about which frontend reads them.
 
 Collection runs in batches, so one day's directory may not hold every
 package. For each package the newest metrics.json within --max-age-days is
-used, and each collected key (dependencies, spack, and the activity counts
-in metadata) falls back to an older file if the newest one recorded a
+used, and each collected key (dependencies, spack, and the counts in
+metadata) falls back to an older file if the newest one recorded a
 collection gap for it.
 
 Stdlib only, so it runs without the collector's requirements.
@@ -59,7 +58,7 @@ def _repo_key(metadata: Dict) -> Optional[str]:
 
 
 # Metadata keys the collector leaves out when their lookup was a gap.
-_ACTIVITY_KEYS = ("pull_requests", "issues", "mentionable_users")
+_COUNT_KEYS = ("stars", "forks", "pull_requests", "issues", "mentionable_users")
 # Top-level metrics.json keys likewise left out on a gap.
 _COLLECTED_KEYS = ("dependencies", "spack")
 
@@ -68,10 +67,10 @@ def load_packages(data_dir: Path, max_age_days: int = 7, today: Optional[datetim
     """Newest data per package, keyed by the repository name its
     <repo>-metrics directory is named after.
 
-    Each value has `metadata`, `stars`, `forks` and, when any file in the
-    window had them, `dependencies` and `spack` -- each from the newest
-    file that recorded it. Activity counts missing from the newest
-    metadata are filled in the same way.
+    Each value has `metadata` and, when any file in the window had them,
+    `dependencies` and `spack` -- each from the newest file that recorded
+    it. Counts missing from the newest metadata are filled in the same
+    way.
     """
     today = today or datetime.now(timezone.utc)
     packages: Dict[str, Dict] = {}
@@ -83,13 +82,9 @@ def load_packages(data_dir: Path, max_age_days: int = 7, today: Optional[datetim
             continue
         metadata = metrics.get("metadata") or {}
         if name not in packages:
-            packages[name] = {
-                "metadata": dict(metadata),
-                "stars": metrics.get("stars", 0),
-                "forks": metrics.get("forks", 0),
-            }
+            packages[name] = {"metadata": dict(metadata)}
         package = packages[name]
-        for key in _ACTIVITY_KEYS:
+        for key in _COUNT_KEYS:
             if key not in package["metadata"] and key in metadata:
                 package["metadata"][key] = metadata[key]
         for key in _COLLECTED_KEYS:
@@ -144,8 +139,8 @@ def repo_entry(package: Dict) -> Optional[Dict]:
             "name": parent.rpartition("/")[2],
             "owner": {"login": parent.rpartition("/")[0]},
         } if parent else None,
-        "stargazers": _total(package.get("stars", 0)),
-        "forks": _total(package.get("forks", 0)),
+        "stargazers": _total(metadata.get("stars")),
+        "forks": _total(metadata.get("forks")),
         "mentionableUsers": _total(metadata.get("mentionable_users")),
         "pullRequests_Open": _total(pull_requests.get("open")),
         "pullRequests_Closed": _total(pull_requests.get("closed")),

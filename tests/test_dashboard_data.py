@@ -19,25 +19,25 @@ def _write(data_dir, day, repo, metadata=None, **metrics):
     path.write_text(json.dumps(metrics))
 
 
-def _package(repo_url="https://github.com/Org/hdf5", stars=0, forks=0, **metadata):
-    return {"metadata": {"repo_url": repo_url, **metadata}, "stars": stars, "forks": forks}
+def _package(repo_url="https://github.com/Org/hdf5", **metadata):
+    return {"metadata": {"repo_url": repo_url, **metadata}}
 
 
 class TestLoadPackages:
     def test_newest_day_wins(self, tmp_path):
-        _write(tmp_path, "20261025", "hdf5", {"description": "old"}, stars=1)
-        _write(tmp_path, "20261026", "hdf5", {"description": "new"}, stars=2)
+        _write(tmp_path, "20261025", "hdf5", {"description": "old", "stars": 1})
+        _write(tmp_path, "20261026", "hdf5", {"description": "new", "stars": 2})
         package = load_packages(tmp_path, today=TODAY)["hdf5"]
-        assert package["stars"] == 2
+        assert package["metadata"]["stars"] == 2
         assert package["metadata"]["description"] == "new"
 
     def test_a_gap_falls_back_to_an_older_day(self, tmp_path):
         # The collector leaves a key out when its lookup was a gap.
         _write(tmp_path, "20261024", "hdf5", dependencies={"languages": {"nodes": []}})
-        _write(tmp_path, "20261025", "hdf5", {"issues": {"open": 1, "closed": 2}}, spack=None)
-        _write(tmp_path, "20261026", "hdf5", {"description": "new"}, stars=2)
+        _write(tmp_path, "20261025", "hdf5", {"issues": {"open": 1, "closed": 2}, "stars": 1}, spack=None)
+        _write(tmp_path, "20261026", "hdf5", {"description": "new"})
         package = load_packages(tmp_path, today=TODAY)["hdf5"]
-        assert package["stars"] == 2
+        assert package["metadata"]["stars"] == 1
         assert package["metadata"]["description"] == "new"
         assert package["metadata"]["issues"] == {"open": 1, "closed": 2}
         assert package["dependencies"] == {"languages": {"nodes": []}}
@@ -118,7 +118,7 @@ class TestBuildRepos:
         assert entry["published"] is False
 
     def test_package_without_repo_url_is_left_out(self):
-        assert build_repos_info({"hdf5": {"metadata": {}, "stars": 0}}) == {"data": {}}
+        assert build_repos_info({"hdf5": {"metadata": {}}}) == {"data": {}}
 
     def test_dependencies_keyed_by_repo_path(self):
         deps = {"languages": {"nodes": []}, "dependencyGraphManifests": {"nodes": []}}
@@ -144,7 +144,7 @@ class TestBuildRepos:
 class TestMain:
     def test_writes_all_four_files(self, tmp_path):
         data = tmp_path / "data"
-        _write(data, datetime.now(timezone.utc).strftime("%Y%m%d"), "hdf5", stars=3,
+        _write(data, datetime.now(timezone.utc).strftime("%Y%m%d"), "hdf5", {"stars": 3},
                dependencies={"languages": {"nodes": []}},
                spack={"name": "hdf5", "dependencies": {"zlib": {}}, "dependents": {}})
         out = tmp_path / "out"

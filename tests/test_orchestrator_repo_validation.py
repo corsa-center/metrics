@@ -90,11 +90,13 @@ class TestRepoMetadataOnThePackage:
     def test_false_and_zero_are_recorded_not_dropped(self, orchestrator):
         # "not archived" and "empty repo" are real answers; the dashboard
         # can't tell them from "never looked" if the keys are absent.
-        info = {**get_default_repo_info(), "archived": False, "disabled": False, "size_kb": 0}
+        info = {**get_default_repo_info(), "archived": False, "disabled": False, "size_kb": 0,
+                "stars": 0, "forks": 0}
         _, _, package = self._update(orchestrator, info)
         assert package["archived"] is False
         assert package["disabled"] is False
         assert package["size_kb"] == 0
+        assert (package["stars"], package["forks"]) == (0, 0)
 
     def test_a_gap_keeps_curated_catalog_values(self, orchestrator):
         _, _, package = self._update(
