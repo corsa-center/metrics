@@ -1,5 +1,5 @@
 """GitHub implementation of forge.interface.Forge, against GitHub's REST API
-(plus GraphQL for version tags and the dashboard's repository data).
+(plus GraphQL for version tags, activity counts and the dependency graph).
 
 Get one through `Forge.for_repo(...)` rather than constructing it directly.
 The private helpers (`_github_get`, `_check_file_exists`) are the former
@@ -187,9 +187,10 @@ class GitHubForge(Forge):
         open_issues, description, homepage, has_wiki, has_pages,
         has_discussions, archived, disabled, language, size_kb, created_at,
         updated_at, pushed_at, default_branch, license ({spdx_id, name,
-        key} or None). `has_discussions` is GitHub-only -- GitLabForge
-        always returns False for it, a real answer (GitLab has no
-        Discussions feature), not a gap.
+        key} or None), topics, owner_avatar_url, parent (the upstream's
+        owner/repo for a fork, else None). `has_discussions` is
+        GitHub-only -- GitLabForge always returns False for it, a real
+        answer (GitLab has no Discussions feature), not a gap.
         """
         data = await self._github_get(client, f"https://api.github.com/repos/{ref}")
         if data is COLLECTION_GAP or data is None:
@@ -218,6 +219,9 @@ class GitHubForge(Forge):
             "name": license_data.get("name"),
             "key": license_data.get("key")
         } if license_data else None
+        repo_info["topics"] = data.get("topics") or []
+        repo_info["owner_avatar_url"] = (data.get("owner") or {}).get("avatar_url")
+        repo_info["parent"] = (data.get("parent") or {}).get("full_name")
         return repo_info
 
     async def file_metadata(self, client: httpx.AsyncClient, ref: str, path: str):
@@ -861,27 +865,32 @@ class GitHubForge(Forge):
         logger.warning(f"COLLECTION-GAP graphql errors={errors!r}")
         return COLLECTION_GAP
 
-    async def dashboard_repo_info(self, client: httpx.AsyncClient, ref: str):
-        """See Forge.dashboard_repo_info. One GraphQL query; `stargazers`
-        is left out because the Actions token can't read that connection on
-        other repositories -- the dashboard generator fills it from the
-        REST star count instead."""
+    async def activity_counts(self, client: httpx.AsyncClient, ref: str):
+        """See Forge.activity_counts. One GraphQL query -- REST has no
+        per-state pull request or issue totals."""
         owner, repo = ref.split("/", 1)
         query = """query($o:String!,$n:String!){repository(owner:$o,name:$n){
-          nameWithOwner name owner{login avatarUrl} url homepageUrl description
-          createdAt defaultBranchRef{name} licenseInfo{name nickname spdxId url}
-          mentionableUsers{totalCount} forks{totalCount} primaryLanguage{name}
-          languages{totalCount} repositoryTopics{totalCount}
-          parent{nameWithOwner name owner{login avatarUrl}}
-          pullRequests_Open:pullRequests(states:OPEN){totalCount}
-          pullRequests_Closed:pullRequests(states:CLOSED){totalCount}
-          pullRequests_Merged:pullRequests(states:MERGED){totalCount}
-          issues_Open:issues(states:OPEN){totalCount}
-          issues_Closed:issues(states:CLOSED){totalCount}}}"""
+          mentionableUsers{totalCount}
+          prOpen:pullRequests(states:OPEN){totalCount}
+          prClosed:pullRequests(states:CLOSED){totalCount}
+          prMerged:pullRequests(states:MERGED){totalCount}
+          issuesOpen:issues(states:OPEN){totalCount}
+          issuesClosed:issues(states:CLOSED){totalCount}}}"""
         data = await self._graphql(client, query, {"o": owner, "n": repo})
         if data is COLLECTION_GAP or data is None:
             return data
-        return data.get("repository")
+        repository = data.get("repository")
+        if repository is None:
+            return None
+
+        def total(key):
+            return (repository.get(key) or {}).get("totalCount")
+
+        return {
+            "pull_requests": {"open": total("prOpen"), "closed": total("prClosed"), "merged": total("prMerged")},
+            "issues": {"open": total("issuesOpen"), "closed": total("issuesClosed")},
+            "mentionable_users": total("mentionableUsers"),
+        }
 
     async def dependency_graph(self, client: httpx.AsyncClient, ref: str):
         """See Forge.dependency_graph. Pages through every manifest, up to

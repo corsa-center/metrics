@@ -1,20 +1,21 @@
 """
-Spack dependency analyzer (CASS metrics framework)
+Spack dependency analyzer (CORSA metrics framework)
 
-Writes the dashboard's spackPackageDependencies.json (what each tracked
-package depends on) and spackPackageDependents.json (which Spack packages
-depend on each tracked package), with the version, variant, dependency-type,
-platform and target conditions Spack records for each edge.
+For each named Spack package: what it depends on and which Spack packages
+depend on it, with the version, variant, dependency-type, platform and
+target conditions Spack records for each edge. The orchestrator runs this
+once per batch (see Orchestrator.collect_spack_dependencies) and stores
+each package's entry in its metrics.json under `spack`;
+tools/dashboard_data.py assembles the dashboard's
+spackPackageDependencies.json and spackPackageDependents.json from those.
 
-Ported from the dashboard's _explore/scripts/get_spack_dependencies.py; the
-package list now comes from the generated intReposInfo.json (see
-tools/dashboard_data.py) instead of the dashboard's input_lists.json. A
-tracked repository is matched to the Spack package named after its
-repository name, lowercased; repositories with no such package are skipped.
+Ported from the dashboard's _explore/scripts/get_spack_dependencies.py.
+
+Writes {name: {"name", "dependencies", "dependents"}} to --output, with
+null for a name Spack has no package for.
 
 Must run under Spack's own interpreter:
-    spack python tools/spack_dependencies.py \\
-        --repo-info data/20261026/intReposInfo.json --output data/20261026
+    spack python tools/spack_dependencies.py --output spack.json hdf5 adios2
 """
 
 import argparse
@@ -97,33 +98,24 @@ def analyze(packages):
     return dependency_db, dependent_db
 
 
-def packages_from_repo_info(repo_info_file):
-    """Spack package names for the repositories in an intReposInfo.json."""
-    with open(repo_info_file) as f:
-        repos = json.load(f)["data"]
-    names = {repo.split("/")[-1].lower() for repo in repos}
-    return sorted(name for name in names if sr.PATH.exists(name))
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser("spack_dependencies", description=__doc__.split("\n\n")[1].strip())
-    parser.add_argument("packages", nargs="*", help="Spack package names to analyze")
-    parser.add_argument("--repo-info", type=Path, help="intReposInfo.json whose repositories to analyze")
-    parser.add_argument("--output", type=Path, required=True, help="directory to write the two files into")
+    parser.add_argument("packages", nargs="+", help="Spack package names to analyze")
+    parser.add_argument("--output", type=Path, required=True, help="JSON file to write")
     args = parser.parse_args(argv)
 
-    packages = list(args.packages)
-    if args.repo_info:
-        packages.extend(packages_from_repo_info(args.repo_info))
-    if not packages:
-        print("No Spack packages to analyze", file=sys.stderr)
-        return 1
-
-    dependencies, dependents = analyze(set(packages))
-    args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "spackPackageDependencies.json").write_text(json.dumps(dependencies, default=list))
-    (args.output / "spackPackageDependents.json").write_text(json.dumps(dependents, default=list))
-    print(f"Analyzed {len(packages)} Spack packages: {', '.join(sorted(packages))}")
+    found = {name for name in args.packages if sr.PATH.exists(name)}
+    dependencies, dependents = analyze(found)
+    result = {
+        name: {
+            "name": name,
+            "dependencies": dependencies.get(name, {}),
+            "dependents": dependents.get(name, {}),
+        } if name in found else None
+        for name in args.packages
+    }
+    args.output.write_text(json.dumps(result, default=list))
+    print(f"Analyzed {len(found)} of {len(args.packages)} names as Spack packages: {', '.join(sorted(found))}")
     return 0
 
 

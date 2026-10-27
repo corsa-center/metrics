@@ -144,6 +144,20 @@ class TestRepoInfo:
         assert result["has_discussions"] is True
         assert result["license"] == {"spdx_id": "MIT", "name": "MIT License", "key": "mit"}
 
+    def test_topics_owner_and_parent(self, forge):
+        client = self._client({
+            "topics": ["hdf5", "io"], "owner": {"login": "o", "avatar_url": "https://a/o.png"},
+            "parent": {"full_name": "up/r"},
+        })
+        result = asyncio.run(forge.repo_info(client, "o/r"))
+        assert result["topics"] == ["hdf5", "io"]
+        assert result["owner_avatar_url"] == "https://a/o.png"
+        assert result["parent"] == "up/r"
+
+    def test_not_a_fork_has_no_parent(self, forge):
+        result = asyncio.run(forge.repo_info(self._client({}), "o/r"))
+        assert (result["topics"], result["parent"]) == ([], None)
+
     def test_missing_license_is_none(self, forge):
         client = self._client({"stargazers_count": 0})
         result = asyncio.run(forge.repo_info(client, "o/r"))
@@ -481,32 +495,43 @@ class TestCommitAccount:
         assert [c["author_identity"] for c in commits] == ["octo", "No Account"]
 
 
-class TestDashboardGraphQL:
-    def test_repo_info_needs_a_token(self, forge):
-        assert asyncio.run(forge.dashboard_repo_info(AsyncMock(), "o/r")) is COLLECTION_GAP
+_COUNTS = {
+    "prOpen": {"totalCount": 1}, "prClosed": {"totalCount": 2}, "prMerged": {"totalCount": 3},
+    "issuesOpen": {"totalCount": 4}, "issuesClosed": {"totalCount": 5},
+    "mentionableUsers": {"totalCount": 6},
+}
 
-    def test_repo_info_returns_the_repository(self):
+
+class TestGraphQL:
+    def test_activity_counts_need_a_token(self, forge):
+        assert asyncio.run(forge.activity_counts(AsyncMock(), "o/r")) is COLLECTION_GAP
+
+    def test_activity_counts(self):
         forge = GitHubForge("tok")
         client = AsyncMock()
-        client.post = AsyncMock(return_value=_resp(200, {"data": {"repository": {"nameWithOwner": "o/r"}}}))
-        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) == {"nameWithOwner": "o/r"}
+        client.post = AsyncMock(return_value=_resp(200, {"data": {"repository": _COUNTS}}))
+        assert asyncio.run(forge.activity_counts(client, "o/r")) == {
+            "pull_requests": {"open": 1, "closed": 2, "merged": 3},
+            "issues": {"open": 4, "closed": 5},
+            "mentionable_users": 6,
+        }
 
     def test_not_found_is_none(self):
         forge = GitHubForge("tok")
         client = AsyncMock()
         client.post = AsyncMock(return_value=_resp(200, {
             "data": {"repository": None}, "errors": [{"type": "NOT_FOUND"}]}))
-        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is None
+        assert asyncio.run(forge.activity_counts(client, "o/r")) is None
 
     def test_other_errors_and_statuses_are_gaps(self):
         forge = GitHubForge("tok")
         client = AsyncMock()
         client.post = AsyncMock(return_value=_resp(200, {"errors": [{"type": "RATE_LIMITED"}]}))
-        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+        assert asyncio.run(forge.activity_counts(client, "o/r")) is COLLECTION_GAP
         client.post = AsyncMock(return_value=_resp(502))
-        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+        assert asyncio.run(forge.activity_counts(client, "o/r")) is COLLECTION_GAP
         client.post = AsyncMock(side_effect=httpx.ConnectError("down"))
-        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+        assert asyncio.run(forge.activity_counts(client, "o/r")) is COLLECTION_GAP
 
     def test_dependency_graph_pages_through_manifests(self):
         forge = GitHubForge("tok")
@@ -539,8 +564,8 @@ class TestDashboardGraphQL:
         forge = GitHubForge("tok")
         timeout = _resp(200, {"errors": [{"message": "Something went wrong while executing your query"}]})
         client = AsyncMock()
-        client.post = AsyncMock(side_effect=[timeout, _resp(200, {"data": {"repository": {"nameWithOwner": "o/r"}}})])
-        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) == {"nameWithOwner": "o/r"}
+        client.post = AsyncMock(side_effect=[timeout, _resp(200, {"data": {"repository": _COUNTS}})])
+        assert asyncio.run(forge.activity_counts(client, "o/r"))["mentionable_users"] == 6
         client.post = AsyncMock(return_value=timeout)
-        assert asyncio.run(forge.dashboard_repo_info(client, "o/r")) is COLLECTION_GAP
+        assert asyncio.run(forge.activity_counts(client, "o/r")) is COLLECTION_GAP
         assert client.post.call_count == gh._GRAPHQL_ATTEMPTS

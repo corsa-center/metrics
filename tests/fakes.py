@@ -50,7 +50,7 @@ class FakeForge(Forge):
         self.first_commit: Optional[str] = None
         self.languages_data: Dict[str, int] = {}
         self.community: Dict[str, Any] = {}
-        self.dashboard_info: Optional[Dict[str, Any]] = None
+        self.activity: Optional[Dict[str, Any]] = None
         self.dependency_data: Optional[Dict[str, Any]] = None
         # count_issues: callable(**filters) -> total or None.
         self.issue_count: Callable[..., Optional[int]] = lambda **filters: 0
@@ -167,10 +167,10 @@ class FakeForge(Forge):
                 + [{"path": d.rstrip("/") + "/.keep", "size": 0} for d in self.dirs],
                 "truncated": self.tree_truncated}
 
-    async def dashboard_repo_info(self, client, ref):
-        if self._gap("dashboard_repo_info"):
+    async def activity_counts(self, client, ref):
+        if self._gap("activity_counts"):
             return COLLECTION_GAP
-        return self.dashboard_info
+        return self.activity
 
     async def dependency_graph(self, client, ref):
         if self._gap("dependency_graph"):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Portfolio Probe (CASS metrics framework)
+Portfolio Probe (CORSA metrics framework)
 
 Tests the framework's own heuristics against the real state of every
 tracked repository, instead of waiting for a maintainer to file an issue

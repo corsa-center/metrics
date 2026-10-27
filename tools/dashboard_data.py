@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-Dashboard data generator (CASS metrics framework)
+Dashboard data generator (CORSA metrics framework)
 
-Builds the dashboard's intReposInfo.json and intRepos_Dependencies.json from
-the per-package metrics.json files the orchestrator commits to the
+Builds the dashboard's intReposInfo.json, intRepos_Dependencies.json,
+spackPackageDependencies.json and spackPackageDependents.json from the
+per-package metrics.json files the orchestrator commits to the
 metrics_data repository (data/YYYYMMDD/<repo>-metrics/metrics.json). No API
-calls: everything comes from the `repo_info`, `dependencies`, `stars` and
-`metadata` the collector already wrote.
+calls: everything comes from the `metadata`, `stars`, `forks`,
+`dependencies` and `spack` the collector already wrote. All the
+dashboard-specific shaping lives here, so the metrics files stay neutral
+about which frontend reads them.
 
 Collection runs in batches, so one day's directory may not hold every
 package. For each package the newest metrics.json within --max-age-days is
-used, and each key (repo_info, dependencies) falls back to an older file if
-the newest one recorded a collection gap for it.
-
-spackPackageDependencies.json and spackPackageDependents.json need Spack
-itself -- see tools/spack_dependencies.py.
+used, and each collected key (dependencies, spack, and the activity counts
+in metadata) falls back to an older file if the newest one recorded a
+collection gap for it.
 
 Stdlib only, so it runs without the collector's requirements.
 
@@ -57,13 +58,20 @@ def _repo_key(metadata: Dict) -> Optional[str]:
     return path or None
 
 
+# Metadata keys the collector leaves out when their lookup was a gap.
+_ACTIVITY_KEYS = ("pull_requests", "issues", "mentionable_users")
+# Top-level metrics.json keys likewise left out on a gap.
+_COLLECTED_KEYS = ("dependencies", "spack")
+
+
 def load_packages(data_dir: Path, max_age_days: int = 7, today: Optional[datetime] = None) -> Dict[str, Dict]:
-    """Newest data per published package, keyed by the repository name its
+    """Newest data per package, keyed by the repository name its
     <repo>-metrics directory is named after.
 
-    Each value has `metadata`, `stars` and, when any file in the window had
-    them, `repo_info` and `dependencies` -- each from the newest file that
-    recorded it.
+    Each value has `metadata`, `stars`, `forks` and, when any file in the
+    window had them, `dependencies` and `spack` -- each from the newest
+    file that recorded it. Activity counts missing from the newest
+    metadata are filled in the same way.
     """
     today = today or datetime.now(timezone.utc)
     packages: Dict[str, Dict] = {}
@@ -73,48 +81,122 @@ def load_packages(data_dir: Path, max_age_days: int = 7, today: Optional[datetim
         except (OSError, ValueError) as e:
             print(f"Warning: skipping unreadable {metrics_file}: {e}", file=sys.stderr)
             continue
+        metadata = metrics.get("metadata") or {}
         if name not in packages:
-            metadata = metrics.get("metadata") or {}
-            if not metadata.get("published", True):
-                packages[name] = {"skip": True}
-                continue
-            packages[name] = {"metadata": metadata, "stars": metrics.get("stars", 0)}
+            packages[name] = {
+                "metadata": dict(metadata),
+                "stars": metrics.get("stars", 0),
+                "forks": metrics.get("forks", 0),
+            }
         package = packages[name]
-        if package.get("skip"):
-            continue
-        for key in ("repo_info", "dependencies"):
+        for key in _ACTIVITY_KEYS:
+            if key not in package["metadata"] and key in metadata:
+                package["metadata"][key] = metadata[key]
+        for key in _COLLECTED_KEYS:
             if key not in package and key in metrics:
                 package[key] = metrics[key]
-    return {name: p for name, p in packages.items() if not p.get("skip")}
+    return packages
+
+
+def _total(count: Optional[int]) -> Dict:
+    return {"totalCount": count}
+
+
+def _license_info(license_data: Optional[Dict]) -> Optional[Dict]:
+    """GitHub GraphQL's licenseInfo from the metadata's license."""
+    if not license_data:
+        return None
+    key = license_data.get("key")
+    return {
+        "name": license_data.get("name"),
+        "spdxId": license_data.get("spdx_id"),
+        # Where GitHub's licenseInfo.url points.
+        "url": f"http://choosealicense.com/licenses/{key}/" if key else None,
+    }
+
+
+def repo_entry(package: Dict) -> Optional[Dict]:
+    """One intReposInfo.json entry, in the GitHub GraphQL shape the
+    dashboard's JavaScript reads."""
+    metadata = package["metadata"]
+    key = _repo_key(metadata)
+    if not key:
+        return None
+    owner, _, name = key.rpartition("/")
+    language = metadata.get("language")
+    parent = metadata.get("parent")
+    pull_requests = metadata.get("pull_requests") or {}
+    issues = metadata.get("issues") or {}
+    entry = {
+        "nameWithOwner": key,
+        "name": name,
+        "owner": {"login": owner, "avatarUrl": metadata.get("owner_avatar_url")},
+        "url": metadata["repo_url"].rstrip("/").removesuffix(".git"),
+        "homepageUrl": metadata.get("homepage"),
+        "description": metadata.get("description"),
+        "createdAt": metadata.get("created_at"),
+        "defaultBranchRef": {"name": metadata.get("default_branch")},
+        "licenseInfo": _license_info(metadata.get("license")),
+        "primaryLanguage": {"name": language} if language else None,
+        "repositoryTopics": _total(len(metadata.get("topics") or [])),
+        "parent": {
+            "nameWithOwner": parent,
+            "name": parent.rpartition("/")[2],
+            "owner": {"login": parent.rpartition("/")[0]},
+        } if parent else None,
+        "stargazers": _total(package.get("stars", 0)),
+        "forks": _total(package.get("forks", 0)),
+        "mentionableUsers": _total(metadata.get("mentionable_users")),
+        "pullRequests_Open": _total(pull_requests.get("open")),
+        "pullRequests_Closed": _total(pull_requests.get("closed")),
+        "pullRequests_Merged": _total(pull_requests.get("merged")),
+        "issues_Open": _total(issues.get("open")),
+        "issues_Closed": _total(issues.get("closed")),
+        # Unpublished packages stay in the data; the dashboard decides how
+        # to show them.
+        "published": metadata.get("published", True),
+    }
+    if metadata.get("cdash"):
+        entry["cdash"] = metadata["cdash"]
+    return entry
 
 
 def build_repos_info(packages: Dict[str, Dict]) -> Dict:
     """intReposInfo.json: {"data": {nameWithOwner: GraphQL-shaped repo}}."""
     data = {}
     for name, package in sorted(packages.items()):
-        repo_info = package.get("repo_info")
-        if not repo_info:
-            print(f"Warning: no repo_info for {name}; left out of intReposInfo.json", file=sys.stderr)
+        entry = repo_entry(package)
+        if entry is None:
+            print(f"Warning: no repo_url for {name}; left out of intReposInfo.json", file=sys.stderr)
             continue
-        entry = dict(repo_info)
-        entry["stargazers"] = {"totalCount": package.get("stars", 0)}
-        cdash = package["metadata"].get("cdash")
-        if cdash:
-            entry["cdash"] = cdash
-        data[entry.get("nameWithOwner") or _repo_key(package["metadata"])] = entry
+        data[entry["nameWithOwner"]] = entry
     return {"data": data}
 
 
 def build_dependencies(packages: Dict[str, Dict]) -> Dict:
     """intRepos_Dependencies.json: {"data": {nameWithOwner: dependency graph}}."""
     data = {}
-    for name, package in sorted(packages.items()):
+    for _, package in sorted(packages.items()):
         dependencies = package.get("dependencies")
-        if not dependencies:
-            continue
-        key = (package.get("repo_info") or {}).get("nameWithOwner") or _repo_key(package["metadata"])
-        data[key] = dependencies
+        key = _repo_key(package["metadata"])
+        if dependencies and key:
+            data[key] = dependencies
     return {"data": data}
+
+
+def build_spack(packages: Dict[str, Dict]) -> Tuple[Dict, Dict]:
+    """spackPackageDependencies.json and spackPackageDependents.json, both
+    keyed by Spack package name."""
+    dependencies, dependents = {}, {}
+    for _, package in sorted(packages.items()):
+        spack = package.get("spack")
+        if not spack:
+            continue
+        if spack.get("dependencies"):
+            dependencies[spack["name"]] = spack["dependencies"]
+        if spack.get("dependents"):
+            dependents[spack["name"]] = spack["dependents"]
+    return dependencies, dependents
 
 
 def write_json(path: Path, obj: Dict) -> None:
@@ -138,15 +220,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     repos_info = build_repos_info(packages)
     if not repos_info["data"]:
-        # Before the collector started writing repo_info, or after a run of
-        # nothing but gaps -- publishing an empty catalog would blank the
-        # whole dashboard.
-        print("No package has repo_info; refusing to write an empty intReposInfo.json", file=sys.stderr)
+        # Publishing an empty catalog would blank the whole dashboard.
+        print("No package has a repo_url; refusing to write an empty intReposInfo.json", file=sys.stderr)
         return 1
 
+    spack_dependencies, spack_dependents = build_spack(packages)
     args.output.mkdir(parents=True, exist_ok=True)
     write_json(args.output / "intReposInfo.json", repos_info)
     write_json(args.output / "intRepos_Dependencies.json", build_dependencies(packages))
+    write_json(args.output / "spackPackageDependencies.json", spack_dependencies)
+    write_json(args.output / "spackPackageDependents.json", spack_dependents)
     print(f"Wrote {len(repos_info['data'])} repositories to {args.output}")
     return 0
 

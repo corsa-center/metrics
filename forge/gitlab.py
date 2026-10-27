@@ -195,6 +195,7 @@ class GitLabForge(Forge):
           SPDX identifier -- left as None rather than guessing, so callers
           that match against a known-SPDX-id table fall through to
           content-based detection instead of a wrong match.
+        - `owner_avatar_url`: the namespace's avatar.
         """
         data = await self._gitlab_get(
             client, f"/projects/{self._project_path(ref)}",
@@ -223,6 +224,13 @@ class GitLabForge(Forge):
             "name": license_data.get("name"),
             "key": license_data.get("key")
         } if license_data else None
+        repo_info["topics"] = data.get("topics") or data.get("tag_list") or []
+        avatar = (data.get("namespace") or {}).get("avatar_url")
+        if avatar and avatar.startswith("/"):
+            # Uploaded avatars come back host-relative.
+            avatar = f"https://{self.host}{avatar}"
+        repo_info["owner_avatar_url"] = avatar
+        repo_info["parent"] = (data.get("forked_from_project") or {}).get("path_with_namespace")
         return repo_info
 
     async def file_metadata(self, client: httpx.AsyncClient, ref: str, path: str):
@@ -817,59 +825,24 @@ class GitLabForge(Forge):
             return None
         return int(resp.headers["X-Total"])
 
-    async def dashboard_repo_info(self, client: httpx.AsyncClient, ref: str):
-        """See Forge.dashboard_repo_info. GitLab has no mentionable-users or
-        topic-count equivalent and no fork parent in the project object's
-        GitHub shape, so those keys are left out; counts GitLab doesn't
-        report come back as None."""
+    async def activity_counts(self, client: httpx.AsyncClient, ref: str):
+        """See Forge.activity_counts. GitLab has no mentionable-users
+        equivalent, so that is always None."""
         project_path = f"/projects/{self._project_path(ref)}"
-        data = await self._gitlab_get(client, project_path, params={"license": "true"})
-        if data is COLLECTION_GAP or data is None:
-            return data
-        languages = await self.languages(client, ref) or {}
         stats = await self._gitlab_get(client, f"{project_path}/issues_statistics")
-        counts = ((stats or {}).get("statistics") or {}).get("counts") or {}
+        if stats is COLLECTION_GAP or stats is None:
+            return stats
+        counts = (stats.get("statistics") or {}).get("counts") or {}
         mr_path = f"{project_path}/merge_requests"
         mr_open, mr_closed, mr_merged = await asyncio.gather(
             self._total(client, mr_path, {"state": "opened"}),
             self._total(client, mr_path, {"state": "closed"}),
             self._total(client, mr_path, {"state": "merged"}),
         )
-        namespace = data.get("namespace") or {}
-        avatar = namespace.get("avatar_url")
-        if avatar and avatar.startswith("/"):
-            # Uploaded avatars come back host-relative.
-            avatar = f"https://{self.host}{avatar}"
-        license_data = data.get("license") or {}
-        forked_from = data.get("forked_from_project")
         return {
-            "nameWithOwner": data.get("path_with_namespace", ref),
-            "name": data.get("name", ""),
-            "owner": {"login": namespace.get("full_path", ""), "avatarUrl": avatar},
-            "url": data.get("web_url"),
-            "homepageUrl": data.get("web_url"),
-            "description": data.get("description") or "",
-            "createdAt": data.get("created_at"),
-            "defaultBranchRef": {"name": data.get("default_branch")},
-            "licenseInfo": {
-                "name": license_data.get("name"),
-                "nickname": license_data.get("nickname"),
-                "spdxId": None,  # see repo_info: GitLab's key isn't a guaranteed SPDX id
-                "url": license_data.get("source_url"),
-            } if license_data else None,
-            "forks": {"totalCount": data.get("forks_count", 0)},
-            "primaryLanguage": {"name": max(languages, key=languages.get)} if languages else None,
-            "languages": {"totalCount": len(languages)},
-            "parent": {
-                "nameWithOwner": forked_from.get("path_with_namespace"),
-                "name": forked_from.get("name"),
-                "owner": {"login": (forked_from.get("namespace") or {}).get("full_path")},
-            } if forked_from else None,
-            "pullRequests_Open": {"totalCount": mr_open},
-            "pullRequests_Closed": {"totalCount": mr_closed},
-            "pullRequests_Merged": {"totalCount": mr_merged},
-            "issues_Open": {"totalCount": counts.get("opened")},
-            "issues_Closed": {"totalCount": counts.get("closed")},
+            "pull_requests": {"open": mr_open, "closed": mr_closed, "merged": mr_merged},
+            "issues": {"open": counts.get("opened"), "closed": counts.get("closed")},
+            "mentionable_users": None,
         }
 
     async def dependency_graph(self, client: httpx.AsyncClient, ref: str):

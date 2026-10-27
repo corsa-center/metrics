@@ -227,28 +227,35 @@ always matches the dashboard. See `../package_report.py`.
 
 ### 5. Dashboard Data Files
 
-Each `metrics.json` also carries the raw inputs for the dashboard's
-repository and dependency views:
+Besides the catalog entry, `metadata` records what the forge reports about
+the repository: description, homepage, language, license, dates, `topics`,
+`owner_avatar_url`, `parent` (the upstream of a fork), and the activity
+counts `pull_requests` (`open`/`closed`/`merged`), `issues`
+(`open`/`closed`) and `mentionable_users`. Each `metrics.json` also has:
 
-- `repo_info` -- the repository in the dashboard's `intReposInfo.json` shape
-  (GitHub GraphQL field names; GitLab is mapped onto the same names)
-- `dependencies` -- the GitHub dependency graph, in the
-  `intRepos_Dependencies.json` shape (`null` on GitLab, which has none)
+- `dependencies` -- the GitHub dependency graph (`null` on GitLab, which
+  has none)
+- `spack` -- the package's Spack dependencies and dependents (`{name,
+  dependencies, dependents}`; `null` when Spack has no package named after
+  the repository). Collected only when `spack` is on `PATH`: one `spack
+  python tools/spack_dependencies.py` run per batch covers every package in
+  it.
 
 A key is left out when its lookup failed, rather than written empty.
 
 The metrics_data repository's daily "Generate dashboard data" workflow turns
-those into four files beside the day's metrics, in `data/YYYYMMDD/`:
+those into the dashboard's `intReposInfo.json`, `intRepos_Dependencies.json`,
+`spackPackageDependencies.json` and `spackPackageDependents.json`, beside the
+day's metrics in `data/YYYYMMDD/`. No API calls; it uses each package's
+newest `metrics.json` from the last 7 days, and all the dashboard-specific
+shaping lives in this one script:
 
 ```bash
-# intReposInfo.json and intRepos_Dependencies.json -- no API calls; uses
-# each package's newest metrics.json from the last 7 days
 python tools/dashboard_data.py --data-dir data --output data/20261026
-
-# spackPackageDependencies.json and spackPackageDependents.json
-spack python tools/spack_dependencies.py \
-  --repo-info data/20261026/intReposInfo.json --output data/20261026
 ```
+
+Unpublished packages are kept, with `"published": false` on their
+`intReposInfo.json` entry.
 
 ## Automation via GitHub Actions
 

@@ -198,16 +198,15 @@ class Forge(ABC):
     async def repo_tree(self, client: httpx.AsyncClient, ref: str): ...
 
     @abstractmethod
-    async def dashboard_repo_info(self, client: httpx.AsyncClient, ref: str):
-        """The repository in the shape of the dashboard's intReposInfo.json
-        entries (GitHub GraphQL field names: nameWithOwner, owner{login,
-        avatarUrl}, licenseInfo, forks{totalCount}, issues_Open, ...), or
-        None (confirmed absent) / COLLECTION_GAP."""
+    async def activity_counts(self, client: httpx.AsyncClient, ref: str):
+        """{pull_requests: {open, closed, merged}, issues: {open, closed},
+        mentionable_users}, or None (confirmed absent) / COLLECTION_GAP. A
+        count the platform doesn't report is None."""
 
     @abstractmethod
     async def dependency_graph(self, client: httpx.AsyncClient, ref: str):
-        """The repository in the shape of the dashboard's
-        intRepos_Dependencies.json entries: {languages: {nodes: [{name,
+        """The repository's dependency graph, in the shape of the
+        dashboard's intRepos_Dependencies.json entries: {languages: {nodes: [{name,
         color}]}, dependencyGraphManifests: {nodes: [{dependencies: {nodes:
         [{packageName, packageManager, repository}]}}]}}. None when the
         platform has no dependency graph or the repository is absent;
