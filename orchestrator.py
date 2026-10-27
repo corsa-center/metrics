@@ -18,7 +18,9 @@ import base64
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -189,6 +191,9 @@ class MetricsOrchestrator:
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
         self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
         self.quality_collectors = self.config.get("quality_collectors", {})
+        # Spack package name -> collect_spack_dependencies() entry, or None
+        # until a batch has been analyzed (or when Spack isn't available).
+        self.spack_data: Optional[Dict[str, Optional[Dict]]] = None
 
     def _configure_logging(self) -> None:
         """Wire up config/orchestrator.yaml's `logging:` block.
@@ -634,11 +639,115 @@ class MetricsOrchestrator:
                 for k in DEFINITE_METADATA_KEYS
                 if repo_info.get(k) is not None
             )
+            package.update(await self._get_repo_activity(forge, package))
 
         if repo_info is not COLLECTION_GAP and not repo_info:
             return False, f"unable to access {package['repo_url']}"
 
         return True, ""
+
+    async def _get_repo_activity(self, forge: Forge, package: Dict) -> Dict:
+        """Pull request, issue and mentionable-user counts for the package's
+        metadata, plus its primary language when repo_info had none
+        (GitLab's project object doesn't carry one). A lookup that was a
+        gap leaves its keys out, so tools/dashboard_data.py can fall back
+        to an earlier day's values.
+        """
+        ref = forge.extract_ref(package["repo_url"])
+        if ref is None:
+            return {}
+        activity: Dict = {}
+        try:
+            async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
+                counts = await forge.activity_counts(client, ref)
+                if counts:
+                    activity.update(counts)
+                if not package.get("language"):
+                    languages = await forge.languages(client, ref)
+                    if languages:
+                        activity["language"] = max(languages, key=languages.get)
+        except Exception as e:
+            logger.warning(f"activity counts failed for {package['repo_url']}: {e!r}")
+        return activity
+
+    @staticmethod
+    def _spack_name(package: Dict) -> Optional[str]:
+        """The Spack package a catalog entry is matched to: its repository
+        name, lowercased."""
+        name = urlparse(package.get("repo_url") or "").path.rstrip("/").rsplit("/", 1)[-1]
+        if name.endswith(".git"):
+            name = name[:-4]
+        return name.lower() or None
+
+    async def collect_spack_dependencies(self, packages: List[Dict]) -> Optional[Dict[str, Optional[Dict]]]:
+        """Spack's dependency data for the packages, keyed by Spack package
+        name: {name, dependencies, dependents} (see
+        tools/spack_dependencies.py), or None when Spack has no package by
+        that name. None overall when Spack isn't on PATH or the analysis
+        failed -- a gap, so the metrics files leave the `spack` key out.
+
+        One `spack python` run covers the whole batch, since finding a
+        package's dependents means loading every package Spack has.
+        """
+        spack = shutil.which("spack")
+        if spack is None:
+            logger.info("spack is not on PATH; skipping Spack dependency data")
+            return None
+        names = sorted({n for n in map(self._spack_name, packages) if n})
+        if not names:
+            return {}
+        script = Path(__file__).resolve().parent / "tools" / "spack_dependencies.py"
+        timeout = float(self.config.get("spack", {}).get("timeout", 1800))
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "spack.json"
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    spack, "python", str(script), "--output", str(output), *names,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    logger.warning(f"Spack dependency analysis timed out after {timeout:.0f}s")
+                    return None
+                if proc.returncode != 0:
+                    logger.warning(
+                        f"Spack dependency analysis failed (exit {proc.returncode}): "
+                        f"{stderr.decode(errors='replace')[-2000:]}"
+                    )
+                    return None
+                return json.loads(output.read_text())
+            except (OSError, ValueError) as e:
+                logger.warning(f"Spack dependency analysis failed: {e!r}")
+                return None
+
+    async def collect_dependency_info(self, package: Dict) -> Dict:
+        """The package's `dependencies` (the forge's dependency graph) and
+        `spack` (its Spack dependencies and dependents, from this batch's
+        collect_spack_dependencies run). A key is left out when its lookup
+        was a gap, so tools/dashboard_data.py can keep an earlier day's
+        entry instead of publishing a blank one.
+        """
+        info: Dict = {}
+        spack_name = self._spack_name(package)
+        if self.spack_data is not None and spack_name in self.spack_data:
+            info["spack"] = self.spack_data[spack_name]
+
+        forge = self._forge_for_package(package)
+        ref = forge.extract_ref(package["repo_url"]) if forge else None
+        if ref is None:
+            return info
+        try:
+            async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
+                dependencies = await forge.dependency_graph(client, ref)
+        except Exception as e:
+            logger.warning(f"dependencies failed for {package['repo_url']}: {e!r}")
+        else:
+            if dependencies is not COLLECTION_GAP:
+                info["dependencies"] = dependencies
+        return info
 
     async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
         """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
@@ -1018,6 +1127,7 @@ class MetricsOrchestrator:
         # invalid, or the repo type is not supported, in which case we do not continue with collection.
         # If it was successful or if there is a temporary error (COLLECTION_GAP) we continue with collection.
         collect, err = await self._update_repo_info(package)
+        dependency_info: Dict = {}
 
         if collect:
             # Collect all 3 dimensions in parallel
@@ -1025,12 +1135,18 @@ class MetricsOrchestrator:
                 impact_metrics,
                 ecosystem_metrics,
                 quality_metrics,
+                dependency_info,
             ) = await asyncio.gather(
                 self.collect_impact_dimension(package),
                 self.collect_ecosystem_dimension(package),
                 self.collect_quality_dimension(package),
+                self.collect_dependency_info(package),
                 return_exceptions=True,
             )
+
+            if isinstance(dependency_info, Exception):
+                logger.error(f"Dependency info error: {dependency_info}")
+                dependency_info = {}
 
             # Use defaults if any exceptions
             if isinstance(impact_metrics, Exception):
@@ -1061,6 +1177,7 @@ class MetricsOrchestrator:
                 "ecosystem": ecosystem_metrics,
                 "quality": quality_metrics,
             },
+            "dependency_info": dependency_info,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -1125,6 +1242,7 @@ class MetricsOrchestrator:
             return {}
 
         all_metrics = {}
+        self.spack_data = await self.collect_spack_dependencies([catalog[p] for p in software_list])
 
         # Packages are independent, and each one spends nearly all its time
         # waiting on the GitHub API, so they are processed in a small pool
@@ -2464,6 +2582,10 @@ class MetricsOrchestrator:
                     "package": package_name,
                     "metadata": catalog[package_name],
                     **section_data,
+                    # The dashboard's "last updated" (js/catalog.js).
+                    "generated_at": metrics.get("last_updated"),
+                    # `dependencies` and `spack`, when collected.
+                    **metrics.get("dependency_info", {}),
                 }
             except Exception as e:
                 logger.error(f"Could not render dashboard output for {package_name}: {e!r}", exc_info=True)

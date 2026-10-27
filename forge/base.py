@@ -40,6 +40,9 @@ _DEFAULT_REPO_INFO = {
     "pushed_at": None,
     "default_branch": "HEAD",
     "license": None,
+    "topics": [],
+    "owner_avatar_url": None,
+    "parent": None,
 }
 
 def get_default_repo_info() -> Dict:
@@ -66,8 +69,10 @@ NULLABLE_METADATA_KEYS = (
     "pushed_at",
     "default_branch",
     "license",
+    "owner_avatar_url",
+    "parent",
 )
-DEFINITE_METADATA_KEYS = ("archived", "disabled", "size_kb")
+DEFINITE_METADATA_KEYS = ("archived", "disabled", "size_kb", "topics", "stars", "forks")
 
 # Statuses worth retrying. 429/5xx are unambiguous; 403 is GitHub's shared
 # code for both a real permission error and its *secondary* (abuse-detection)

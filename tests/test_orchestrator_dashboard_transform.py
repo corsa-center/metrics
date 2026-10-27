@@ -413,3 +413,96 @@ class TestPlatformLabels:
             "has_codeql": False, "scanners_checked": "CodeQL or GitLab SAST"}})
         assert ("No CodeQL or GitLab SAST workflow found"
                 in orchestrator._transform_for_dashboard(missing, {})["quality"]["4.3.1"]["data"])
+
+
+class TestDependencyInfo:
+    PACKAGE = {"name": "P", "repo_type": "github", "repo_url": "https://github.com/o/HDF5"}
+
+    def _collect(self, orchestrator, forge):
+        from unittest.mock import patch
+        with patch.object(orchestrator, "_forge_for_package", return_value=forge):
+            return asyncio.run(orchestrator.collect_dependency_info(dict(self.PACKAGE)))
+
+    def test_dependencies_collected(self, orchestrator):
+        forge = FakeForge(dependency_data={"dependencyGraphManifests": {"nodes": []}})
+        assert self._collect(orchestrator, forge) == {"dependencies": {"dependencyGraphManifests": {"nodes": []}}}
+
+    def test_a_gap_leaves_the_key_out(self, orchestrator):
+        assert self._collect(orchestrator, FakeForge(gaps={"dependency_graph"})) == {}
+
+    def test_spack_entry_matched_by_lowercased_repo_name(self, orchestrator):
+        entry = {"name": "hdf5", "dependencies": {"zlib": {}}, "dependents": {}}
+        orchestrator.spack_data = {"hdf5": entry}
+        assert self._collect(orchestrator, FakeForge())["spack"] == entry
+
+    def test_not_in_spack_is_recorded_as_none(self, orchestrator):
+        orchestrator.spack_data = {"hdf5": None}
+        assert self._collect(orchestrator, FakeForge())["spack"] is None
+
+    def test_spack_unavailable_leaves_the_key_out(self, orchestrator):
+        orchestrator.spack_data = None
+        assert "spack" not in self._collect(orchestrator, FakeForge())
+
+    def test_written_into_metrics_json(self, orchestrator, tmp_path):
+        metrics = {**_base_metrics(), "dependency_info": {"spack": None}}
+        orchestrator.write_metrics(tmp_path, {"o/r": {"repo_url": "https://github.com/o/r"}}, {"o/r": metrics})
+        data = json.loads((tmp_path / "r-metrics" / "metrics.json").read_text())
+        assert data["spack"] is None
+        assert "dependencies" not in data
+
+
+class TestRepoActivity:
+    PACKAGE = {"name": "P", "repo_type": "gitlab", "repo_url": "https://gitlab.com/g/p"}
+    COUNTS = {"pull_requests": {"open": 1, "closed": 2, "merged": 3},
+              "issues": {"open": 4, "closed": 5}, "mentionable_users": None}
+
+    def _activity(self, orchestrator, forge, **package):
+        return asyncio.run(orchestrator._get_repo_activity(forge, {**self.PACKAGE, **package}))
+
+    def test_counts_and_language_from_languages(self, orchestrator):
+        forge = FakeForge(activity=self.COUNTS, languages_data={"C": 70.0, "Fortran": 30.0})
+        assert self._activity(orchestrator, forge) == {**self.COUNTS, "language": "C"}
+
+    def test_language_from_repo_info_is_kept(self, orchestrator):
+        forge = FakeForge(activity=self.COUNTS, languages_data={"C": 70.0})
+        assert "language" not in self._activity(orchestrator, forge, language="Python")
+        assert ("languages",) not in forge.calls
+
+    def test_gaps_leave_keys_out(self, orchestrator):
+        forge = FakeForge(gaps={"activity_counts", "languages"})
+        assert self._activity(orchestrator, forge) == {}
+
+
+class TestSpackDependencies:
+    def _run(self, orchestrator, packages):
+        return asyncio.run(orchestrator.collect_spack_dependencies(packages))
+
+    def test_no_spack_is_a_gap(self, orchestrator, monkeypatch):
+        monkeypatch.setattr("orchestrator.shutil.which", lambda _: None)
+        assert self._run(orchestrator, [{"repo_url": "https://github.com/o/r"}]) is None
+
+    def test_runs_the_helper_once_for_the_batch(self, orchestrator, monkeypatch, tmp_path):
+        # A stand-in `spack` whose `python` subcommand runs the helper's
+        # contract: write {name: entry} to --output.
+        fake = tmp_path / "spack"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "args = sys.argv[3:]\n"
+            "out = args[args.index('--output') + 1]\n"
+            "names = [a for a in args if a not in ('--output', out)]\n"
+            "open(out, 'w').write(json.dumps({n: None for n in names}))\n"
+            "open(sys.argv[0] + '.log', 'a').write(' '.join(names) + '\\n')\n"
+        )
+        fake.chmod(0o755)
+        monkeypatch.setattr("orchestrator.shutil.which", lambda _: str(fake))
+        packages = [{"repo_url": "https://github.com/HDFGroup/HDF5"}, {"repo_url": "https://gitlab.com/g/adios2.git"}]
+        assert self._run(orchestrator, packages) == {"adios2": None, "hdf5": None}
+        assert (tmp_path / "spack.log").read_text() == "adios2 hdf5\n"
+
+    def test_failure_is_a_gap(self, orchestrator, monkeypatch, tmp_path):
+        fake = tmp_path / "spack"
+        fake.write_text("#!/bin/sh\necho boom >&2\nexit 3\n")
+        fake.chmod(0o755)
+        monkeypatch.setattr("orchestrator.shutil.which", lambda _: str(fake))
+        assert self._run(orchestrator, [{"repo_url": "https://github.com/o/r"}]) is None

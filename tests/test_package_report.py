@@ -129,6 +129,7 @@ class TestHtmlOutput:
             assert key in data
         assert data["package"] == "HDF5"
         assert data["metadata"] == catalog["HDF5"]
+        assert data["generated_at"] == "2026-09-30T02:25:04.582663+00:00"
 
     def test_report_written_beside_metrics_json(self, orchestrator, tmp_path):
         metrics = _metrics(

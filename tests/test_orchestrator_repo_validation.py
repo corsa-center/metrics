@@ -56,16 +56,30 @@ class TestRepoMetadataOnThePackage:
     what the forge actually answered -- a failed lookup must not overwrite
     curated catalog values with defaults."""
 
-    def _update(self, orchestrator, repo_info, **package_extra):
+    def _update(self, orchestrator, repo_info, activity=None, **package_extra):
         package = {
             "name": "P",
             "repo_type": "github",
             "repo_url": "https://github.com/o/r",
             **package_extra,
         }
-        with patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=repo_info)):
+        with patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=repo_info)), \
+             patch.object(orchestrator, "_get_repo_activity", new=AsyncMock(return_value=activity or {})) as get_activity:
             collect, reason = asyncio.run(orchestrator._update_repo_info(package))
+        self.activity_looked_up = get_activity.called
         return collect, reason, package
+
+    def test_topics_and_activity_land_on_the_package(self, orchestrator):
+        info = {**get_default_repo_info(), "topics": [], "parent": "up/r"}
+        activity = {"issues": {"open": 1, "closed": 2}}
+        _, _, package = self._update(orchestrator, info, activity)
+        assert package["topics"] == []
+        assert package["parent"] == "up/r"
+        assert package["issues"] == {"open": 1, "closed": 2}
+
+    def test_no_activity_lookup_on_a_gap(self, orchestrator):
+        self._update(orchestrator, COLLECTION_GAP)
+        assert not self.activity_looked_up
 
     def test_real_values_land_on_the_package(self, orchestrator):
         info = {**get_default_repo_info(), "description": "d", "language": "C"}
@@ -76,11 +90,13 @@ class TestRepoMetadataOnThePackage:
     def test_false_and_zero_are_recorded_not_dropped(self, orchestrator):
         # "not archived" and "empty repo" are real answers; the dashboard
         # can't tell them from "never looked" if the keys are absent.
-        info = {**get_default_repo_info(), "archived": False, "disabled": False, "size_kb": 0}
+        info = {**get_default_repo_info(), "archived": False, "disabled": False, "size_kb": 0,
+                "stars": 0, "forks": 0}
         _, _, package = self._update(orchestrator, info)
         assert package["archived"] is False
         assert package["disabled"] is False
         assert package["size_kb"] == 0
+        assert (package["stars"], package["forks"]) == (0, 0)
 
     def test_a_gap_keeps_curated_catalog_values(self, orchestrator):
         _, _, package = self._update(
@@ -143,7 +159,9 @@ class TestCollectAllMetricsSkipsMissingRepo:
                  patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=get_default_repo_info())), \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
-                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_dependency_info", new=AsyncMock(return_value={})), \
+                 patch.object(orchestrator, "_get_repo_activity", new=AsyncMock(return_value={})):
                 return await orchestrator.collect_all_metrics(self._package("HDFGroup/hdf5"))
 
         result = asyncio.run(go())
@@ -157,7 +175,9 @@ class TestCollectAllMetricsSkipsMissingRepo:
                  patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=COLLECTION_GAP)), \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
-                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_dependency_info", new=AsyncMock(return_value={})), \
+                 patch.object(orchestrator, "_get_repo_activity", new=AsyncMock(return_value={})):
                 return await orchestrator.collect_all_metrics(self._package("HDFGroup/hdf5"))
 
         result = asyncio.run(go())
@@ -204,7 +224,9 @@ class TestCollectAllMetricsSkipsMissingRepo:
                  patch.object(orchestrator, "_get_repo_info", new=AsyncMock(return_value=get_default_repo_info())) as confirm, \
                  patch.object(orchestrator, "collect_impact_dimension", new=AsyncMock(return_value=fake_dim)), \
                  patch.object(orchestrator, "collect_ecosystem_dimension", new=AsyncMock(return_value=fake_dim)), \
-                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)):
+                 patch.object(orchestrator, "collect_quality_dimension", new=AsyncMock(return_value=fake_dim)), \
+                 patch.object(orchestrator, "collect_dependency_info", new=AsyncMock(return_value={})), \
+                 patch.object(orchestrator, "_get_repo_activity", new=AsyncMock(return_value={})):
                 pkg = {"name": "GitLabThing", "repo_type": "gitlab",
                        "repo_url": "https://gitlab.com/owner/thing"}
                 result = await orchestrator.collect_all_metrics(pkg)

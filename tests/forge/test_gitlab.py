@@ -131,6 +131,16 @@ class TestRepoInfo:
         assert result["size_kb"] == 2
         assert result["license"] == {"spdx_id": None, "name": "MIT License", "key": "mit"}
 
+    def test_topics_owner_and_parent(self, forge):
+        client = _client({
+            "topics": ["cfd"], "namespace": {"full_path": "g/sub", "avatar_url": "/uploads/x.png"},
+            "forked_from_project": {"path_with_namespace": "u/p"},
+        })
+        result = asyncio.run(forge.repo_info(client, "g/sub/p"))
+        assert result["topics"] == ["cfd"]
+        assert result["owner_avatar_url"] == "https://gitlab.example.com/uploads/x.png"
+        assert result["parent"] == "u/p"
+
     def test_pages_disabled_is_false(self, forge):
         client = _client({"pages_access_level": "disabled"})
         result = asyncio.run(forge.repo_info(client, "g/p"))
@@ -686,3 +696,29 @@ class TestClosedMergeRequestsIncludeMerged:
         assert [p["number"] for p in prs] == [1, 2]
         _, kwargs = client.get.call_args_list[0]
         assert kwargs["params"]["state"] == "all"
+
+
+class TestActivityCounts:
+    def test_counts(self, forge):
+        totals = {"opened": "3", "closed": "5", "merged": "8"}
+
+        async def get(url, headers=None, params=None):
+            if url.endswith("/issues_statistics"):
+                return _resp(200, {"statistics": {"counts": {"opened": 2, "closed": 9}}})
+            if url.endswith("/merge_requests"):
+                return _resp(200, [], headers={"X-Total": totals[params["state"]]})
+            raise AssertionError(url)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=get)
+        assert asyncio.run(forge.activity_counts(client, "g/sub/p")) == {
+            "pull_requests": {"open": 3, "closed": 5, "merged": 8},
+            "issues": {"open": 2, "closed": 9},
+            "mentionable_users": None,
+        }
+
+    def test_gap_and_absence_pass_through(self, forge):
+        assert asyncio.run(forge.activity_counts(_client(None, 403), "g/p")) is COLLECTION_GAP
+        assert asyncio.run(forge.activity_counts(_client(None, 404), "g/p")) is None
+
+    def test_no_dependency_graph(self, forge):
+        assert asyncio.run(forge.dependency_graph(AsyncMock(), "g/p")) is None

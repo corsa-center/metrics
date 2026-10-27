@@ -1,5 +1,5 @@
 """GitHub implementation of forge.interface.Forge, against GitHub's REST API
-(plus one GraphQL query for version tags).
+(plus GraphQL for version tags, activity counts and the dependency graph).
 
 Get one through `Forge.for_repo(...)` rather than constructing it directly.
 The private helpers (`_github_get`, `_check_file_exists`) are the former
@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 # GitLabForge derives the same flag from a project members lookup instead;
 # either way collectors read `is_outsider`, never the raw platform field.
 _INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+# GraphQL server-side timeouts (see GitHubForge._graphql): tries, and the
+# seconds before the first retry, growing linearly.
+_GRAPHQL_ATTEMPTS = 3
+_GRAPHQL_RETRY_DELAY = 2.0
 
 
 def _is_bot_login(login: str) -> bool:
@@ -182,9 +187,10 @@ class GitHubForge(Forge):
         open_issues, description, homepage, has_wiki, has_pages,
         has_discussions, archived, disabled, language, size_kb, created_at,
         updated_at, pushed_at, default_branch, license ({spdx_id, name,
-        key} or None). `has_discussions` is GitHub-only -- GitLabForge
-        always returns False for it, a real answer (GitLab has no
-        Discussions feature), not a gap.
+        key} or None), topics, owner_avatar_url, parent (the upstream's
+        owner/repo for a fork, else None). `has_discussions` is
+        GitHub-only -- GitLabForge always returns False for it, a real
+        answer (GitLab has no Discussions feature), not a gap.
         """
         data = await self._github_get(client, f"https://api.github.com/repos/{ref}")
         if data is COLLECTION_GAP or data is None:
@@ -213,6 +219,9 @@ class GitHubForge(Forge):
             "name": license_data.get("name"),
             "key": license_data.get("key")
         } if license_data else None
+        repo_info["topics"] = data.get("topics") or []
+        repo_info["owner_avatar_url"] = (data.get("owner") or {}).get("avatar_url")
+        repo_info["parent"] = (data.get("parent") or {}).get("full_name")
         return repo_info
 
     async def file_metadata(self, client: httpx.AsyncClient, ref: str, path: str):
@@ -817,6 +826,105 @@ class GitHubForge(Forge):
             if date:
                 tags.append({"tag_name": name, "published_at": date, "from_tag": True})
         return tags
+
+    async def _graphql(
+        self, client: httpx.AsyncClient, query: str, variables: Dict[str, Any],
+        accept: Optional[str] = None,
+    ):
+        """POST a GraphQL query and return its `data`, None when the
+        repository doesn't exist, or COLLECTION_GAP (no token, network
+        error, non-200, or a GraphQL error other than NOT_FOUND).
+
+        A server-side timeout comes back as a 200 whose error has no
+        `type` ("Something went wrong while executing your query"), which
+        RetryingTransport can't see, so it is retried here."""
+        if "Authorization" not in self.github_headers:
+            return COLLECTION_GAP
+        headers = {**self.github_headers, "Accept": accept} if accept else self.github_headers
+        for attempt in range(_GRAPHQL_ATTEMPTS):
+            try:
+                resp = await client.post(
+                    "https://api.github.com/graphql", headers=headers,
+                    json={"query": query, "variables": variables},
+                )
+            except Exception as e:
+                logger.warning(f"COLLECTION-GAP graphql status=exception reason={e!r}")
+                return COLLECTION_GAP
+            if resp.status_code != 200:
+                logger.warning(f"COLLECTION-GAP graphql status={resp.status_code}")
+                return COLLECTION_GAP
+            body = resp.json()
+            errors = body.get("errors") or []
+            if any(e.get("type") == "NOT_FOUND" for e in errors):
+                return None
+            if not errors:
+                return body.get("data")
+            if any(e.get("type") for e in errors) or attempt == _GRAPHQL_ATTEMPTS - 1:
+                break
+            await asyncio.sleep(_GRAPHQL_RETRY_DELAY * (attempt + 1))
+        logger.warning(f"COLLECTION-GAP graphql errors={errors!r}")
+        return COLLECTION_GAP
+
+    async def activity_counts(self, client: httpx.AsyncClient, ref: str):
+        """See Forge.activity_counts. One GraphQL query -- REST has no
+        per-state pull request or issue totals."""
+        owner, repo = ref.split("/", 1)
+        query = """query($o:String!,$n:String!){repository(owner:$o,name:$n){
+          mentionableUsers{totalCount}
+          prOpen:pullRequests(states:OPEN){totalCount}
+          prClosed:pullRequests(states:CLOSED){totalCount}
+          prMerged:pullRequests(states:MERGED){totalCount}
+          issuesOpen:issues(states:OPEN){totalCount}
+          issuesClosed:issues(states:CLOSED){totalCount}}}"""
+        data = await self._graphql(client, query, {"o": owner, "n": repo})
+        if data is COLLECTION_GAP or data is None:
+            return data
+        repository = data.get("repository")
+        if repository is None:
+            return None
+
+        def total(key):
+            return (repository.get(key) or {}).get("totalCount")
+
+        return {
+            "pull_requests": {"open": total("prOpen"), "closed": total("prClosed"), "merged": total("prMerged")},
+            "issues": {"open": total("issuesOpen"), "closed": total("issuesClosed")},
+            "mentionable_users": total("mentionableUsers"),
+        }
+
+    async def dependency_graph(self, client: httpx.AsyncClient, ref: str):
+        """See Forge.dependency_graph. Pages through every manifest, up to
+        100 dependencies each. Small pages because GitHub computes the
+        graph per request and intermittently times out (502) on a large
+        repository -- HDF5's 71 manifests failed at 25 and 50 a page."""
+        owner, repo = ref.split("/", 1)
+        query = """query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
+          languages(first:1,orderBy:{field:SIZE,direction:DESC}){nodes{name color}}
+          dependencyGraphManifests(first:10,after:$c,withDependencies:true){
+            nodes{dependencies(first:100){nodes{packageName packageManager
+              repository{nameWithOwner}}}}
+            pageInfo{endCursor hasNextPage}}}}"""
+        languages = None
+        manifests: List[Dict[str, Any]] = []
+        cursor = None
+        while True:
+            data = await self._graphql(
+                client, query, {"o": owner, "n": repo, "c": cursor},
+                # The dependency graph is still a GraphQL schema preview.
+                accept="application/vnd.github.hawkgirl-preview+json",
+            )
+            if data is COLLECTION_GAP or data is None:
+                return data
+            repository = data.get("repository") or {}
+            if languages is None:
+                languages = repository.get("languages") or {"nodes": []}
+            page = repository.get("dependencyGraphManifests") or {}
+            manifests.extend(page.get("nodes") or [])
+            info = page.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                break
+            cursor = info.get("endCursor")
+        return {"languages": languages, "dependencyGraphManifests": {"nodes": manifests}}
 
     async def wiki_has_content(self, client: httpx.AsyncClient, ref: str) -> bool:
         """See Forge.wiki_has_content. GitHub's has_wiki flag is on by

@@ -225,6 +225,38 @@ be linked from the package's dashboard page:
 It is rendered from the same per-section data as `metrics.json`, so it
 always matches the dashboard. See `../package_report.py`.
 
+### 5. Dashboard Data Files
+
+Besides the catalog entry, `metadata` records what the forge reports about
+the repository: description, homepage, language, license, dates, `topics`,
+`owner_avatar_url`, `parent` (the upstream of a fork), and the counts
+`stars`, `forks`, `pull_requests` (`open`/`closed`/`merged`), `issues`
+(`open`/`closed`) and `mentionable_users`. Each `metrics.json` also has:
+
+- `dependencies` -- the GitHub dependency graph (`null` on GitLab, which
+  has none)
+- `spack` -- the package's Spack dependencies and dependents (`{name,
+  dependencies, dependents}`; `null` when Spack has no package named after
+  the repository). Collected only when `spack` is on `PATH`: one `spack
+  python tools/spack_dependencies.py` run per batch covers every package in
+  it.
+
+A key is left out when its lookup failed, rather than written empty.
+
+The metrics_data repository's daily "Generate dashboard data" workflow turns
+those into the dashboard's `intReposInfo.json`, `intRepos_Dependencies.json`,
+`spackPackageDependencies.json` and `spackPackageDependents.json`, beside the
+day's metrics in `data/YYYYMMDD/`. No API calls; it uses each package's
+newest `metrics.json` from the last 7 days, and all the dashboard-specific
+shaping lives in this one script:
+
+```bash
+python tools/dashboard_data.py --data-dir data --output data/20261026
+```
+
+Unpublished packages are kept, with `"published": false` on their
+`intReposInfo.json` entry.
+
 ## Automation via GitHub Actions
 
 The workflow `../.github/workflows/collect-and-sync.yml` automates the orchestrator:
