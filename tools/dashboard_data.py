@@ -57,6 +57,14 @@ def _repo_key(metadata: Dict) -> Optional[str]:
     return path or None
 
 
+# Metadata the collector's repository lookup fills in (forge.base's
+# NULLABLE_METADATA_KEYS and DEFINITE_METADATA_KEYS). created_at is set
+# whenever that lookup succeeded, so a file without it recorded a gap.
+_REPO_KEYS = (
+    "description", "homepage", "language", "created_at", "updated_at", "pushed_at",
+    "default_branch", "license", "owner_avatar_url", "parent",
+    "archived", "disabled", "size_kb", "topics", "stars", "forks",
+)
 # Metadata keys the collector leaves out when their lookup was a gap.
 _COUNT_KEYS = ("stars", "forks", "pull_requests", "issues", "mentionable_users")
 # Top-level metrics.json keys likewise left out on a gap.
@@ -69,11 +77,13 @@ def load_packages(data_dir: Path, max_age_days: int = 7, today: Optional[datetim
 
     Each value has `metadata` and, when any file in the window had them,
     `dependencies` and `spack` -- each from the newest file that recorded
-    it. Counts missing from the newest metadata are filled in the same
-    way.
+    it. If the newest file's repository lookup was a gap, the repository
+    fields come from the newest file where it succeeded; counts missing
+    from the newest metadata are filled in the same way.
     """
     today = today or datetime.now(timezone.utc)
     packages: Dict[str, Dict] = {}
+    repo_found = set()
     for name, metrics_file in _metrics_files(_date_dirs(data_dir, max_age_days, today)):
         try:
             metrics = json.loads(metrics_file.read_text())
@@ -84,6 +94,9 @@ def load_packages(data_dir: Path, max_age_days: int = 7, today: Optional[datetim
         if name not in packages:
             packages[name] = {"metadata": dict(metadata)}
         package = packages[name]
+        if name not in repo_found and "created_at" in metadata:
+            package["metadata"].update((k, metadata[k]) for k in _REPO_KEYS if k in metadata)
+            repo_found.add(name)
         for key in _COUNT_KEYS:
             if key not in package["metadata"] and key in metadata:
                 package["metadata"][key] = metadata[key]
