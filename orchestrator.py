@@ -2495,8 +2495,6 @@ class MetricsOrchestrator:
         }
 
         result = {
-            "stars": repo_stats.get("stars", 0),
-            "forks": repo_stats.get("forks", 0),
             "config_exclusions": config_exclusions,
             "impact": {
                 "4.1.1": {"title": "Software Citation and Adoption", "data": section_411_data},
@@ -2575,9 +2573,9 @@ class MetricsOrchestrator:
             try:
                 overrides = catalog[package_name].get("overrides", {})
                 section_data = self._transform_for_dashboard(metrics, overrides)
-                # The dashboard (js/catalog.js, get_repos_info.py) reads
-                # stars/forks/impact/ecosystem/quality from the top level, so
-                # keep those flat and add the catalog entry beside them.
+                # The dashboard (js/catalog.js) reads impact/ecosystem/quality
+                # from the top level, so keep those flat and add the catalog
+                # entry beside them.
                 dashboard_data = {
                     "package": package_name,
                     "metadata": catalog[package_name],

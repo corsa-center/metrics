@@ -397,12 +397,10 @@ class TestPlatformLabels:
         section = result["impact"]["4.1.1"]["data"]
         assert "GitLab Stars:</strong> 12" in section and "GitLab Forks:</strong> 3" in section
         assert "GitHub" not in section
-        assert (result["stars"], result["forks"]) == (12, 3)
 
     def test_results_stored_before_the_rename_still_render(self, orchestrator):
         result = self._impact(orchestrator, {"github_stats": {"stars": 5, "forks": 1}})
         assert "GitHub Stars:</strong> 5" in result["impact"]["4.1.1"]["data"]
-        assert result["stars"] == 5
 
     def test_gitlab_sast_rendering(self, orchestrator):
         found = _base_metrics(quality_sub={"reliability": {}, "static_analysis": {
