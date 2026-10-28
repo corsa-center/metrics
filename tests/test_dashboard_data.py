@@ -43,6 +43,19 @@ class TestLoadPackages:
         assert package["dependencies"] == {"languages": {"nodes": []}}
         assert package["spack"] is None
 
+    def test_a_repository_lookup_gap_takes_the_last_good_day(self, tmp_path):
+        good = {"created_at": "2018-11-06T15:18:42Z", "language": "Python", "description": "from repo",
+                "license": {"spdx_id": "BSD-3-Clause", "name": "BSD", "key": "bsd-3-clause"}}
+        _write(tmp_path, "20261021", "deephyper", {**good, "description": "older"})
+        _write(tmp_path, "20261022", "deephyper", good)
+        _write(tmp_path, "20261026", "deephyper", {"description": "from catalog", "published": False})
+        metadata = load_packages(tmp_path, today=TODAY)["deephyper"]["metadata"]
+        assert metadata["created_at"] == "2018-11-06T15:18:42Z"
+        assert metadata["language"] == "Python"
+        assert metadata["description"] == "from repo"
+        assert metadata["license"]["key"] == "bsd-3-clause"
+        assert metadata["published"] is False
+
     def test_partial_days_are_combined(self, tmp_path):
         _write(tmp_path, "20261025", "hdf5")
         _write(tmp_path, "20261026", "adios2")
