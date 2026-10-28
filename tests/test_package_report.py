@@ -121,12 +121,14 @@ class TestBuildReport:
 
 class TestHtmlOutput:
     def test_metrics_json_keeps_the_dashboards_flat_layout(self, orchestrator, tmp_path):
-        # js/catalog.js and get_repos_info.py read these from the top level.
+        # js/catalog.js reads these from the top level.
         catalog = {"HDF5": {"name": "HDF5", "repo_url": "https://github.com/HDFGroup/hdf5"}}
         orchestrator.write_metrics(tmp_path, catalog, {"HDF5": _metrics()})
         data = json.loads((tmp_path / "hdf5-metrics" / "metrics.json").read_text())
-        for key in ("stars", "forks", "config_exclusions", "impact", "ecosystem", "quality"):
+        for key in ("config_exclusions", "impact", "ecosystem", "quality"):
             assert key in data
+        # Repository counts live in metadata only.
+        assert "stars" not in data and "forks" not in data
         assert data["package"] == "HDF5"
         assert data["metadata"] == catalog["HDF5"]
         assert data["generated_at"] == "2026-09-30T02:25:04.582663+00:00"
