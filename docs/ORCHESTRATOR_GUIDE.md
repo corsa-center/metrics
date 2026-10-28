@@ -17,8 +17,8 @@ package_config/*.yaml ──→  orchestrator.py, collectors ──→  data/YYY
                            tools/dashboard_data.py     ──→  data/YYYYMMDD/intReposInfo.json, ...
                            tools/spack_dependencies.py            │
                                                                   ↓
-                                                    dashboard: update.yml copies the
-                                                    newest data into explore/github-data/
+                                                    dashboard: pages.yml copies the
+                                                    newest data in at each deploy
 ```
 
 The workflows that run the code live in metrics_data and check out this
@@ -247,14 +247,16 @@ Collection and generation run in the
 each checking out this repository's `main`:
 
 - **Collect Metrics** (`collect-and-sync.yml`, every 4 hours) runs the
-  orchestrator with `--use-summary-as-filter --max-packages 50`, so each day's
+  orchestrator with `--use-summary-as-filter --max-packages 20`, so each day's
   first runs cover every package once, and commits the results to
   `data/YYYYMMDD/`.
 - **Generate Dashboard Data** (`generate-dashboard-data.yml`, daily at 12:30
-  UTC) writes the four dashboard files beside them.
+  UTC) writes the dashboard files beside them (see
+  [Dashboard Data Files](#5-dashboard-data-files)).
 
-The dashboard's daily update (13:30 UTC) copies the newest of both into its
-`explore/github-data/`.
+The dashboard's daily Pages deploy (13:30 UTC) copies the newest of both into
+its `explore/github-data/`; nothing it shows is committed to the dashboard
+repository.
 
 ## Configuration Options
 
