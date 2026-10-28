@@ -234,7 +234,8 @@ the repository: description, homepage, language, license, dates, `topics`,
 (`open`/`closed`) and `mentionable_users`. Each `metrics.json` also has:
 
 - `dependencies` -- the GitHub dependency graph (`null` on GitLab, which
-  has none)
+  has none), with `repositories`: the primary language and owner of each
+  repository a dependency points at
 - `spack` -- the package's Spack dependencies and dependents (`{name,
   dependencies, dependents}`; `null` when Spack has no package named after
   the repository). Collected only when `spack` is on `PATH`: one `spack
@@ -244,7 +245,8 @@ the repository: description, homepage, language, license, dates, `topics`,
 A key is left out when its lookup failed, rather than written empty.
 
 The metrics_data repository's daily "Generate dashboard data" workflow turns
-those into the dashboard's `intReposInfo.json`, `intRepos_Dependencies.json`,
+those into the dashboard's `intReposInfo.json`, `intRepos_Topics.json`,
+`intRepos_Dependencies.json`, `dependencyInfo.json`,
 `spackPackageDependencies.json` and `spackPackageDependents.json`, beside the
 day's metrics in `data/YYYYMMDD/`. No API calls; it uses each package's
 newest `metrics.json` from the last 7 days, and all the dashboard-specific

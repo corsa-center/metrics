@@ -208,9 +208,12 @@ class Forge(ABC):
         """The repository's dependency graph, in the shape of the
         dashboard's intRepos_Dependencies.json entries: {languages: {nodes: [{name,
         color}]}, dependencyGraphManifests: {nodes: [{dependencies: {nodes:
-        [{packageName, packageManager, repository}]}}]}}. None when the
-        platform has no dependency graph or the repository is absent;
-        COLLECTION_GAP when it couldn't be read."""
+        [{packageName, packageManager, repository}]}}]}}, plus
+        `repositories`: {nameWithOwner: {nameWithOwner, name, languages,
+        owner: {login, isVerified}}} for the repositories those dependencies
+        point at, when there are any. None when the platform has no
+        dependency graph or the repository is absent; COLLECTION_GAP when it
+        couldn't be read."""
 
     # ------------------------------------------------------------------ #
     # History, releases, contributors

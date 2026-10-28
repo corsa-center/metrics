@@ -7,7 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tools.dashboard_data import build_dependencies, build_repos_info, build_spack, load_packages, main
+from tools.dashboard_data import (
+    build_dependencies, build_dependency_info, build_repos_info, build_spack, build_topics, load_packages, main,
+)
 
 TODAY = datetime(2026, 10, 26, tzinfo=timezone.utc)
 
@@ -142,6 +144,42 @@ class TestBuildRepos:
         }
         assert set(build_dependencies(packages)["data"]) == {"HDFGroup/hdf5", "g/sub/thing"}
 
+    def test_topics_in_graphql_shape(self):
+        packages = {
+            "hdf5": _package("https://github.com/HDFGroup/hdf5", topics=["hdf5", "io"]),
+            "none": _package("https://gitlab.com/g/none"),
+        }
+        assert build_topics(packages)["data"] == {
+            "HDFGroup/hdf5": {"repositoryTopics": {"totalCount": 2, "nodes": [
+                {"topic": {"name": "hdf5"}}, {"topic": {"name": "io"}}]}},
+            "g/none": {"repositoryTopics": {"totalCount": 0, "nodes": []}},
+        }
+
+    def test_dependency_repositories_are_not_in_the_dependencies_file(self):
+        deps = {"languages": {"nodes": []}, "dependencyGraphManifests": {"nodes": []}, "repositories": {}}
+        data = build_dependencies({"hdf5": {**_package(), "dependencies": deps}})["data"]
+        assert data == {"Org/hdf5": {"languages": {"nodes": []}, "dependencyGraphManifests": {"nodes": []}}}
+
+    def test_dependency_info_covers_every_dependency(self):
+        def graph(refs, repositories):
+            nodes = [{"repository": {"nameWithOwner": r} if r else None} for r in refs]
+            return {"dependencyGraphManifests": {"nodes": [{"dependencies": {"nodes": nodes}}]},
+                    "repositories": repositories}
+        zlib = {"nameWithOwner": "madler/zlib", "name": "zlib",
+                "languages": {"nodes": [{"name": "C", "color": "#555555"}]}, "owner": {"login": "madler"}}
+        packages = {
+            # Sorted by name: "a" has no description of madler/zlib, "b" does.
+            "a": {**_package(), "dependencies": graph(["madler/zlib", "x/gone", None], {})},
+            "b": {**_package(), "dependencies": graph(["madler/zlib"], {"madler/zlib": zlib})},
+            "c": {**_package(), "dependencies": graph(["madler/zlib"], {})},
+            "d": {**_package(), "dependencies": None},
+        }
+        assert build_dependency_info(packages)["data"] == {
+            "madler/zlib": zlib,
+            "x/gone": {"nameWithOwner": "x/gone", "name": "gone", "languages": {"nodes": []},
+                       "owner": {"login": "x", "isVerified": None}},
+        }
+
     def test_spack_keyed_by_spack_name(self):
         packages = {
             "hdf5": {**_package(), "spack": {"name": "hdf5", "dependencies": {"zlib": {}}, "dependents": {"netcdf-c": {}}}},
@@ -155,7 +193,7 @@ class TestBuildRepos:
 
 
 class TestMain:
-    def test_writes_all_four_files(self, tmp_path):
+    def test_writes_all_six_files(self, tmp_path):
         data = tmp_path / "data"
         _write(data, datetime.now(timezone.utc).strftime("%Y%m%d"), "hdf5", {"stars": 3},
                dependencies={"languages": {"nodes": []}},
@@ -166,6 +204,8 @@ class TestMain:
         assert "Org/hdf5" in json.loads((out / "intRepos_Dependencies.json").read_text())["data"]
         assert json.loads((out / "spackPackageDependencies.json").read_text()) == {"hdf5": {"zlib": {}}}
         assert json.loads((out / "spackPackageDependents.json").read_text()) == {}
+        assert "Org/hdf5" in json.loads((out / "intRepos_Topics.json").read_text())["data"]
+        assert json.loads((out / "dependencyInfo.json").read_text()) == {"data": {}}
 
     def test_no_metrics_writes_nothing(self, tmp_path):
         data = tmp_path / "data"
