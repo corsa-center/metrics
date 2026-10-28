@@ -533,6 +533,18 @@ class TestGraphQL:
         client.post = AsyncMock(side_effect=httpx.ConnectError("down"))
         assert asyncio.run(forge.activity_counts(client, "o/r")) is COLLECTION_GAP
 
+    def test_a_body_that_is_not_json_is_retried(self, monkeypatch):
+        import forge.github as gh
+        monkeypatch.setattr(gh, "_GRAPHQL_RETRY_DELAY", 0)
+        forge = GitHubForge("tok")
+        empty = _resp(200)
+        empty.json.side_effect = ValueError("Expecting value")
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=[empty, _resp(200, {"data": {"repository": _COUNTS}})])
+        assert asyncio.run(forge.activity_counts(client, "o/r"))["mentionable_users"] == 6
+        client.post = AsyncMock(return_value=empty)
+        assert asyncio.run(forge.activity_counts(client, "o/r")) is COLLECTION_GAP
+
     def test_dependency_graph_pages_through_manifests(self):
         forge = GitHubForge("tok")
         lang = {"nodes": [{"name": "C", "color": "#555555"}]}
@@ -557,6 +569,46 @@ class TestGraphQL:
             _resp(502),
         ])
         assert asyncio.run(forge.dependency_graph(client, "o/r")) is COLLECTION_GAP
+
+    def test_dependency_graph_describes_the_repositories_it_points_at(self, monkeypatch):
+        import forge.github as gh
+        monkeypatch.setattr(gh, "_REPOSITORY_BATCH", 2)
+        forge = GitHubForge("tok")
+
+        def dep(ref):
+            return {"packageName": ref, "packageManager": "PIP", "repository": {"nameWithOwner": ref} if ref else None}
+        manifests = [
+            {"dependencies": {"nodes": [dep("a/one"), dep("b/two"), dep(None)]}},
+            {"dependencies": {"nodes": [dep("a/one"), dep("c/gone")]}},
+        ]
+        graph = _resp(200, {"data": {"repository": {"languages": {"nodes": []}, "dependencyGraphManifests": {
+            "nodes": manifests, "pageInfo": {"hasNextPage": False}}}}})
+        one = {"nameWithOwner": "a/one", "name": "one", "languages": {"nodes": [{"name": "C", "color": "#555555"}]},
+               "owner": {"login": "a", "isVerified": True}}
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=[
+            graph,
+            # a/one and b/two: b/two's batch half answered, c/gone is gone.
+            _resp(200, {"data": {"r0": one, "r1": None}, "errors": [{"type": "NOT_FOUND", "path": ["r1"]}]}),
+            _resp(200, {"data": {"r0": None}, "errors": [{"type": "NOT_FOUND", "path": ["r0"]}]}),
+        ])
+        result = asyncio.run(forge.dependency_graph(client, "o/r"))
+        assert result["repositories"] == {"a/one": one}
+        assert result["dependencyGraphManifests"] == {"nodes": manifests}
+        batches = [c.kwargs["json"]["query"] for c in client.post.call_args_list[1:]]
+        assert 'owner:"a",name:"one"' in batches[0] and 'owner:"b",name:"two"' in batches[0]
+        assert 'owner:"c",name:"gone"' in batches[1]
+
+    def test_dependency_repositories_batch_gap_is_left_out(self):
+        forge = GitHubForge("tok")
+        graph = _resp(200, {"data": {"repository": {"dependencyGraphManifests": {
+            "nodes": [{"dependencies": {"nodes": [{"repository": {"nameWithOwner": "a/one"}}]}}],
+            "pageInfo": {"hasNextPage": False}}}}})
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=[graph, _resp(502)])
+        result = asyncio.run(forge.dependency_graph(client, "o/r"))
+        assert result["repositories"] == {}
+        assert len(result["dependencyGraphManifests"]["nodes"]) == 1
 
     def test_server_side_timeout_is_retried(self, monkeypatch):
         import forge.github as gh

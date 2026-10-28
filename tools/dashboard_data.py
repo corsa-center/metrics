@@ -2,7 +2,8 @@
 """
 Dashboard data generator (CORSA metrics framework)
 
-Builds the dashboard's intReposInfo.json, intRepos_Dependencies.json,
+Builds the dashboard's intReposInfo.json, intRepos_Topics.json,
+intRepos_Dependencies.json, dependencyInfo.json,
 spackPackageDependencies.json and spackPackageDependents.json from the
 per-package metrics.json files the orchestrator commits to the
 metrics_data repository (data/YYYYMMDD/<repo>-metrics/metrics.json). No API
@@ -181,6 +182,22 @@ def build_repos_info(packages: Dict[str, Dict]) -> Dict:
     return {"data": data}
 
 
+def build_topics(packages: Dict[str, Dict]) -> Dict:
+    """intRepos_Topics.json: {"data": {nameWithOwner: {repositoryTopics}}},
+    in the GitHub GraphQL shape the catalog reads."""
+    data = {}
+    for _, package in sorted(packages.items()):
+        key = _repo_key(package["metadata"])
+        if not key:
+            continue
+        topics = package["metadata"].get("topics") or []
+        data[key] = {"repositoryTopics": {
+            "totalCount": len(topics),
+            "nodes": [{"topic": {"name": topic}} for topic in topics],
+        }}
+    return {"data": data}
+
+
 def build_dependencies(packages: Dict[str, Dict]) -> Dict:
     """intRepos_Dependencies.json: {"data": {nameWithOwner: dependency graph}}."""
     data = {}
@@ -188,7 +205,37 @@ def build_dependencies(packages: Dict[str, Dict]) -> Dict:
         dependencies = package.get("dependencies")
         key = _repo_key(package["metadata"])
         if dependencies and key:
-            data[key] = dependencies
+            data[key] = {k: v for k, v in dependencies.items() if k != "repositories"}
+    return {"data": data}
+
+
+def build_dependency_info(packages: Dict[str, Dict]) -> Dict:
+    """dependencyInfo.json: {"data": {nameWithOwner: {nameWithOwner, name,
+    languages, owner}}} for every repository a dependency graph points at.
+
+    The dashboard's dependency graph looks up each of those repositories
+    here without checking, so one the collector couldn't describe gets an
+    entry with no language rather than none at all.
+    """
+    data = {}
+    for _, package in sorted(packages.items()):
+        dependencies = package.get("dependencies") or {}
+        repositories = dependencies.get("repositories") or {}
+        for manifest in (dependencies.get("dependencyGraphManifests") or {}).get("nodes") or []:
+            for node in (manifest.get("dependencies") or {}).get("nodes") or []:
+                key = (node.get("repository") or {}).get("nameWithOwner")
+                if not key:
+                    continue
+                if key in repositories:
+                    data[key] = repositories[key]
+                else:
+                    owner, _, name = key.partition("/")
+                    data.setdefault(key, {
+                        "nameWithOwner": key,
+                        "name": name,
+                        "languages": {"nodes": []},
+                        "owner": {"login": owner, "isVerified": None},
+                    })
     return {"data": data}
 
 
@@ -235,7 +282,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     spack_dependencies, spack_dependents = build_spack(packages)
     args.output.mkdir(parents=True, exist_ok=True)
     write_json(args.output / "intReposInfo.json", repos_info)
+    write_json(args.output / "intRepos_Topics.json", build_topics(packages))
     write_json(args.output / "intRepos_Dependencies.json", build_dependencies(packages))
+    write_json(args.output / "dependencyInfo.json", build_dependency_info(packages))
     write_json(args.output / "spackPackageDependencies.json", spack_dependencies)
     write_json(args.output / "spackPackageDependents.json", spack_dependents)
     print(f"Wrote {len(repos_info['data'])} repositories to {args.output}")

@@ -10,6 +10,7 @@ are the reference for the normalized shapes GitLabForge matches.
 
 import asyncio
 import base64
+import json
 import re
 import httpx
 import logging
@@ -34,6 +35,8 @@ _INSIDE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # seconds before the first retry, growing linearly.
 _GRAPHQL_ATTEMPTS = 3
 _GRAPHQL_RETRY_DELAY = 2.0
+# Repositories per aliased query in GitHubForge._dependency_repositories.
+_REPOSITORY_BATCH = 50
 
 
 def _is_bot_login(login: str) -> bool:
@@ -829,11 +832,13 @@ class GitHubForge(Forge):
 
     async def _graphql(
         self, client: httpx.AsyncClient, query: str, variables: Dict[str, Any],
-        accept: Optional[str] = None,
+        accept: Optional[str] = None, partial: bool = False,
     ):
         """POST a GraphQL query and return its `data`, None when the
         repository doesn't exist, or COLLECTION_GAP (no token, network
-        error, non-200, or a GraphQL error other than NOT_FOUND).
+        error, non-200, or a GraphQL error other than NOT_FOUND). With
+        `partial`, NOT_FOUND errors are ignored and `data` is returned with
+        the missing repositories as null.
 
         A server-side timeout comes back as a 200 whose error has no
         `type` ("Something went wrong while executing your query"), which
@@ -853,11 +858,16 @@ class GitHubForge(Forge):
             if resp.status_code != 200:
                 logger.warning(f"COLLECTION-GAP graphql status={resp.status_code}")
                 return COLLECTION_GAP
-            body = resp.json()
+            try:
+                body = resp.json()
+            except ValueError:
+                # Seen live: a 200 with an empty body. Retried like a timeout.
+                body = {"errors": [{"message": "response body is not JSON"}]}
             errors = body.get("errors") or []
-            if any(e.get("type") == "NOT_FOUND" for e in errors):
+            not_found = [e for e in errors if e.get("type") == "NOT_FOUND"]
+            if not_found and not partial:
                 return None
-            if not errors:
+            if len(not_found) == len(errors):
                 return body.get("data")
             if any(e.get("type") for e in errors) or attempt == _GRAPHQL_ATTEMPTS - 1:
                 break
@@ -924,7 +934,39 @@ class GitHubForge(Forge):
             if not info.get("hasNextPage"):
                 break
             cursor = info.get("endCursor")
-        return {"languages": languages, "dependencyGraphManifests": {"nodes": manifests}}
+        graph = {"languages": languages, "dependencyGraphManifests": {"nodes": manifests}}
+        refs = sorted({
+            (node.get("repository") or {}).get("nameWithOwner")
+            for manifest in manifests
+            for node in (manifest.get("dependencies") or {}).get("nodes") or []
+        } - {None})
+        if refs:
+            graph["repositories"] = await self._dependency_repositories(client, refs)
+        return graph
+
+    async def _dependency_repositories(self, client: httpx.AsyncClient, refs: List[str]) -> Dict[str, Any]:
+        """Primary language and owner of each repository the dependency
+        graph points at, keyed by nameWithOwner, for the dashboard's
+        dependency graph. Asked for separately rather than inside the
+        dependency query, which then costs ten times as much and times out
+        on a graph as large as llvm-project's. A repository that no longer
+        exists, or whose batch failed, is left out."""
+        fields = ("{nameWithOwner name languages(first:1,orderBy:{field:SIZE,direction:DESC})"
+                  "{nodes{name color}} owner{login ... on Organization{isVerified}}}")
+        repositories: Dict[str, Any] = {}
+        for start in range(0, len(refs), _REPOSITORY_BATCH):
+            batch = refs[start:start + _REPOSITORY_BATCH]
+            aliases = " ".join(
+                f"r{i}:repository(owner:{json.dumps(owner)},name:{json.dumps(name)}){fields}"
+                for i, (owner, _, name) in enumerate(ref.partition("/") for ref in batch)
+            )
+            data = await self._graphql(client, f"query{{{aliases}}}", {}, partial=True)
+            if data is COLLECTION_GAP or not data:
+                continue
+            for repository in data.values():
+                if repository:
+                    repositories[repository["nameWithOwner"]] = repository
+        return repositories
 
     async def wiki_has_content(self, client: httpx.AsyncClient, ref: str) -> bool:
         """See Forge.wiki_has_content. GitHub's has_wiki flag is on by
