@@ -582,7 +582,7 @@ Turning off `active_maintenance` also empties 4.2.10 and 4.3.6, which are
 derived from it.
 
 Each package's catalog entry in the
-[metrics_data](https://github.com/corsa-center/metrics_data) repository
+[metrics_packages](https://github.com/corsa-center/metrics_packages) repository
 (`package_config/*.yaml`) can narrow these toggles with its own `collectors:`
 block -- it can turn a sub-collector off, never back on -- and can declare
 `overrides:` for sub-metrics that are genuinely N/A; override keys are the exact

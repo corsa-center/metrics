@@ -1,7 +1,8 @@
 # Package configuration
 
-Tracked packages are obtained from yaml files, one file per package. Currently
-packages files are obtained from the [`metrics_data`](https://github.com/corsa-center/metrics_data) repository.
+Tracked packages are obtained from yaml files, one file per package, in the
+`package_config` directory of the
+[`metrics_packages`](https://github.com/corsa-center/metrics_packages) repository.
 
 Package files contain mandatory fields and optional fields. Additionally, a package file can override
 collectors and metrics output. The contents of the file are included as metadata in the `metrics.json`

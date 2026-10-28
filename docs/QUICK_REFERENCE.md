@@ -41,7 +41,7 @@ python orchestrator.py --config config/orchestrator.yaml --dry-run
 ```bash
 export GITHUB_TOKEN="your_github_token"
 python scripts/generate_corsa_citations.py \
-  --catalog config/software_catalog.yaml \
+  --catalog /path/to/intRepo_Metadata.json \
   --output output/citationMetrics.json
 ```
 
@@ -62,7 +62,6 @@ python scripts/generate_corsa_citations.py \
 
 | File | Description |
 |------|-------------|
-| `output/ecosystemMetrics.json` | Dashboard-ready metrics JSON |
 | `../output/orchestrator_summary.json` | Run summary (scores, counts, top packages) |
 | `output/{repo}-metrics/metrics.json` | Per-package dashboard data (CASS sections) |
 | `output/{repo}-metrics/report.html` | Per-package report: each row's evidence, its threshold, and how the scores were computed |

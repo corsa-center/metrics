@@ -159,7 +159,7 @@ def _report(results: List[Dict[str, Any]]) -> int:
             "\nThese repositories 404 -- the catalog entry is stale (renamed, "
             "deleted, or mistranscribed). The pipeline already skips them "
             "safely, but the entries themselves need correcting at the source "
-            "(dashboard/explore/github-data/intReposInfo.json)."
+            "(corsa-center/metrics_packages, package_config/)."
         )
         return 1
 

@@ -433,11 +433,9 @@ class MetricsOrchestrator:
                 volume -- already close to the hourly quota before any
                 retries -- doesn't fit in one run once throttled requests
                 get retried instead of silently dropped. See
-                config/orchestrator.yaml rate_limiting comments and
-                .github/workflows/collect-and-sync.yml for how the
-                scheduled run picks a group. Ignored when filter_software
-                is set, since targeting one package should never depend on
-                which group it happens to fall in.
+                config/orchestrator.yaml rate_limiting comments. Ignored
+                when filter_software is set, since targeting one package
+                should never depend on which group it happens to fall in.
             max_packages: Stop after this many packages; 0 processes none.
             name: Catalog name for the package, required with repo since it
                 keys the metrics output.
@@ -1353,7 +1351,7 @@ class MetricsOrchestrator:
     def _transform_for_dashboard(self, metrics: Dict, overrides: Dict[str, Dict[str, str]]) -> Dict:
         """Transform internal metrics into the per-package CASS v3 format.
 
-        The dashboard expects per-package files at:
+        The dashboard reads per-package files at:
           explore/github-data/{repo}-metrics/metrics.json
 
         Structure keyed by CASS Report section numbers (4.1.x, 4.2.x, 4.3.x),
@@ -2559,8 +2557,8 @@ class MetricsOrchestrator:
         Creates: {output_path}/{repo-name}-metrics/metrics.json for each package,
         and beside it report.html -- the same results as one readable page
         with the thresholds each row was judged against (see
-        package_report.py). These are uploaded as workflow artifacts and
-        downloaded by the dashboard's update workflow into
+        package_report.py). metrics_data's collect workflow commits these to
+        data/YYYYMMDD/, and the dashboard's update workflow copies them into
         explore/github-data/.
         """
         failed = []

@@ -60,7 +60,7 @@ export OPENALEX_EMAIL="your-email@example.com"
 
 # Generate metrics
 python scripts/generate_corsa_citations.py \
-  --catalog config/software_catalog.yaml \
+  --catalog /path/to/intRepo_Metadata.json \
   --output output/citationMetrics.json
 ```
 
@@ -113,11 +113,11 @@ metrics/
 │
 ├── config/
 │   ├── orchestrator.yaml          # Workflow configuration
-│   ├── software_catalog.yaml      # Software catalog
 │   └── api_credentials.yaml.example
 │
-├── .github/workflows/
-│   └── collect-and-sync.yml      # Automated collection
+├── tools/
+│   ├── dashboard_data.py          # Dashboard repository/dependency files
+│   └── spack_dependencies.py      # Dashboard Spack dependency files
 │
 └── orchestrator.py          # Main orchestrator
 ```
