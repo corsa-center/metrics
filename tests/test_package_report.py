@@ -183,3 +183,89 @@ class TestDimensionScoreComponents:
         ))
         assert result["score_components"] == {"governance": 50, "licensing": 100}
         assert result["score"] == 75.0
+
+
+class TestMethodologyLinks:
+    def test_every_section_links_to_its_catalog_heading(self, orchestrator):
+        from package_report import METRICS_CATALOG_URL
+        metrics = _metrics()
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
+        links = {s["number"]: s["methodology"] for d in report["dimensions"] for s in d["sections"]}
+        assert all(links.values()), [n for n, url in links.items() if not url]
+        assert links["4.2.8"] == f"{METRICS_CATALOG_URL}#428-financial-sustainability"
+        # GitHub drops the "&" and keeps both hyphens around it.
+        assert links["4.2.9"].endswith("#429-institutional--organizational-support")
+
+    def test_first_heading_for_a_number_wins(self, tmp_path):
+        from package_report import methodology_links
+        path = tmp_path / "catalog.md"
+        path.write_text("### 4.1.1 Software Citation\n\n### 4.1.1 / 4.2.7 additions\n")
+        assert methodology_links(path)["4.1.1"].endswith("#411-software-citation")
+
+    def test_missing_catalog_means_no_links(self, tmp_path):
+        from package_report import methodology_links
+        assert methodology_links(tmp_path / "absent.md") == {}
+
+
+def _funding_metrics(**doc_entry):
+    entry = {
+        "label": "Enhanced Funding Documentation Analysis",
+        "value": "No funding documentation found", "passing": False,
+        "evidence": {
+            "found": [{"text": "<b>DOE</b> named as a funder", "quote": "funded by <i>DOE</i>",
+                       "path": "NOTICE", "url": "https://github.com/o/r/blob/HEAD/NOTICE"}],
+            "searched": [
+                {"text": "Files searched for award numbers and funder acknowledgments",
+                 "paths": [{"path": "README.md", "url": "javascript:alert(1)"}]},
+                {"text": "Funding files looked for", "paths": []},
+            ],
+        },
+        **doc_entry,
+    }
+    return _metrics(sub_results={"funding": {"overall_score": {
+        "score": 0, "max_score": 1, "sub_scores": {"funding_documentation": entry},
+    }}})
+
+
+class TestEvidence:
+    def _row(self, orchestrator, metrics, overrides=None):
+        dashboard = orchestrator._transform_for_dashboard(metrics, overrides or {})
+        report = build_report("owner/repo", dashboard, metrics,
+                              orchestrator._metric_weights(), overrides)
+        sec = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")
+        return next(r for r in sec["rows"] if r["label"] == "Enhanced Funding Documentation Analysis")
+
+    def test_attached_to_the_row_it_was_recorded_for(self, orchestrator):
+        metrics = _funding_metrics()
+        row = self._row(orchestrator, metrics)
+        assert row["evidence"]["found"][0]["path"] == "NOTICE"
+
+    def test_rendered_escaped_with_links_and_where_it_looked(self, orchestrator):
+        metrics = _funding_metrics()
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
+        assert ('<b>Found:</b> &lt;b&gt;DOE&lt;/b&gt; named as a funder in '
+                '<a href="https://github.com/o/r/blob/HEAD/NOTICE">NOTICE</a>: '
+                '“funded by &lt;i&gt;DOE&lt;/i&gt;”') in page
+        # Only web URLs become links.
+        assert ("<b>Files searched for award numbers and funder acknowledgments:</b> README.md"
+                in page)
+        assert "javascript:" not in page
+        assert "<b>Funding files looked for:</b> none present" in page
+
+    def test_config_overridden_row_shows_no_evidence(self, orchestrator):
+        overrides = {"4.2.8": {"Enhanced Funding Documentation Analysis": "See our NOTICE"}}
+        row = self._row(orchestrator, _funding_metrics(), overrides)
+        assert row["overridden"] and row["evidence"] is None
+
+    def test_labels_are_matched_within_their_own_dimension(self):
+        from package_report import evidence_index
+        # "Advanced Dependency Analysis" is a row in both 4.1.1 and 4.2.7.
+        impact = {"citation": {"x": {"label": "Advanced Dependency Analysis",
+                                     "evidence": {"found": [{"text": "impact"}]}}}}
+        eco = {"collaboration": {"sub_scores": {"deps": {"label": "Advanced Dependency Analysis",
+                                                         "evidence": {"found": [{"text": "eco"}]}}}}}
+        assert evidence_index(impact)["Advanced Dependency Analysis"]["found"][0]["text"] == "impact"
+        assert evidence_index(eco)["Advanced Dependency Analysis"]["found"][0]["text"] == "eco"
+        assert evidence_index(None) == {}

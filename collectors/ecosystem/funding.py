@@ -142,6 +142,50 @@ _FUNDING_HEADING = re.compile(
     rf"|^[ \t]*{_FUNDING_TOPIC}[^\n]*\n[ \t]*([=\-~^*#])\1{{2,}}[ \t]*$", re.I | re.M)
 _NEXT_HEADING = re.compile(r"^\s{0,3}#{1,6}\s|^[^\n]+\n[ \t]*([=\-~^*#])\1{2,}[ \t]*$", re.M)
 
+# Context kept either side of an agency's name in an acknowledgment excerpt.
+_EXCERPT_BEFORE, _EXCERPT_AFTER = 80, 120
+
+# Where forge.readme() can have read from. GitHub also accepts a README in
+# .github/ or docs/, but the root one is by far the usual case.
+_README_FILE = r"^(?:\.github/|docs/)?readme(?:\.[a-z]+)?$"
+
+
+def _readme_source(tree) -> Dict[str, Optional[str]]:
+    """The README's path and URL, from the tree; just "README" without one."""
+    if tree is None or tree is COLLECTION_GAP:
+        return {"path": "README", "url": None}
+    paths = sorted(tree.find(_README_FILE), key=lambda p: ("/" in p, p))
+    if not paths:
+        return {"path": "README", "url": None}
+    return {"path": paths[0], "url": tree.match_url([paths[0]])}
+
+
+def _excerpt(window: str, match: "re.Match", heading: Optional[str]) -> str:
+    """The line of `window` holding `match`, cut to the text around it, after
+    the heading it sits under (if any)."""
+    line_start = window.rfind("\n", 0, match.start()) + 1
+    line_end = window.find("\n", match.end())
+    line_end = len(window) if line_end == -1 else line_end
+    start = max(line_start, match.start() - _EXCERPT_BEFORE)
+    end = min(line_end, match.end() + _EXCERPT_AFTER)
+    text = re.sub(r"\s+", " ", window[start:end]).strip()
+    if start == line_start:
+        text = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text)  # list marker
+    text = ("…" if start > line_start else "") + text + ("…" if end < line_end else "")
+    return f"{heading}: {text}" if heading else text
+
+
+def _grant_evidence(grant: Dict[str, Any]) -> Dict[str, Any]:
+    """A grant as a report evidence item: what was found, where, and for an
+    acknowledgment the text that named the funder."""
+    if grant["kind"] == "acknowledgment":
+        item = {"text": f"{grant['value']} named as a funder", "quote": grant.get("excerpt")}
+    else:
+        item = {"text": f"{grant['value']} ({grant['kind']})"}
+    item.update(path=grant.get("source"), url=grant.get("url"))
+    return item
+
+
 # Contributors sampled for affiliation. The GitHub Users API is one call each,
 # so this is capped; top contributors carry most of the signal anyway.
 _AFFILIATION_SAMPLE = 25
@@ -184,9 +228,9 @@ class FundingCollector:
 
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=grants reason=exception:{results[1]!r}")
-            grants, grants_gap = [], True
+            grants, grants_gap, grants_read = [], True, []
         else:
-            grants, grants_gap = results[1]
+            grants, grants_gap, grants_read = results[1]
 
         if isinstance(results[2], Exception):
             logger.warning(f"COLLECTION-GAP category=affiliations reason=exception:{results[2]!r}")
@@ -209,7 +253,8 @@ class FundingCollector:
             "affiliations": affiliations,
             "owner_type": owner_type,
             "overall_score": self._calculate_score(
-                funding_files, grants, affiliations, owner_type, grants_gap, owner_type_gap
+                funding_files, grants, affiliations, owner_type, grants_gap, owner_type_gap,
+                grants_read,
             ),
         }
 
@@ -272,16 +317,18 @@ class FundingCollector:
         root NOTICE / ACKNOWLEDGMENTS / FUNDING files, and the docs landing
         and acknowledgments pages.
 
-        Returns (grants, saw_gap). Each entry is {"value", "kind"}; kind is
-        an award-number kind or "acknowledgment" (agency named in a funding
-        sentence, no number).
+        Returns (grants, saw_gap, read). Each grant is {"value", "kind",
+        "source", "url"}, plus "excerpt" for an acknowledgment; kind is an
+        award-number kind or "acknowledgment" (agency named in a funding
+        sentence, no number). `read` lists the files searched, as
+        {"path", "url"}, so a report can say where nothing was found.
         """
-        texts, saw_gap = [], False
+        texts, read, saw_gap = [], [], False
         text = await self.forge.readme(client, ref)
         if text is COLLECTION_GAP:
             saw_gap = True
         elif text is not None:
-            texts.append(text)
+            texts.append((_readme_source(tree), text))
 
         if tree is COLLECTION_GAP:
             saw_gap = True
@@ -295,43 +342,59 @@ class FundingCollector:
                 if text is COLLECTION_GAP:
                     saw_gap = True
                 elif text is not None:
-                    texts.append(text)
+                    texts.append(({"path": path, "url": tree.match_url([path])}, text))
 
         seen, grants = set(), []
-        for text in texts:
+        for source, text in texts:
+            read.append(source)
             for pattern, kind in _GRANT_PATTERNS:
                 for match in re.findall(pattern, text, flags=re.IGNORECASE):
                     value = match.strip().rstrip(".,;:)")
                     key = re.sub(r"[-\s]", "", value.lower())
                     if key not in seen:
                         seen.add(key)
-                        grants.append({"value": value, "kind": kind})
-        for agency in self._acknowledged_agencies("\n".join(texts)):
-            if agency not in seen:
-                seen.add(agency)
-                grants.append({"value": agency, "kind": "acknowledgment"})
-        return grants, saw_gap
+                        grants.append({"value": value, "kind": kind,
+                                       "source": source["path"], "url": source["url"]})
+        # Per file, so each acknowledgment keeps the file it was found in.
+        for source, text in texts:
+            for agency, excerpt in self._agency_mentions(text):
+                if agency not in seen:
+                    seen.add(agency)
+                    grants.append({"value": agency, "kind": "acknowledgment", "excerpt": excerpt,
+                                   "source": source["path"], "url": source["url"]})
+        return grants, saw_gap, read
+
+    @classmethod
+    def _acknowledged_agencies(cls, text: str) -> List[str]:
+        """Agencies named in a funding context, in first-seen order."""
+        return [agency for agency, _ in cls._agency_mentions(text)]
 
     @staticmethod
-    def _acknowledged_agencies(text: str) -> List[str]:
+    def _agency_mentions(text: str) -> List[Tuple[str, str]]:
         """Agencies named near a funding verb, or anywhere in a section headed
         Acknowledgments / Funding (often a bare list of funders), in
-        first-seen order."""
-        windows = []
+        first-seen order, each with the text that named it."""
+        # (heading or None, window)
+        windows: List[Tuple[Optional[str], str]] = []
         for m in _FUNDING_HEADING.finditer(text):
             rest = text[m.end():].lstrip("\n")
             nxt = _NEXT_HEADING.search(rest)
-            windows.append(rest[:nxt.start()] if nxt else rest[:2000])
+            # The match can start with the blank line before the heading.
+            heading = m.group(0).strip().splitlines()[0].lstrip("#").strip()
+            windows.append((heading, rest[:nxt.start()] if nxt else rest[:2000]))
         # "U.S." would otherwise read as sentence ends inside the window.
         flat = re.sub(r"\bU\.\s?S\.", "US", re.sub(r"\s+", " ", text))
         for verb in re.finditer(_FUNDING_VERB, flat, re.IGNORECASE):
-            windows.append(flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0])
-        found: List[str] = []
-        for window in windows:
+            windows.append((None, flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0]))
+        found: Dict[str, str] = {}
+        for heading, window in windows:
             for agency, pattern in _AGENCIES:
-                if agency not in found and re.search(pattern, window, re.IGNORECASE):
-                    found.append(agency)
-        return found
+                if agency in found:
+                    continue
+                m = re.search(pattern, window, re.IGNORECASE)
+                if m:
+                    found[agency] = _excerpt(window, m, heading)
+        return list(found.items())
 
     async def _get_affiliations(
         self, client: httpx.AsyncClient, ref: str
@@ -422,6 +485,7 @@ class FundingCollector:
     def _calculate_score(
         self, funding_files: Dict, grants: List, affiliations: Dict, owner_type: Optional[str],
         grants_gap: bool = False, owner_type_gap: bool = False,
+        grants_read: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         sub: Dict[str, Dict[str, Any]] = {}
         files_gap = funding_files.get("not_collected", False)
@@ -446,6 +510,16 @@ class FundingCollector:
         }
         if not doc_passing and (files_gap or grants_gap):
             doc_entry["not_collected"] = True
+        doc_entry["evidence"] = {
+            "found": [{"path": f["path"], "url": f.get("url")} for f in files]
+                     + [_grant_evidence(g) for g in grants],
+            "searched": [
+                {"text": "Funding files looked for",
+                 "paths": [{"path": p} for p in _FUNDING_FILES]},
+                {"text": "Files searched for award numbers and funder acknowledgments",
+                 "paths": grants_read or []},
+            ],
+        }
         sub["funding_documentation"] = doc_entry
 
         orgs = affiliations.get("organizations", [])
@@ -492,6 +566,11 @@ class FundingCollector:
         }
         if not portfolio_passing and (files_gap or grants_gap):
             portfolio_entry["not_collected"] = True
+        portfolio_entry["evidence"] = {"found": (
+            [{"text": f"{p} (funding platform)"} for p in platforms]
+            + [_grant_evidence(g) for g in awards]
+            + [_grant_evidence(g) for g in acknowledged if g["value"] not in award_agencies]
+        )}
         sub["funding_portfolio"] = portfolio_entry
 
         sub["nih_r50"] = {

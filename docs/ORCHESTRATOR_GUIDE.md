@@ -204,9 +204,18 @@ be linked from the package's dashboard page:
 - how the dimension scores are computed (the average of each collector's
   percentage, listed per collector) and weighted into the overall score, and
   which collectors the project's config turned off
+- for rows whose collector records it, what was found and in which file (with
+  the quoted text, for a funder acknowledgment), and where it looked, so a
+  ✗ row says which files were searched. Funding (4.2.8) records this so far.
+- a "How this is measured" link on each section to its entry in
+  [METRICS_CATALOG.md](METRICS_CATALOG.md)
 
-It is rendered from the same per-section data as `metrics.json`, so it
-always matches the dashboard. See `../package_report.py`.
+Rows and marks are rendered from the same per-section data as
+`metrics.json`, so they always match the dashboard. The found / looked-in
+lines come from an `evidence` entry a collector adds beside a sub-score
+(`{"found": [{text, path, url, quote}], "searched": [{text, paths}]}`); the
+dashboard ignores it and `metrics.json` doesn't carry it. See
+`../package_report.py`.
 
 ### 5. Dashboard Data Files
 
