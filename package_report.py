@@ -575,6 +575,8 @@ def _render_evidence(evidence: Dict, met: bool = False) -> List[str]:
         lines.append(f'<div class="evidence"><b>Found:</b> {body}</div>')
     for item in _applicable(evidence.get("missing"), met):
         lines.append(f'<div class="evidence"><b>Not found:</b> {esc(item.get("text") or "")}</div>')
+    for item in _applicable(evidence.get("notes"), met):
+        lines.append(f'<div class="evidence">{esc(item.get("text") or "")}</div>')
     for item in _applicable(evidence.get("searched"), met):
         paths = ", ".join(_path_link(p) for p in item.get("paths") or [] if p.get("path"))
         lines.append(
