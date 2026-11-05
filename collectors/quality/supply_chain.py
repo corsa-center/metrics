@@ -96,6 +96,10 @@ _GO_SUM_RE = re.compile(r"^(\S+)\s+(v[0-9][^\s/]*)\s+h1:")
 
 _OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 
+# Advisory IDs listed per vulnerable dependency in the report; an old pin can
+# carry dozens, and the first few are enough to look the rest up.
+_VULN_IDS_SHOWN = 5
+
 
 def _parse_pinned_pypi_deps(text: str) -> List[Tuple[str, str]]:
     """Exactly-pinned (name, version) pairs from a requirements.txt file.
@@ -250,7 +254,7 @@ class SupplyChainCollector:
         logger.info(f"Collecting supply chain metrics for {ref}")
 
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-            (release_assets, assets_gap), tree = await asyncio.gather(
+            (release_assets, assets_gap, releases), tree = await asyncio.gather(
                 self._fetch_release_assets(client, ref),
                 RepoTree.fetch(client, self.forge, ref),
             )
@@ -259,6 +263,10 @@ class SupplyChainCollector:
 
         sbom = self._find_sbom(root_sbom, release_assets, root_gap or assets_gap)
         provenance = self._find_provenance(release_assets, assets_gap)
+        root_path = tree.match(_SBOM_ROOT_FILES) if root_sbom else None
+        sbom["evidence"] = self._sbom_evidence(sbom, root_path, releases)
+        provenance["evidence"] = self._release_evidence(
+            provenance, releases, _PROVENANCE_ASSET_HINTS)
 
         sub_metrics = {
             "sbom_detection": sbom,
@@ -298,11 +306,13 @@ class SupplyChainCollector:
     async def _fetch_release_assets(
         self, client: httpx.AsyncClient, ref: str
     ) -> tuple:
-        """Returns (flat list of {name, url, release}, is_gap). An empty
-        list with is_gap=False is a real, confirmed result (no releases);
-        is_gap=True means the release list itself couldn't be fetched, so
-        an empty list here says nothing trustworthy about SBOM/provenance
-        presence.
+        """Returns (flat list of {name, url, release}, is_gap, releases). An
+        empty list with is_gap=False is a real, confirmed result (no
+        releases); is_gap=True means the release list itself couldn't be
+        fetched, so an empty list here says nothing trustworthy about
+        SBOM/provenance presence. `releases` lists the releases read, as
+        {"path": tag, "url"}, including any with no assets, so a report
+        can say which were checked.
 
         Reads each release's "assets" list ({name, browser_download_url}).
         That is GitHub's native shape; GitLabForge.releases() maps GitLab's
@@ -310,10 +320,14 @@ class SupplyChainCollector:
         """
         releases = await self.forge.releases(client, ref, per_page=_RELEASES_SAMPLE)
         if releases is COLLECTION_GAP:
-            return [], True
+            return [], True, []
 
-        assets = []
+        assets, checked = [], []
         for release in releases or []:
+            # GitLab's release page is under _links rather than html_url.
+            checked.append({"path": release.get("tag_name", ""),
+                            "url": release.get("html_url")
+                                   or (release.get("_links") or {}).get("self")})
             for asset in release.get("assets", []) or []:
                 name = asset.get("name")
                 if name:
@@ -322,7 +336,7 @@ class SupplyChainCollector:
                         "url": asset.get("browser_download_url", ""),
                         "release": release.get("tag_name", ""),
                     })
-        return assets, False
+        return assets, False, checked
 
     async def _check_dependency_vulnerabilities(
         self, client: httpx.AsyncClient, ref: str, tree
@@ -348,6 +362,10 @@ class SupplyChainCollector:
 
         found_files: List[str] = []
         all_deps: List[Tuple[str, str, str]] = []
+        # For the report: each lockfile read and what it pinned, and the
+        # first lockfile each dependency came from.
+        lockfiles: List[Dict[str, Any]] = []
+        source: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
         saw_gap = False
         for ecosystem, paths, parser in _LOCKFILE_SPECS:
             path = tree.match(paths)
@@ -360,7 +378,12 @@ class SupplyChainCollector:
             if text is None:
                 continue
             found_files.append(path)
-            all_deps.extend((ecosystem, name, version) for name, version in parser(text))
+            deps = [(ecosystem, name, version) for name, version in parser(text)]
+            all_deps.extend(deps)
+            lockfile = {"path": path, "url": tree.match_url([path])}
+            lockfiles.append({**lockfile, "ecosystem": ecosystem, "pinned": len(deps)})
+            for dep in deps:
+                source.setdefault(dep, lockfile)
 
         if not found_files:
             if saw_gap:
@@ -369,14 +392,25 @@ class SupplyChainCollector:
             return {
                 "label": "Dependency Vulnerability Posture", "passing": True,
                 "value": "No dependency lockfile found at the repository root",
+                "evidence": {"searched": [{
+                    "text": "Lockfiles looked for (any capitalization)",
+                    "paths": [{"path": p} for _, paths, _ in _LOCKFILE_SPECS for p in paths],
+                }]},
             }
 
+        read = {"found": [
+            {"text": f"{f['pinned']} pinned {f['ecosystem']} "
+                     f"dependenc{'y' if f['pinned'] == 1 else 'ies'}",
+             "path": f["path"], "url": f["url"]}
+            for f in lockfiles
+        ]}
         if not all_deps:
             return {
                 "label": "Dependency Vulnerability Posture", "passing": True,
                 "value": f"{', '.join(found_files)} has no exactly-pinned/registry "
                          f"dependencies to check",
                 "detail": found_files,
+                "evidence": read,
             }
 
         vulnerable = await self._query_osv_batch(client, all_deps)
@@ -389,25 +423,37 @@ class SupplyChainCollector:
             return {"label": "Dependency Vulnerability Posture", "value": None,
                     "passing": False, "not_collected": True}
 
+        # The advisories behind each failing dependency, so a team can see
+        # what to upgrade past without querying OSV themselves.
+        for ecosystem, name, version, ids in sorted(vulnerable):
+            shown = ", ".join(ids[:_VULN_IDS_SHOWN])
+            if len(ids) > _VULN_IDS_SHOWN:
+                shown += f" and {len(ids) - _VULN_IDS_SHOWN} more"
+            read["found"].append({
+                "text": f"{name}=={version} ({ecosystem}) with known vulnerabilities"
+                        + (f" ({shown})" if shown else ""),
+                **source[(ecosystem, name, version)],
+            })
         return {
             "label": "Dependency Vulnerability Posture",
             "passing": not vulnerable,
             "value": f"{len(vulnerable)} of {len(all_deps)} pinned dependencies "
                      f"have a known vulnerability",
-            "detail": sorted(f"{name}=={version} ({ecosystem})" for ecosystem, name, version in vulnerable)
-                      or None,
+            "detail": sorted(f"{name}=={version} ({ecosystem})"
+                             for ecosystem, name, version, _ in vulnerable) or None,
+            "evidence": read,
         }
 
     async def _query_osv_batch(
         self, client: httpx.AsyncClient, deps: List[Tuple[str, str, str]]
     ):
-        """(ecosystem, name, version) triples with at least one known OSV
-        vulnerability, or COLLECTION_GAP if the query itself failed. A dep
-        absent from the result had a confirmed-clean scan, same as every
-        other triple not returned. Severity isn't fetched -- OSV.dev's batch
-        endpoint returns only vulnerability IDs, and a second round of
-        per-ID lookups for detail isn't worth it for a boolean pass/fail
-        sub-metric.
+        """(ecosystem, name, version, vulnerability IDs) for each dep with at
+        least one known OSV vulnerability, or COLLECTION_GAP if the query
+        itself failed. A dep absent from the result had a confirmed-clean
+        scan, same as every other triple not returned. Severity isn't
+        fetched -- OSV.dev's batch endpoint returns only vulnerability IDs,
+        and a second round of per-ID lookups for detail isn't worth it for a
+        boolean pass/fail sub-metric.
         """
         queries = [{"package": {"name": name, "ecosystem": ecosystem}, "version": version}
                    for ecosystem, name, version in deps]
@@ -421,7 +467,8 @@ class SupplyChainCollector:
             return COLLECTION_GAP
 
         results = resp.json().get("results", [])
-        return [deps[i] for i, r in enumerate(results) if r.get("vulns")]
+        return [(*deps[i], [v.get("id") for v in r["vulns"] if v.get("id")])
+                for i, r in enumerate(results) if r.get("vulns")]
 
     # ------------------------------------------------------------------ #
     # Matching                                                             #
@@ -466,6 +513,39 @@ class SupplyChainCollector:
             "label": "Build Provenance", "passing": False,
             "value": "No build provenance found",
         }
+
+    @classmethod
+    def _sbom_evidence(
+        cls, sbom: Dict[str, Any], root_path: Optional[str], releases: List[Dict[str, Any]]
+    ) -> Dict[str, List]:
+        """For the report: the committed SBOM's file, or, with none found,
+        the names looked for at the root and the releases checked."""
+        if root_path:
+            return {"found": [{"text": "SBOM", "path": root_path, "url": sbom.get("detail")}]}
+        evidence = cls._release_evidence(sbom, releases, _SBOM_ASSET_HINTS)
+        if evidence:
+            names = list(dict.fromkeys(p.lower() for p in _SBOM_ROOT_FILES))
+            evidence["searched"].insert(0, {
+                "text": "SBOM files looked for (any capitalization)",
+                "paths": [{"path": p} for p in names],
+            })
+        return evidence
+
+    @staticmethod
+    def _release_evidence(
+        result: Dict[str, Any], releases: List[Dict[str, Any]], hints: List[str]
+    ) -> Dict[str, List]:
+        """For a row matched against release asset names and not found: the
+        releases whose assets were checked, and the name fragments that
+        would have matched. Nothing when found (the value names the asset)
+        or when the release list couldn't be read."""
+        if result.get("passing") or result.get("not_collected"):
+            return {}
+        return {"searched": [{
+            "text": f"Asset names containing {', '.join(hints)} looked for in the "
+                    f"latest releases",
+            "paths": releases,
+        }]}
 
     # ------------------------------------------------------------------ #
     # Scoring                                                              #
