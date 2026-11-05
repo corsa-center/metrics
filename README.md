@@ -158,3 +158,7 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 - **CORSA Dashboard**: info@corsa.center
 - **Issues**: [GitHub Issues](https://github.com/brtnfld/metrics/issues)
+
+## Acknowledgements
+
+This work is supported by the U.S. Department of Energy, Office of Science, Office of Advanced Scientific Computing Research, Next-Generation Scientific Software Technologies program, under contract number DE-AC05-00OR22725.
