@@ -28,7 +28,7 @@ import httpx
 
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
+from collectors.ecosystem.base import _VENDORED_DIR, get_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,9 @@ _DOC_EXTENSIONS = {".md", ".rst", ".adoc", ".tex", ".dox"}
 # or under an explicit doc directory.
 _CONTEXTUAL_DOC_EXTENSIONS = {".txt"}
 
-# Includes the unit_test/ and *_UnitTests.cpp conventions common in C++ HPC code.
-_TEST_PATH = re.compile(r"(^|/)(tests?|testing|unit_?tests?)(/|$)", re.IGNORECASE)
+# Includes the unit_test/ and *_UnitTests.cpp conventions common in C++ HPC
+# code, and HDF5's testpar/ (its parallel test suite).
+_TEST_PATH = re.compile(r"(^|/)(tests?|testing|testpar|unit_?tests?)(/|$)", re.IGNORECASE)
 _TEST_FILE = re.compile(
     r"(^|/)(test_[^/]+|[^/]+_(?:unit)?tests?|[^/]*UnitTests?[^/]*)\.[a-z0-9]+$", re.IGNORECASE)
 _DOC_PATH = re.compile(r"(^|/)(docs?|documentation)(/|$)", re.IGNORECASE)
@@ -217,6 +218,10 @@ class MaintainabilityCollector:
 
         for f in files:
             path = f["path"]
+            # Bundled third-party code (Kokkos's tpls/googletest) is neither
+            # the project's source, its tests nor its documentation.
+            if _VENDORED_DIR.search(path):
+                continue
 
             for name, pattern in _DOC_GENERATORS.items():
                 if name not in generators and pattern.search(path):

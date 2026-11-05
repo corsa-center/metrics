@@ -351,3 +351,18 @@ class TestFetchGaps:
     def test_empty_repository_is_still_a_measured_fail(self):
         subs = _subs(_collect())
         assert not any(s.get("not_collected") for s in subs.values())
+
+
+class TestVendoredAndParallelTests:
+    def test_vendored_code_is_left_out(self):
+        comp = MaintainabilityCollector(None)._analyze_tree([
+            _f("src/a.cpp", 1000), _f("tpls/googletest/src/gtest.cc", 250_000),
+            _f("tpls/googletest/googletest/test/gtest_unittest.cc"),
+        ])
+        assert comp["source_files"] == 1 and comp["test_files"] == 0
+        assert comp["largest_source_bytes"] == 1000
+
+    def test_hdf5_testpar_is_a_test_directory(self):
+        comp = MaintainabilityCollector(None)._analyze_tree([
+            _f("src/H5.c"), _f("testpar/t_filters_parallel.c", 460_000)])
+        assert comp["source_files"] == 1 and comp["test_files"] == 1
