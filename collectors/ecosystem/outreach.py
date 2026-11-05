@@ -27,6 +27,7 @@ import httpx
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
 from forge.interface import Forge
 from collectors.ecosystem.community_health import _DEEP_DOC_PATTERNS, readme_contributing_section
+from collectors.ecosystem.funding import _readme_source
 from collectors.quality.usability import readme_mentions
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,23 @@ _GETTING_STARTED_PATTERN = (
 )
 # README sections that stand in for a separate getting-started document.
 _README_GETTING_STARTED = r"(?:getting started|quick ?start|tutorial)"
+
+# The regex searches above, in words, for the report's "looked for" lines.
+_SEARCH_DESCRIPTIONS = {
+    "Contributing guide": [
+        "a contributing guide anywhere under docs/ or doc/ (at the top level, or in src/ "
+        "or source/)",
+    ],
+    "Getting-started guide": [
+        "a getting-started, quick-start or tutorial file anywhere under docs/, doc/ "
+        "or documentation/",
+        "a top-level getting-started, quick-start or tutorial file or directory",
+    ],
+}
+_README_SECTIONS = {
+    "Contributing guide": "a Contributing section describing how to contribute",
+    "Getting-started guide": "a Getting started, Quick start or Tutorial section",
+}
 
 # Window for "new" contributors and recent commit activity.
 _RECENT_DAYS = 365
@@ -127,6 +145,10 @@ class OutreachCollector:
         if onboarding["missing"]:
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
                 readme = await self.forge.readme(client, ref)
+            if isinstance(readme, str):
+                # Recorded even when nothing in it counts, so the report can
+                # say the README was searched.
+                onboarding["readme"] = _readme_source(tree)
             if readme:
                 self._credit_readme(onboarding, readme)
 
@@ -203,7 +225,7 @@ class OutreachCollector:
         Uses issue search rather than paginating issues, so all labels cost
         two requests and return an exact total instead of a page count.
         """
-        queried = await self._newcomer_labels(client, ref)
+        queried, source = await self._newcomer_labels(client, ref)
 
         async def count(state: str) -> tuple:
             total = await self.forge.count_issues(client, ref, state=state, labels=queried)
@@ -216,6 +238,7 @@ class OutreachCollector:
         )
         result = {
             "labels_queried": queried,
+            "labels_source": source,
             "open": open_count,
             "closed": closed_count,
             "total": open_count + closed_count,
@@ -227,19 +250,34 @@ class OutreachCollector:
             result["not_collected"] = True
         return result
 
-    async def _newcomer_labels(self, client: httpx.AsyncClient, ref: str) -> List[str]:
+    async def _newcomer_labels(self, client: httpx.AsyncClient, ref: str) -> tuple:
         """The repository's own newcomer-style labels, or the common names
-        when its labels can't be read."""
+        when it has none or its labels can't be read.
+
+        Returns (labels, source); source is "repository", "default" (none of
+        its labels match) or "unreadable", so the report can tell a project
+        it has no such label only when that was checked.
+        """
         names: List[str] = []
         for page in range(1, _MAX_LABEL_PAGES + 1):
             batch = await self.forge.labels(client, ref, page=page, per_page=100)
             if batch is COLLECTION_GAP:
-                return list(_NEWCOMER_LABELS)
+                return list(_NEWCOMER_LABELS), "unreadable"
             names += [l.get("name", "") for l in batch or []]
             if not batch or len(batch) < 100:
                 break
         own = [n for n in names if _NEWCOMER_LABEL_PATTERN.search(n) and "," not in n]
-        return own or list(_NEWCOMER_LABELS)
+        return (own, "repository") if own else (list(_NEWCOMER_LABELS), "default")
+
+    def _candidates(self, label: str) -> List[str]:
+        """The literal paths an onboarding resource is matched at (any
+        capitalization); the getting-started guide has none, only a regex."""
+        return {
+            "Contributing guide": _CONTRIBUTING_PATHS,
+            "Issue templates": self.forge.platform_paths("issue_templates"),
+            "Pull request template":
+                _PR_TEMPLATE_PATHS + self.forge.platform_paths("change_request_templates"),
+        }.get(label, [])
 
     def _check_onboarding(self, tree) -> Dict[str, Any]:
         """Which onboarding resources the repository provides, resolved
@@ -252,23 +290,22 @@ class OutreachCollector:
                 "details": {label: {"not_collected": True} for label in _ONBOARDING_LABELS},
             }
 
-        # match_url() matches files and directories alike, so a template
+        # match() matches files and directories alike, so a template
         # directory (.github/ISSUE_TEMPLATE, .gitlab/issue_templates) counts.
-        issue_templates_url = tree.match_url(self.forge.platform_paths("issue_templates"))
-
-        deep_contributing = tree.find_owned(_DEEP_DOC_PATTERNS["contributing_guidelines"])
-        urls = {
-            "Contributing guide": tree.match_url(_CONTRIBUTING_PATHS) or (
-                tree.url_for(deep_contributing) if deep_contributing else None),
-            "Issue templates": issue_templates_url,
-            "Pull request template": tree.match_url(
-                _PR_TEMPLATE_PATHS + self.forge.platform_paths("change_request_templates")),
-            "Getting-started guide": tree.find_url(_GETTING_STARTED_PATTERN),
+        paths = {
+            "Contributing guide": tree.match(self._candidates("Contributing guide"))
+                                  or tree.find_owned(_DEEP_DOC_PATTERNS["contributing_guidelines"]),
+            "Issue templates": tree.match(self._candidates("Issue templates")),
+            "Pull request template": tree.match(self._candidates("Pull request template")),
+            "Getting-started guide": next(iter(tree.find(_GETTING_STARTED_PATTERN)), None),
         }
-        found = [label for label in _ONBOARDING_LABELS if urls[label]]
-        missing = [label for label in _ONBOARDING_LABELS if not urls[label]]
+        found = [label for label in _ONBOARDING_LABELS if paths[label]]
+        missing = [label for label in _ONBOARDING_LABELS if not paths[label]]
+        # The path is kept so the report can name the file, which the
+        # dashboard row (resource names only) doesn't.
         details = {
-            label: ({"exists": True, "url": urls[label]} if urls[label] else {"exists": False})
+            label: ({"exists": True, "url": tree.match_url([paths[label]]), "path": paths[label]}
+                    if paths[label] else {"exists": False})
             for label in _ONBOARDING_LABELS
         }
         return {"found": found, "missing": missing, "not_collected": [], "details": details}
@@ -448,6 +485,7 @@ class OutreachCollector:
         }
         if not gfi_passing and newcomer_issues.get("not_collected"):
             gfi_entry["not_collected"] = True
+        gfi_entry["evidence"] = self._newcomer_label_evidence(newcomer_issues)
         sub["good_first_issue"] = gfi_entry
 
         found = onboarding.get("found", [])
@@ -460,6 +498,7 @@ class OutreachCollector:
         }
         if not onboarding_passing and onboarding.get("not_collected"):
             onboarding_entry["not_collected"] = True
+        onboarding_entry["evidence"] = self._onboarding_evidence(onboarding)
         sub["onboarding_infrastructure"] = onboarding_entry
 
         for key, label in [
@@ -484,6 +523,61 @@ class OutreachCollector:
             "percentage": round(score / max_score * 100, 2),
             "sub_scores": sub,
         }
+
+    @staticmethod
+    def _newcomer_label_evidence(issues: Dict[str, Any]) -> Dict[str, Any]:
+        """Which labels the newcomer-issue counts used, and whether they
+        were the repository's own, for the report."""
+        source = issues.get("labels_source")
+        if issues.get("not_collected") or not source:
+            return {}
+        labels = issues.get("labels_queried", [])
+        if source == "repository":
+            return {"found": [{"text": "Newcomer labels in the repository: " + ", ".join(labels)}]}
+        evidence: Dict[str, Any] = {"searched": [{
+            "text": "Issues counted with the common newcomer labels instead"
+                    if source == "default" else
+                    "Issues counted with the common newcomer labels (the repository's "
+                    "own labels couldn't be read)",
+            "paths": [{"path": label} for label in labels],
+        }]}
+        if source == "default":
+            evidence["missing"] = [{"text": "a newcomer label among the repository's own labels "
+                                            "(such as good first issue, help wanted, beginner, "
+                                            "starter or easy, in any spelling)"}]
+        return evidence
+
+    def _onboarding_evidence(self, onboarding: Dict[str, Any]) -> Dict[str, Any]:
+        """Each onboarding resource's file, or where it was looked for.
+
+        Resources whose lookup gapped are in neither "found" nor "missing",
+        so nothing is claimed for them.
+        """
+        details = onboarding.get("details", {})
+        readme = onboarding.get("readme")
+        found, missing, searched = [], [], []
+        for label in _ONBOARDING_LABELS:
+            info = details.get(label, {})
+            if info.get("exists"):
+                if info.get("source") == "README section" and readme:
+                    found.append({"text": f"{label} as a README section", **readme})
+                elif info.get("path"):
+                    found.append({"text": label, "path": info["path"], "url": info.get("url")})
+                continue
+            if label not in onboarding.get("missing", []):
+                continue
+            missing.append({"text": label})
+            # Matching is case-insensitive, so spellings differing only in
+            # case are one place.
+            unique: Dict[str, str] = {}
+            for path in self._candidates(label):
+                unique.setdefault(path.lower(), path)
+            places = list(unique.values()) + _SEARCH_DESCRIPTIONS.get(label, [])
+            if readme and label in _README_SECTIONS:
+                places.append(f"{_README_SECTIONS[label]} in {readme['path']}")
+            searched.append({"text": f"{label} looked for (paths in any capitalization)",
+                             "paths": [{"path": p} for p in places]})
+        return {"found": found, "missing": missing, "searched": searched}
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {

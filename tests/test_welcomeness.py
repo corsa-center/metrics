@@ -91,7 +91,7 @@ class TestGetPublicChannelsGapHandling:
             with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=COLLECTION_GAP)):
                 return await collector._get_public_channels(None, "o/r")
 
-        channels, saw_gap = asyncio.run(go())
+        channels, saw_gap, _ = asyncio.run(go())
         assert channels == []
         assert saw_gap is True
 
@@ -101,7 +101,7 @@ class TestGetPublicChannelsGapHandling:
             with patch.object(collector.forge, "_github_get", new=AsyncMock(side_effect=[data, None])):
                 return await collector._get_public_channels(None, "o/r")
 
-        channels, saw_gap = asyncio.run(go())
+        channels, saw_gap, _ = asyncio.run(go())
         assert channels == ["GitHub Discussions"]
         assert saw_gap is False
 
@@ -175,3 +175,85 @@ class TestFindDecisionDocuments:
         tree = RepoTree(FakeForge(), "o/r", ["src/Roadmapper.cpp"], truncated=False)
         result = collector._find_decision_documents(tree)
         assert "Roadmap" not in result["found"]
+
+
+class TestEvidence:
+    """What the report shows under Decision-Making Visibility (#99)."""
+
+    @pytest.fixture
+    def fake(self):
+        return WelcomenessCollector(FakeForge())
+
+    def _collect(self, collector, paths, readme):
+        tree = RepoTree(collector.forge, "o/r", paths, truncated=False)
+        collector.forge.readme_text = readme
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)):
+            result = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        return result["overall_score"]["sub_scores"]["decision_making_visibility"]["evidence"]
+
+    def test_readme_channel_keeps_the_text_that_matched(self, fake):
+        fake.forge.repo_info_data = {"has_wiki": True}
+        ev = self._collect(fake, ["README.md", "docs/roadmap.md"],
+                           "# Proj\n\nQuestions go to the proj-users mailing list at lists.example.org.\n")
+        assert {"text": "Mailing list", "path": "README.md",
+                "url": "https://github.com/o/r/blob/HEAD/README.md",
+                "quote": "Questions go to the proj-users mailing list at lists.example.org."} in ev["found"]
+        assert {"text": "Roadmap", "path": "docs/roadmap.md",
+                "url": "https://github.com/o/r/blob/HEAD/docs/roadmap.md"} in ev["found"]
+        missing = [m["text"] for m in ev["missing"]]
+        assert "GitHub Discussions (not enabled)" in missing
+        assert "Wiki with pages (the wiki is enabled but has none)" in missing
+        assert any(m.startswith("Forum in README.md (looked for: forum") for m in missing)
+        assert "Roadmap" not in missing and "Meeting notes" in missing
+        meeting = next(s for s in ev["searched"] if s["text"].startswith("Meeting notes"))
+        assert meeting["paths"][0] == {"path": "a meeting-notes directory"}
+
+    def test_missing_readme_is_named(self, fake):
+        ev = self._collect(fake, [], None)
+        assert {"text": "a README to read for mailing list, forum and chat links"} in ev["missing"]
+
+    def test_gapped_lookups_claim_nothing(self, fake):
+        fake.forge.gaps = {"repo_info"}
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=COLLECTION_GAP)):
+            result = asyncio.run(fake.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        ev = result["overall_score"]["sub_scores"]["decision_making_visibility"]["evidence"]
+        assert ev == {"found": [], "missing": [], "searched": []}
+
+    def test_gapped_readme_claims_no_readme_search(self, fake):
+        fake.forge.gaps = {"readme"}
+        ev = self._collect(fake, [], None)
+        assert not any("README" in m["text"] for m in ev["missing"])
+
+    def test_gitlab_has_no_discussions_to_miss(self):
+        from tests.fakes import gitlab_fake
+        ev = WelcomenessCollector(gitlab_fake())._visibility_evidence(
+            [], {"details": {}}, {"settings": True})
+        assert [m["text"] for m in ev["missing"]] == ["Wiki (not enabled)", "GitLab Pages (not enabled)"]
+
+    def test_report_shows_it_under_the_row(self, fake):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        tree = RepoTree(fake.forge, "o/r", ["GOVERNANCE.md"], truncated=False)
+        documents = fake._find_decision_documents(tree)
+        looked = {"settings": True, "readme": "read", "readme_matches": {
+            "Chat (Slack/Discord/Matrix)": "Join us on <Slack>"},
+            "readme_source": {"path": "README.md", "url": "https://github.com/o/r/blob/HEAD/README.md"}}
+        welcomeness = {"overall_score": fake._calculate_score(
+            ["Chat (Slack/Discord/Matrix)"], documents, looked=looked)}
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {"welcomeness": welcomeness}},
+            "quality": {"sub_results": {}},
+        }}
+        orch = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orch._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orch._metric_weights())
+
+        row = page[page.index("<b>Decision-Making Visibility:</b>"):]
+        row = row[:row.index("</li>")]
+        assert ('<b>Found:</b> Chat (Slack/Discord/Matrix) in <a href="https://github.com/o/r/blob/HEAD/'
+                'README.md">README.md</a>: “Join us on &lt;Slack&gt;”') in row
+        assert ('<b>Found:</b> Governance document in <a href="https://github.com/o/r/blob/HEAD/'
+                'GOVERNANCE.md">GOVERNANCE.md</a>') in row
+        assert "<b>Not found:</b> Decision records</div>" in row
+        assert "<b>Decision records looked for (paths in any capitalization):</b> docs/adr, adr" in row

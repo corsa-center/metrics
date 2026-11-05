@@ -330,3 +330,137 @@ class TestSpackByRepository:
             "spack.io/packages/llvm": {"name": "llvm", "ecosystem": "spack", "dependent_packages_count": 6},
         })
         assert asyncio.run(collector._lookup_spack(None, "llvm-project", "llvm"))["name"] == "llvm"
+
+
+class TestFetchFailure:
+    def _get(self, collector, status):
+        import httpx
+        from unittest.mock import AsyncMock, patch
+        transport = httpx.MockTransport(lambda request: httpx.Response(status, json={}))
+
+        async def go():
+            async with httpx.AsyncClient(transport=transport) as client:
+                return await collector._get_json(client, "https://packages.example/x")
+        with patch("collectors.ecosystem.collaboration.asyncio.sleep", new=AsyncMock()):
+            return asyncio.run(go())
+
+    def test_404_is_absent_and_anything_else_failed(self, collector):
+        from collectors.ecosystem.collaboration import _FETCH_FAILED
+        assert self._get(collector, 404) is None
+        assert self._get(collector, 503) is _FETCH_FAILED
+        assert self._get(collector, 403) is _FETCH_FAILED
+        assert not _FETCH_FAILED
+
+
+class TestLookupTraces:
+    """Each lookup records what it searched, so the report can say (#99)."""
+
+    def test_conda_records_names_and_an_unlinked_namesake(self, collector):
+        other = {**TestCondaForgeLookup.AMREX, "dev_url": "https://github.com/someone-else/amrex",
+                 "home": "https://example.org"}
+        # Both spellings answer with the same package, as anaconda.org can.
+        collector._get_json = _FakeJson({"conda-forge/amrex": other, "conda-forge/AMReX": other})
+        trace = {}
+        asyncio.run(collector._lookup_conda_forge(None, "AMReX-Codes", "AMReX", trace))
+        assert trace == {"names": ["amrex", "AMReX"], "failed": False, "unlinked": [
+            {"name": "amrex", "url": "http://anaconda.org/conda-forge/amrex"}]}
+
+    def test_spack_records_names_tried_and_failures(self, collector):
+        from collectors.ecosystem.collaboration import _FETCH_FAILED
+
+        async def failing(client, url):
+            return _FETCH_FAILED if url.endswith("/ADIOS2") else None
+        collector._get_json = failing
+        trace = {}
+        assert asyncio.run(collector._lookup_spack(None, "ADIOS2", "ornladios", trace)) is None
+        assert trace == {"names": ["ADIOS2", "adios2"], "failed": True, "by_download_url": True}
+
+    def test_audit_graph_outcomes(self, collector):
+        from unittest.mock import AsyncMock, patch
+        from collectors.ecosystem.collaboration import _FETCH_FAILED
+        for graph, outcome in [
+            (None, "absent"), (_FETCH_FAILED, "failed"),
+            ({"meta": {"root": "someone/amrex"}, "edges": []},
+             "the graph published under this name is for another repository"),
+        ]:
+            trace = {}
+            with patch.object(collector, "_get_json", new=AsyncMock(return_value=graph)):
+                asyncio.run(collector._source_dependents(None, "AMReX-Codes", "amrex", trace))
+            assert trace["outcome"] == outcome
+            assert trace["path"] == ("corsa-center/project-dependent-tracking/"
+                                     "amrex-dependency-context/dependency_graph.json")
+
+
+class TestEvidence:
+    LOOKUPS = {
+        "repository": {"url": "https://github.com/o/r", "failed": False},
+        "spack": {"names": ["R", "r"], "failed": False, "by_download_url": True},
+        "conda": {"names": ["r", "R"], "failed": False, "unlinked": [{"name": "r", "url": None}]},
+        "audit": {"path": "corsa-center/project-dependent-tracking/r-dependency-context/"
+                          "dependency_graph.json", "outcome": "absent"},
+    }
+
+    def _sub(self, collector, registries, source=None, lookups=None):
+        return collector._calculate_score(registries, source, lookups or self.LOOKUPS)["sub_scores"]
+
+    def test_found_packages_link_to_their_registry_and_empty_registries_list_names_tried(self, collector):
+        pkg = {**_pkg("pypi", "h5py", deps=3), "registry_url": "https://pypi.org/project/h5py"}
+        ev = self._sub(collector, [pkg])["advanced_dependency_analysis"]["evidence"]
+        assert ev["found"] == [{"path": "h5py (pypi)", "url": "https://pypi.org/project/h5py"}]
+        assert [s["text"] for s in ev["searched"]] == [
+            "Package registries searched (via ecosyste.ms) for packages whose repository URL is",
+            "Spack recipes looked for by name", "conda-forge packages looked for by name"]
+        assert ev["searched"][1]["paths"][-1]["path"].startswith("any recipe whose homepage")
+        assert ev["missing"][0]["text"].startswith("a link to this repository from conda-forge's r ")
+
+    def test_a_registry_already_credited_lists_no_search_for_it(self, collector):
+        ev = self._sub(collector, [_pkg("spack", "r"), _pkg("conda", "r")])[
+            "advanced_dependency_analysis"]["evidence"]
+        assert [s["text"] for s in ev["searched"]] == [
+            "Package registries searched (via ecosyste.ms) for packages whose repository URL is"]
+        assert ev["missing"] == []
+
+    def test_failed_lookups_claim_no_search(self, collector):
+        lookups = {"repository": {"url": "https://github.com/o/r", "failed": True},
+                   "spack": {"names": ["r"], "failed": True},
+                   "conda": {"failed": True}, "audit": {"outcome": "failed"}}
+        sub = self._sub(collector, [], lookups=lookups)
+        for key in ("advanced_dependency_analysis", "collaboration_network"):
+            assert sub[key]["evidence"] == {"found": [], "missing": [], "searched": []}
+
+    def test_network_names_the_package_behind_each_count_and_the_graph(self, collector):
+        source = {"count": 64, "complete": True, "url": "https://raw.example/graph.json"}
+        ev = self._sub(collector, [_pkg("spack", "amrex", deps=6), _pkg("pypi", "x")], source)[
+            "collaboration_network"]["evidence"]
+        assert ev["found"] == [
+            {"text": "amrex (spack): 6 dependent packages, 0 dependent repositories"},
+            {"text": "64 source-level dependents", "url": "https://raw.example/graph.json",
+             "path": self.LOOKUPS["audit"]["path"]},
+        ]
+
+    def test_network_without_a_graph_says_where_it_looked(self, collector):
+        ev = self._sub(collector, [])["collaboration_network"]["evidence"]
+        assert ev["missing"] == [{"text": "a dependency-audit graph for this repository"}]
+        assert ev["searched"][0]["paths"] == [{"path": self.LOOKUPS["audit"]["path"]}]
+
+    def test_report_shows_it_under_the_rows(self, collector):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        pkg = {**_pkg("pypi", "h5py", deps=3), "registry_url": "https://pypi.org/project/h5py"}
+        collaboration = {"overall_score": collector._calculate_score([pkg], None, self.LOOKUPS)}
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {"collaboration": collaboration}},
+            "quality": {"sub_results": {}},
+        }}
+        orch = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orch._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orch._metric_weights())
+
+        deps = page.index("<b>Advanced Dependency Analysis:</b>")
+        net = page.index("<b>Collaboration Network Analysis:</b>")
+        found = page.index('<b>Found:</b> <a href="https://pypi.org/project/h5py">h5py (pypi)</a>')
+        assert deps < found < net
+        assert "<b>Spack recipes looked for by name:</b> R, r, any recipe" in page[deps:net]
+        assert "<b>Found:</b> h5py (pypi): 3 dependent packages, 0 dependent repositories" in page[net:]
+        assert "<b>Not found:</b> a dependency-audit graph for this repository" in page[net:]

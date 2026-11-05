@@ -141,14 +141,14 @@ class TestNewcomerLabelQuery:
                                           "difficulty: easy", "easy-to-review-ish", "reg:helper-scripts"]]
         collector.forge.label_list = labels
         got = asyncio.run(collector._newcomer_labels(None, "o/r"))
-        assert got == ["is:good-first-issue", "is:help-wanted", "difficulty: easy"]
+        assert got == (["is:good-first-issue", "is:help-wanted", "difficulty: easy"], "repository")
 
     def test_no_matching_labels_falls_back_to_common_names(self, collector):
         from collectors.ecosystem.outreach import _NEWCOMER_LABELS
         collector.forge.label_list = [{"name": "bug"}]
-        assert asyncio.run(collector._newcomer_labels(None, "o/r")) == _NEWCOMER_LABELS
+        assert asyncio.run(collector._newcomer_labels(None, "o/r")) == (_NEWCOMER_LABELS, "default")
         collector.forge.gaps = {"labels"}
-        assert asyncio.run(collector._newcomer_labels(None, "o/r")) == _NEWCOMER_LABELS
+        assert asyncio.run(collector._newcomer_labels(None, "o/r")) == (_NEWCOMER_LABELS, "unreadable")
 
 
 
@@ -362,3 +362,94 @@ class TestCommitsWithoutAnAccount:
         growth = collector._analyze_contributor_growth(
             [{"identity": "alice", "commit_count": 40}], counts)
         assert growth["contributor_list_truncated"] is False
+
+
+class TestEvidence:
+    """What the report shows under the 4.2.5 rows (#99)."""
+
+    def test_newcomer_labels_from_the_repository(self, collector):
+        ev = collector._newcomer_label_evidence(
+            {"labels_queried": ["is:good-first-issue", "difficulty: easy"], "labels_source": "repository"})
+        assert ev == {"found": [{"text": "Newcomer labels in the repository: is:good-first-issue, difficulty: easy"}]}
+
+    def test_no_newcomer_label_of_its_own_says_so_and_what_was_counted(self, collector):
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
+        ev = collector._newcomer_label_evidence(
+            {"labels_queried": _NEWCOMER_LABELS, "labels_source": "default"})
+        assert ev["missing"][0]["text"].startswith("a newcomer label among the repository's own labels")
+        assert [p["path"] for p in ev["searched"][0]["paths"]] == _NEWCOMER_LABELS
+
+    def test_unreadable_labels_claim_no_absence(self, collector):
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
+        ev = collector._newcomer_label_evidence(
+            {"labels_queried": _NEWCOMER_LABELS, "labels_source": "unreadable"})
+        assert "missing" not in ev
+        assert "couldn't be read" in ev["searched"][0]["text"]
+
+    def test_gapped_issue_count_claims_nothing(self, collector):
+        assert collector._newcomer_label_evidence(
+            {"labels_queried": ["x"], "labels_source": "repository", "not_collected": True}) == {}
+
+    def test_newcomer_issue_search_records_the_label_source(self, collector):
+        collector.forge.label_list = [{"name": "good first issue"}]
+        assert asyncio.run(collector._get_newcomer_issues(None, "o/r"))["labels_source"] == "repository"
+
+    def test_onboarding_names_files_found_and_where_others_were_looked_for(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["docs/CONTRIBUTING.md", "README.md"], truncated=False)
+        onboarding = collector._check_onboarding(tree)
+        assert onboarding["details"]["Contributing guide"]["path"] == "docs/CONTRIBUTING.md"
+        ev = collector._onboarding_evidence(onboarding)
+        assert ev["found"] == [{"text": "Contributing guide", "path": "docs/CONTRIBUTING.md",
+                                "url": "https://github.com/o/r/blob/HEAD/docs/CONTRIBUTING.md"}]
+        assert [m["text"] for m in ev["missing"]] == [
+            "Issue templates", "Pull request template", "Getting-started guide"]
+        pr = next(s for s in ev["searched"] if s["text"].startswith("Pull request template"))
+        # GitHub's two spellings of the template differ only in case.
+        assert [p["path"] for p in pr["paths"]] == [
+            "PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE.md"]
+
+    def test_readme_section_is_named_as_such_and_searched_when_read(self, collector):
+        tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
+        with patch.object(collector, "_get_contributors", new=AsyncMock(return_value=([], False))), \
+             patch.object(collector, "_get_recent_commit_authors", new=AsyncMock(return_value=({}, False, False))), \
+             patch.object(collector, "_get_newcomer_issues", new=AsyncMock(return_value={"open": 0, "closed": 0, "total": 0})), \
+             patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector.forge, "readme", new=AsyncMock(return_value="## Quick start\n\nmake\n")):
+            result = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        ev = result["overall_score"]["sub_scores"]["onboarding_infrastructure"]["evidence"]
+        assert {"text": "Getting-started guide as a README section", "path": "README.md",
+                "url": "https://github.com/o/r/blob/HEAD/README.md"} in ev["found"]
+        contributing = next(s for s in ev["searched"] if s["text"].startswith("Contributing guide"))
+        assert contributing["paths"][-1] == {
+            "path": "a Contributing section describing how to contribute in README.md"}
+
+    def test_gapped_tree_claims_nothing(self, collector):
+        ev = collector._onboarding_evidence(collector._check_onboarding(COLLECTION_GAP))
+        assert ev == {"found": [], "missing": [], "searched": []}
+
+    def test_report_shows_it_under_the_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        from collectors.ecosystem.outreach import _NEWCOMER_LABELS
+        collector = OutreachCollector(FakeForge())
+        onboarding = collector._check_onboarding(
+            RepoTree(FakeForge(), "o/r", ["CONTRIBUTING.md"], truncated=False))
+        issues = {"labels_queried": _NEWCOMER_LABELS, "labels_source": "default",
+                  "open": 0, "closed": 0, "total": 0}
+        outreach = {"overall_score": collector._calculate_score({}, issues, onboarding)}
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {"outreach": outreach}},
+            "quality": {"sub_results": {}},
+        }}
+        orch = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orch._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orch._metric_weights())
+
+        gfi = page.index("<b>Good First Issue Effectiveness:</b>")
+        onb = page.index("<b>Onboarding Infrastructure Assessment:</b>")
+        not_own = page.index("<b>Not found:</b> a newcomer label among the repository")
+        assert gfi < not_own < onb
+        assert ('<b>Found:</b> Contributing guide in '
+                '<a href="https://github.com/o/r/blob/HEAD/CONTRIBUTING.md">CONTRIBUTING.md</a>') in page[onb:]
+        assert "<b>Not found:</b> Getting-started guide" in page[onb:]
