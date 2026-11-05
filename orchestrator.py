@@ -1377,8 +1377,13 @@ class MetricsOrchestrator:
                 return f'<p><strong>{label}:</strong> Not yet collected</p>'
             mark = "✓" if info.get("passing") else "✗"
             row = f'<p><strong>{label}:</strong> {info.get("value", "N/A")} {mark}</p>'
-            if info.get("detail"):
-                row += f'\n<p class="sub-detail">{info["detail"]}</p>'
+            detail = info.get("detail")
+            if detail:
+                # A collector may give a list (supply chain's vulnerable
+                # dependencies); a str() of it would show Python brackets.
+                if isinstance(detail, (list, tuple)):
+                    detail = ", ".join(str(d) for d in detail)
+                row += f'\n<p class="sub-detail">{detail}</p>'
             return row
 
         def _score_line(overall: Dict) -> str:
@@ -1487,6 +1492,9 @@ class MetricsOrchestrator:
                         link = f'<a href="{url}">{info.get("file_path", "")}</a>' if url else info.get("file_path", "")
                         doc_sub_lines.append(f'<p class="sub-detail">{label}: {link}</p>')
                         doc_found += 1
+                    elif info.get("not_collected"):
+                        # The lookup failed; the score already leaves it out.
+                        doc_sub_lines.append(f'<p class="sub-detail">{label}: Not yet collected</p>')
                     else:
                         doc_sub_lines.append(f'<p class="sub-detail">{label}: Not found</p>')
                 gov_score = governance.get("overall_score", {})

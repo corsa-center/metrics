@@ -504,3 +504,28 @@ class TestSpackDependencies:
         fake.chmod(0o755)
         monkeypatch.setattr("orchestrator.shutil.which", lambda _: str(fake))
         assert self._run(orchestrator, [{"repo_url": "https://github.com/o/r"}]) is None
+
+
+class TestSubDetailRendering:
+    def test_list_detail_is_joined_not_shown_as_a_python_list(self, orchestrator):
+        metrics = _base_metrics(quality_sub={"supply_chain": {"sub_metrics": {
+            "dependency_vulnerability_posture": {
+                "label": "Dependency Vulnerability Posture", "value": "2 vulnerable",
+                "passing": False, "detail": ["a==1 (PyPI)", "b==2 (PyPI)"],
+            },
+        }}})
+        data = orchestrator._transform_for_dashboard(metrics, {})["quality"]["4.3.8"]["data"]
+        assert '<p class="sub-detail">a==1 (PyPI), b==2 (PyPI)</p>' in data
+        assert "['" not in data
+
+    def test_gapped_governance_document_is_not_reported_as_not_found(self, orchestrator):
+        found = {"exists": True, "file_path": "CODE_OF_CONDUCT.md", "url": "u"}
+        metrics = _base_metrics(ecosystem_sub={"governance": {
+            "code_of_conduct": found,
+            "governance": {"exists": False, "not_collected": True},
+            "contributing_guidelines": {"exists": False},
+            "overall_score": {"max_score": 2},
+        }})
+        data = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.1"]["data"]
+        assert "Governance: Not yet collected" in data
+        assert "Contributing Guidelines: Not found" in data
