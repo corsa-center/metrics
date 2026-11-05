@@ -363,6 +363,15 @@ class TestEvidence:
         for key in ("deployment_environment_testing", "architecture_compatibility"):
             assert sub[key]["evidence"] == {"found": []}
 
+    def test_failed_ci_listing_is_not_collected_not_a_fail(self):
+        result = _collect_on(FakeForge(files={self._CI: "runs-on: ubuntu-latest\n"},
+                                       gaps={"ci_config_files"}))
+        sub = result["overall_score"]["sub_scores"]
+        for key in ("deployment_environment_testing", "architecture_compatibility"):
+            assert sub[key]["not_collected"] is True
+        # Only the platform-documentation row is left to score.
+        assert result["overall_score"]["max_score"] == 1
+
     def test_nothing_read_claims_no_missing_platforms(self):
         docs = self._sub()["platform_documentation"]["evidence"]
         assert "missing" not in docs

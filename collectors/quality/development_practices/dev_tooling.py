@@ -330,6 +330,7 @@ class DevToolingCollector:
         """Formatter and linter configs outside the root list: anywhere in
         the project's own tree, then as sections of root Python config files."""
         found, missing, details = list(tooling["found"]), list(tooling["missing"]), dict(tooling["details"])
+        not_collected = list(tooling.get("not_collected", []))
 
         def mark(label: str, path: str, quote: Optional[str] = None):
             missing.remove(label)
@@ -347,10 +348,14 @@ class DevToolingCollector:
         searched = []
         if wanted:
             searched.append({"text": "Python config files read for tool sections", "paths": []})
+        read_gap = False
         for path in [p for p in (tree.match([c]) for c in _TOOLING_CONFIG_FILES) if p]:
             if not wanted:
                 break
             text = await self.forge.file_content(client, ref, path)
+            if text is COLLECTION_GAP:
+                read_gap = True
+                continue
             if not text:
                 continue
             searched[0]["paths"].append({"path": path, "url": tree.url_for(path)})
@@ -359,8 +364,15 @@ class DevToolingCollector:
                 if m:
                     mark(label, path, excerpt(text, m, None))
                     wanted.remove(label)
-        return {**tooling, "found": found, "missing": missing, "details": details,
-                "searched": searched}
+        if read_gap:
+            # The unread file may hold the section, so these aren't confirmed
+            # misses (same as the test-setup reads above).
+            for label in wanted:
+                missing.remove(label)
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+        return {**tooling, "found": found, "missing": missing, "not_collected": not_collected,
+                "details": details, "searched": searched}
 
     async def _analyze_review_coverage(
         self, client: httpx.AsyncClient, ref: str

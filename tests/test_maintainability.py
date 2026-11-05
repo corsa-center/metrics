@@ -321,3 +321,33 @@ class TestReportEvidence:
                 in _row(page, "Documentation Quality Evaluation"))
         assert ("<b>Words looked for in the 1 most recent commit subjects:</b> refactor…"
                 in _row(page, "Refactoring and Evolution Tracking"))
+
+
+class TestFetchGaps:
+    """A failed fetch reads like an empty repository; it must score as not
+    collected, not as a measured fail."""
+
+    def test_tree_gap_leaves_tree_rows_not_collected(self):
+        result = _collect(files={"src/a.c": "x"}, gaps={"repo_tree"})
+        subs = _subs(result)
+        for key in ("complexity_analysis", "code_quality", "documentation_quality"):
+            assert subs[key]["not_collected"] is True
+        assert result["composition"]["gap"] is True
+        assert "not_collected" not in subs["refactoring_tracking"]
+        assert result["overall_score"]["max_score"] == 1
+
+    def test_commit_gap_leaves_refactoring_not_collected(self):
+        result = _collect(files={"src/a.c": "x"}, gaps={"commits"})
+        subs = _subs(result)
+        assert subs["refactoring_tracking"]["not_collected"] is True
+        assert result["refactoring"]["gap"] is True
+        assert result["overall_score"]["max_score"] == 3
+
+    def test_everything_gapped_has_no_percentage(self):
+        result = _collect(gaps={"repo_tree", "commits"})
+        assert result["overall_score"]["percentage"] is None
+        assert result["overall_score"]["status"] == "not_collected"
+
+    def test_empty_repository_is_still_a_measured_fail(self):
+        subs = _subs(_collect())
+        assert not any(s.get("not_collected") for s in subs.values())

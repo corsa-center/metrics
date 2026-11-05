@@ -331,6 +331,22 @@ class TestToolingBeyondRoot:
         assert self._refine(collector, [], {"pyproject.toml": "[tool.setuptools]\npackages=['x']\n"}) == []
 
 
+class TestToolingConfigReadGap:
+    def test_unreadable_python_config_is_not_a_confirmed_miss(self, collector):
+        from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+        from collectors.quality.development_practices.dev_tooling import _TOOLING_PATHS
+        tree = RepoTree(FakeForge(), "o/r", ["pyproject.toml"], truncated=False)
+
+        async def get(client, url, params=None):
+            return COLLECTION_GAP
+        collector.forge._github_get = get
+        tooling = collector._scan(tree, _TOOLING_PATHS)
+        refined = asyncio.run(collector._refine_tooling(None, "o/r", tree, tooling))
+        assert "Linter config" in refined["not_collected"]
+        assert "Linter config" not in refined["missing"]
+        assert refined["searched"][0]["paths"] == []
+
+
 class TestTestRunnersBeyondConfig:
     def _refine(self, collector, paths, files):
         import base64

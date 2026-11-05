@@ -309,7 +309,8 @@ class DeploymentEnvironmentCollector:
         documented.sort()
 
         overall = self._calculate_score(
-            detected, sorted(architectures), documented, sorted(accelerators), unstated_ci)
+            detected, sorted(architectures), documented, sorted(accelerators), unstated_ci,
+            ci_gap=not listing_ok)
         ci_searched = {"text": "CI files read", "paths": [
             {"path": p, "url": self.forge.web_url(ref, p)} for p, _ in ci_read]}
         if len(files) > _MAX_WORKFLOW_FILES:
@@ -413,6 +414,7 @@ class DeploymentEnvironmentCollector:
         documented: Optional[List[str]] = None,
         accelerators: Optional[List[str]] = None,
         unstated_ci: bool = False,
+        ci_gap: bool = False,
     ) -> Dict[str, Any]:
         """Summarise coverage by OS family.
 
@@ -473,7 +475,14 @@ class DeploymentEnvironmentCollector:
                 value=(value + "; other CI runs" if names else "CI runs")
                       + " on self-hosted or non-GitHub runners whose OS isn't stated",
                 unmeasured=True)
-        scored = [v for v in sub.values() if not v.get("unmeasured")]
+        if ci_gap:
+            # The CI listing failed, so a row read from CI that came up short
+            # may only be missing what wasn't listed: not a measured fail.
+            for key in ("deployment_environment_testing", "architecture_compatibility"):
+                if not sub[key]["passing"] and not sub[key].get("unmeasured"):
+                    sub[key]["not_collected"] = True
+        scored = [v for v in sub.values()
+                  if not v.get("unmeasured") and not v.get("not_collected")]
         score = sum(1 for v in scored if v["passing"])
         return {
             "score": score,

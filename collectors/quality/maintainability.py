@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from forge.base import RetryingTransport
+from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.interface import Forge
 from collectors.ecosystem.base import get_threshold
 
@@ -125,16 +125,18 @@ class MaintainabilityCollector:
 
         if isinstance(tree, Exception):
             logger.warning(f"Tree fetch failed: {tree}")
-            tree = {"files": [], "truncated": False}
+            tree = {"files": [], "truncated": False, "gap": True}
         if isinstance(languages, Exception):
             logger.warning(f"Language fetch failed: {languages}")
             languages = {}
         if isinstance(refactor, Exception):
             logger.warning(f"Commit scan failed: {refactor}")
-            refactor = {"sampled": 0, "refactor_commits": 0, "share": None}
+            refactor = {"sampled": 0, "refactor_commits": 0, "share": None, "gap": True}
 
         composition = self._analyze_tree(tree["files"])
         composition["truncated"] = tree["truncated"]
+        if tree.get("gap"):
+            composition["gap"] = True
         composition["languages"] = sorted(languages, key=languages.get, reverse=True)[:5]
 
         return {
@@ -152,6 +154,8 @@ class MaintainabilityCollector:
         self, client: httpx.AsyncClient, ref: str
     ) -> Dict[str, Any]:
         data = await self.forge.repo_tree(client, ref)
+        if data is COLLECTION_GAP:
+            return {"files": [], "truncated": False, "gap": True}
         if not data:
             return {"files": [], "truncated": False}
         return data
@@ -172,13 +176,18 @@ class MaintainabilityCollector:
         rules out most of this portfolio (HDF5 alone has ~24,500).
         """
         subjects: List[str] = []
+        gap = False
         for page in range(1, _COMMIT_PAGES + 1):
             batch = await self.forge.commits(client, ref, per_page=_COMMIT_SAMPLE, page=page)
             if not batch:
+                gap = batch is COLLECTION_GAP
                 break
             subjects.extend(c["subject"] for c in batch)
         if not subjects:
-            return {"sampled": 0, "refactor_commits": 0, "share": None}
+            # A later page failing still leaves a usable, smaller sample; only
+            # a failure with nothing read is a gap rather than "no commits".
+            return {"sampled": 0, "refactor_commits": 0, "share": None,
+                    **({"gap": True} if gap else {})}
 
         matches: List[str] = []
         terms: Dict[str, int] = {}
@@ -328,11 +337,25 @@ class MaintainabilityCollector:
         if refactor.get("sampled"):
             sub["refactoring_tracking"]["evidence"] = self._refactor_evidence(refactor)
 
-        score = sum(1 for s in sub.values() if s["passing"])
+        # A failed fetch reads the same as an empty repository above; a row
+        # it left short is not a measured fail.
+        gapped = []
+        if comp.get("gap"):
+            gapped += ["complexity_analysis", "code_quality", "documentation_quality"]
+        if refactor.get("gap"):
+            gapped.append("refactoring_tracking")
+        for key in gapped:
+            if not sub[key]["passing"]:
+                sub[key]["not_collected"] = True
+        scored = [s for s in sub.values() if not s.get("not_collected")]
+        score = sum(1 for s in scored if s["passing"])
+        if not scored:
+            return {"score": None, "max_score": 0, "percentage": None,
+                    "status": "not_collected", "sub_scores": sub}
         return {
             "score": score,
-            "max_score": len(sub),
-            "percentage": round(score / len(sub) * 100, 2),
+            "max_score": len(scored),
+            "percentage": round(score / len(scored) * 100, 2),
             "sub_scores": sub,
         }
 
