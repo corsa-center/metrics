@@ -431,6 +431,21 @@ class CollaborationCollector:
                              "paths": [{"path": n} for n in conda["names"]]})
         return {"found": found, "missing": missing, "searched": searched}
 
+    @classmethod
+    def _install_evidence(cls, registries: List[Dict[str, Any]], lookups: Dict) -> Dict[str, Any]:
+        """Each package a user can install, with the command; with none,
+        the packages found that give no install path and where the
+        registries were searched."""
+        found = [{"path": f"{r['name']} ({r['ecosystem']})", "url": r.get("registry_url"),
+                  "quote": r["install_command"]}
+                 for r in registries if r.get("install_command")]
+        if found:
+            return {"found": found}
+        registry = cls._registry_evidence(registries, lookups)
+        missing = [{"text": f"an install command for {r['name']} ({r['ecosystem']})"}
+                   for r in registries]
+        return {"missing": missing + registry["missing"], "searched": registry["searched"]}
+
     @staticmethod
     def _network_evidence(
         registries: List[Dict[str, Any]], source: Optional[Dict[str, Any]], lookups: Dict,
@@ -525,6 +540,10 @@ class CollaborationCollector:
                      f"{'s' if len(installable) != 1 else ''}: " + ", ".join(installable)
                      if installable else "No package-manager install path found",
             "passing": bool(installable),
+            # The row renders in 4.3.4 (Quality) though this collector is
+            # Ecosystem's, so the report matches it by section, not dimension.
+            "section": "4.3.4",
+            "evidence": self._install_evidence(registries, lookups),
         }
 
         collaboration_keys = [

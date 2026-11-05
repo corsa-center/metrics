@@ -293,3 +293,51 @@ class TestGovernanceEvidence:
         assert "<b>Governance also looked for in:</b> the o/governance repository" in page
         assert "<b>Found:</b> Decision process (matched: &lt;vote&gt;)" in page
         assert "<b>Not found:</b> Membership lifecycle (looked for: nomination" in page
+
+
+class TestCrossSectionEvidence:
+    """Installation Success Tracking renders in 4.3.4 (Quality) but comes
+    from the Ecosystem collaboration collector."""
+
+    def _metrics(self, installation_success):
+        metrics = _metrics(sub_results={"collaboration": {"overall_score": {
+            "score": 0, "max_score": 0, "sub_scores": {"installation_success": installation_success},
+        }}})
+        # 4.3.4 renders only alongside a usability result.
+        metrics["dimensions"]["quality"]["sub_results"]["usability"] = {
+            "overall_score": {"sub_scores": {}}}
+        return metrics
+
+    def test_evidence_reaches_the_row_in_the_other_dimension(self, orchestrator):
+        from collectors.ecosystem.collaboration import CollaborationCollector
+        registries = [{"name": "h5py", "ecosystem": "pypi", "registry_url": "https://pypi.org/project/h5py",
+                       "install_command": "pip install h5py"}]
+        entry = {"label": "Installation Success Tracking", "value": "Installable from 1 package manager: pypi",
+                 "passing": True, "section": "4.3.4",
+                 "evidence": CollaborationCollector._install_evidence(registries, {})}
+        metrics = self._metrics(entry)
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        rows = {(s["number"], r["label"]): r for d in report["dimensions"]
+                for s in d["sections"] for r in s["rows"]}
+        row = rows[("4.3.4", "Installation Success Tracking")]
+        assert row["evidence"]["found"] == [{"path": "h5py (pypi)", "url": "https://pypi.org/project/h5py",
+                                             "quote": "pip install h5py"}]
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        assert ('<b>Found:</b> <a href="https://pypi.org/project/h5py">h5py (pypi)</a>: '
+                '“pip install h5py”') in page
+
+    def test_sectioned_entries_stay_out_of_the_label_index(self):
+        from package_report import evidence_index, sectioned_evidence
+        entry = {"label": "Installation Success Tracking", "section": "4.3.4", "evidence": {"found": []}}
+        dims = {"ecosystem": {"sub_results": {"collaboration": {"x": entry}}}}
+        assert evidence_index(dims["ecosystem"]["sub_results"]) == {}
+        assert sectioned_evidence(dims) == {("4.3.4", "Installation Success Tracking"): {"found": []}}
+
+    def test_no_install_path_names_the_packages_and_the_search(self):
+        from collectors.ecosystem.collaboration import CollaborationCollector
+        registries = [{"name": "r", "ecosystem": "spack", "registry_url": None}]
+        lookups = {"repository": {"url": "https://github.com/o/r", "failed": False}}
+        ev = CollaborationCollector._install_evidence(registries, lookups)
+        assert ev["missing"] == [{"text": "an install command for r (spack)"}]
+        assert ev["searched"][0]["paths"] == [{"path": "https://github.com/o/r"}]

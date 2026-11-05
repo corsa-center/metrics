@@ -219,7 +219,10 @@ Rows and marks are rendered from the same per-section data as
 lines come from an `evidence` entry a collector puts beside a row's `label`
 (`{"found": [{text, path, url, quote}], "missing": [{text}],
 "searched": [{text, paths}]}`), on a sub-score or, for rows the orchestrator
-builds itself, in a `row_evidence` block; the dashboard ignores it and
+builds itself, in a `row_evidence` block. An entry whose row renders in
+another dimension's section names it with a `section` key beside the label
+(Installation Success Tracking, from collaboration, in 4.3.4). The dashboard
+ignores evidence and
 `metrics.json` doesn't carry it. See `../package_report.py`.
 
 ### 5. Dashboard Data Files

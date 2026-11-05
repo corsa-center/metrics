@@ -211,8 +211,28 @@ def evidence_index(sub_results: Any) -> Dict[str, Dict]:
         node = stack.pop()
         if not isinstance(node, dict):
             continue
-        if isinstance(node.get("evidence"), dict) and isinstance(node.get("label"), str):
+        if (isinstance(node.get("evidence"), dict) and isinstance(node.get("label"), str)
+                and "section" not in node):
             index.setdefault(node["label"], node["evidence"])
+        stack.extend(v for v in node.values() if isinstance(v, dict))
+    return index
+
+
+def sectioned_evidence(dims: Dict) -> Dict[Tuple[str, str], Dict]:
+    """(section, row label) -> evidence, for rows a collector in one
+    dimension supplies to a section of another (collaboration's
+    Installation Success Tracking, rendered in 4.3.4). Such an entry names
+    its "section" beside its "label", and is matched in every dimension.
+    """
+    index: Dict[Tuple[str, str], Dict] = {}
+    stack = [dim.get("sub_results") for dim in dims.values() if isinstance(dim, dict)]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        if (isinstance(node.get("evidence"), dict) and isinstance(node.get("label"), str)
+                and isinstance(node.get("section"), str)):
+            index.setdefault((node["section"], node["label"]), node["evidence"])
         stack.extend(v for v in node.values() if isinstance(v, dict))
     return index
 
@@ -274,6 +294,7 @@ def build_report(
     dims = metrics.get("dimensions", {})
     descriptions = threshold_descriptions()
     methodology = methodology_links()
+    cross_section = sectioned_evidence(dims)
 
     dimensions = []
     for key, name in DIMENSIONS:
@@ -289,7 +310,8 @@ def build_report(
                 row["thresholds"] = thresholds.pop(row["label"], [])
                 row["overridden"] = row["label"] in overridden
                 # Config-set text wasn't measured, so nothing backs it.
-                row["evidence"] = None if row["overridden"] else evidence.get(row["label"])
+                row["evidence"] = None if row["overridden"] else (
+                    cross_section.get((number, row["label"])) or evidence.get(row["label"]))
             sections.append({
                 "number": number,
                 "title": section.get("title", ""),
