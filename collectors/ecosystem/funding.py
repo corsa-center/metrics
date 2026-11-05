@@ -141,6 +141,8 @@ _FUNDING_TOPIC = r"(?:acknowledge?ments?|funding|financial support|sponsors?)\b"
 _FUNDING_HEADING = re.compile(
     rf"^\s{{0,3}}#{{1,6}}\s+{_FUNDING_TOPIC}.*$"
     rf"|^[ \t]*{_FUNDING_TOPIC}[^\n]*\n[ \t]*([=\-~^*#])\1{{2,}}[ \t]*$", re.I | re.M)
+# A blank line, or a Markdown heading line, ends a paragraph.
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n|\n(?=\s{0,3}#{1,6}\s)")
 _NEXT_HEADING = re.compile(r"^\s{0,3}#{1,6}\s|^[^\n]+\n[ \t]*([=\-~^*#])\1{2,}[ \t]*$", re.M)
 
 def _grant_evidence(grant: Dict[str, Any]) -> Dict[str, Any]:
@@ -350,10 +352,14 @@ class FundingCollector:
             # The match can start with the blank line before the heading.
             heading = m.group(0).strip().splitlines()[0].lstrip("#").strip()
             windows.append((heading, rest[:nxt.start()] if nxt else rest[:2000]))
-        # "U.S." would otherwise read as sentence ends inside the window.
-        flat = re.sub(r"\bU\.\s?S\.", "US", re.sub(r"\s+", " ", text))
-        for verb in re.finditer(_FUNDING_VERB, flat, re.IGNORECASE):
-            windows.append((None, flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0]))
+        # A funding sentence never runs past its paragraph: without this bound
+        # "Plotfile format supported by ... ## Installation ... deployed on
+        # DOE HPC systems" (AMReX's README) read as DOE support.
+        for paragraph in _PARAGRAPH_BREAK.split(text):
+            # "U.S." would otherwise read as sentence ends inside the window.
+            flat = re.sub(r"\bU\.\s?S\.", "US", re.sub(r"\s+", " ", paragraph))
+            for verb in re.finditer(_FUNDING_VERB, flat, re.IGNORECASE):
+                windows.append((None, flat[verb.start(): verb.end() + _SENTENCE_WINDOW].split(". ")[0]))
         found: Dict[str, str] = {}
         for heading, window in windows:
             for agency, pattern in _AGENCIES:

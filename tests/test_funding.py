@@ -550,3 +550,17 @@ class TestEvidence:
         found = [f["text"] for f in sub["funding_portfolio"]["evidence"]["found"]]
         # DOE's acknowledgment is already covered by its award.
         assert found == ["github (funding platform)", "DE-SC0021354 (DOE award)", "NSF named as a funder"]
+
+
+class TestFundingSentenceStaysInItsParagraph:
+    def test_verb_before_a_heading_does_not_reach_the_next_section(self):
+        # AMReX's README: "supported" ends a feature list; DOE is named under
+        # the next heading as a deployment site, not a funder.
+        readme = ("- Plotfile format supported by Amrvis, VisIt, ParaView and yt\n"
+                  "- Built-in profiling tools\n\n## Installation\n\n"
+                  "AMReX runs on Linux, macOS and Windows, and is deployed on DOE HPC systems\n")
+        assert FundingCollector._acknowledged_agencies(readme) == []
+
+    def test_wrapped_funding_sentence_still_counts(self):
+        text = "This software was developed under funding\nfrom the U.S. Department\nof Energy.\n"
+        assert FundingCollector._acknowledged_agencies(text) == ["DOE"]
