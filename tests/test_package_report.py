@@ -351,3 +351,42 @@ class TestUnlessMet:
         unmet = "".join(_render_evidence(evidence, met=False))
         assert "an SPDX id" not in met and "other" in met
         assert "an SPDX id" in unmet
+
+
+class TestRepeatedDetailLines:
+    def _details(self, details, found, mark="✓"):
+        from package_report import _uncovered_details
+        row = {"details": [[(d, None)] for d in details], "mark": mark,
+               "evidence": {"found": found}}
+        return ["".join(t for t, _ in d) for d in _uncovered_details(row)]
+
+    def test_detail_fully_covered_by_found_lines_is_dropped(self):
+        found = [{"text": "Installation (README heading)"}, {"text": "Usage (README heading)"},
+                 {"text": "Support (README heading)"}]
+        assert self._details(["Installation, Usage, Support"], found) == []
+
+    def test_a_path_counts_as_covering(self):
+        assert self._details(["CITATION.cff"], [{"path": "CITATION.cff", "url": "u"}]) == []
+
+    def test_partly_covered_detail_is_kept(self):
+        found = [{"text": "Forum", "path": "README.md"}]
+        assert self._details(["GitHub Discussions, Wiki, Forum"], found) == [
+            "GitHub Discussions, Wiki, Forum"]
+
+    def test_no_evidence_keeps_every_detail(self):
+        from package_report import _uncovered_details
+        row = {"details": [[("x", None)]], "mark": "✓", "evidence": None}
+        assert _uncovered_details(row) == row["details"]
+
+    def test_funding_award_number_appears_once(self, orchestrator):
+        entry = {"label": "Enhanced Funding Documentation Analysis",
+                 "value": "1 award reference(s)", "passing": True, "detail": "DE-AC05-00OR22725",
+                 "evidence": {"found": [{"text": "DE-AC05-00OR22725 (DOE contract)",
+                                         "path": "README.md", "url": None}]}}
+        metrics = _metrics(sub_results={"funding": {"overall_score": {
+            "score": 1, "max_score": 1, "sub_scores": {"funding_documentation": entry}}}})
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        assert page.count("DE-AC05-00OR22725") == 1
+        # The dashboard keeps its own detail line.
+        assert "DE-AC05-00OR22725</p>" in dashboard["ecosystem"]["4.2.8"]["data"]

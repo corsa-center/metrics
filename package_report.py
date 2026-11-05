@@ -237,6 +237,30 @@ def sectioned_evidence(dims: Dict) -> Dict[Tuple[str, str], Dict]:
     return index
 
 
+def _uncovered_details(row: Dict) -> List[Segments]:
+    """The row's dashboard detail lines, less any its evidence already says.
+
+    The dashboard's detail line ("CITATION.cff", "Installation, Usage,
+    Support") is often a terser form of the evidence beneath it, and the
+    report showed both. A line is dropped only when every comma-separated
+    part of it appears in the row's "Found" lines; one the evidence covers
+    only in part ("GitHub Discussions, Wiki, Forum" with only Forum found)
+    is kept.
+    """
+    found = _applicable((row.get("evidence") or {}).get("found"), row.get("mark") == "✓")
+    if not found:
+        return row["details"]
+    covered = " ".join(
+        str(item.get(k) or "") for item in found for k in ("text", "path", "quote")
+    ).casefold()
+
+    def redundant(detail: Segments) -> bool:
+        parts = [p.strip() for p in "".join(t for t, _ in detail).split(",")]
+        return all(p and p.casefold() in covered for p in parts)
+
+    return [d for d in row["details"] if not redundant(d)]
+
+
 def _fmt_value(value: Any) -> str:
     if isinstance(value, list):
         return " or ".join(str(v) for v in value)
@@ -312,6 +336,7 @@ def build_report(
                 # Config-set text wasn't measured, so nothing backs it.
                 row["evidence"] = None if row["overridden"] else (
                     cross_section.get((number, row["label"])) or evidence.get(row["label"]))
+                row["details"] = _uncovered_details(row)
             sections.append({
                 "number": number,
                 "title": section.get("title", ""),

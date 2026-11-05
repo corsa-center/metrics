@@ -65,11 +65,22 @@ ENVIRONMENT_SPEC_PATTERN = (
 
 # Community channels a README can link to, shared by Multi-Channel
 # Communication (4.2.3) and Decision-Making Visibility (4.2.6).
+# Each term, as a report lists it, mapped to the pattern it stands for; the
+# patterns below are built from these so the two can't drift apart.
+PUBLIC_CHANNEL_WORDS = {
+    "Mailing list": {"mailing list": r"mailing[- ]list", "listserv": r"listserv",
+                     "groups.google.com": r"groups\.google\.com", "majordomo": r"majordomo",
+                     "mailman": r"\bmailman\b"},
+    "Chat (Slack/Discord/Matrix)": {"slack.com": r"slack\.com", "discord.gg": r"discord\.gg",
+                                    "discord.com": r"discord\.com", "matrix.to": r"matrix\.to",
+                                    "gitter.im": r"gitter\.im", "zulipchat": r"zulipchat"},
+    "Forum": {"forum": r"\bforum\b", "discourse.": r"discourse\.",
+              "stackoverflow.com/questions/tagged": r"stackoverflow\.com/questions/tagged"},
+    "Help desk": {"help desk": r"help ?desk", "support portal": r"support portal",
+                  "jira": r"jira", "servicedesk": r"servicedesk"},
+}
 PUBLIC_CHANNEL_PATTERNS = {
-    "Mailing list": re.compile(r"mailing[- ]list|listserv|groups\.google\.com|majordomo|\bmailman\b", re.I),
-    "Chat (Slack/Discord/Matrix)": re.compile(r"slack\.com|discord\.(?:gg|com)|matrix\.to|gitter\.im|zulipchat", re.I),
-    "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
-    "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
+    label: re.compile("|".join(words.values()), re.I) for label, words in PUBLIC_CHANNEL_WORDS.items()
 }
 
 

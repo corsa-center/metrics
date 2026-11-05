@@ -28,21 +28,25 @@ logger = logging.getLogger(__name__)
 
 # README headings that answer a new user's first questions. Matched against
 # heading text only, so a passing mention in a paragraph doesn't count.
-_README_SECTIONS = {
+# Each word, as the report lists it, maps to the pattern it stands for; the
+# patterns and the report's "looked for" lists are both built from this, so
+# they can't drift apart.
+_README_SECTION_WORDS = {
     # "Build Status" heads a CI badge, not build instructions (HDF5's README).
-    "Installation": r"(?:install|build(?:ing)?\b(?!\s*(?:status|badges?|state)\b)|getting started|set ?up\b)",
-    "Usage": r"(?:usage|using|quick ?start|how to use|basic use|tutorial)",
-    "Examples": r"(?:examples?|demos?|sample)",
-    "Support": r"(?:support|help|contact|community|questions|mailing list|who (?:do|to) (?:i )?talk to)",
+    "Installation": {"install": r"install",
+                     "build, building": r"build(?:ing)?\b(?!\s*(?:status|badges?|state)\b)",
+                     "getting started": r"getting started", "setup": r"set ?up\b"},
+    "Usage": {"usage": r"usage", "using": r"using", "quick start": r"quick ?start",
+              "how to use": r"how to use", "basic use": r"basic use", "tutorial": r"tutorial"},
+    "Examples": {"example": r"examples?", "demo": r"demos?", "sample": r"sample"},
+    "Support": {"support": r"support", "help": r"help", "contact": r"contact",
+                "community": r"community", "questions": r"questions",
+                "mailing list": r"mailing list", "who to talk to": r"who (?:do|to) (?:i )?talk to"},
 }
-
-# What each of _README_SECTIONS accepts, in words, for the report.
-README_SECTION_TERMS = {
-    "Installation": "install, build, building, getting started, setup",
-    "Usage": "usage, using, quick start, how to use, basic use, tutorial",
-    "Examples": "example, demo, sample",
-    "Support": "support, help, contact, community, questions, mailing list, who to talk to",
+_README_SECTIONS = {
+    label: "(?:" + "|".join(words.values()) + ")" for label, words in _README_SECTION_WORDS.items()
 }
+README_SECTION_TERMS = {label: ", ".join(words) for label, words in _README_SECTION_WORDS.items()}
 
 _DOC_DIRECTORIES = ["docs", "doc", "documentation"]
 
