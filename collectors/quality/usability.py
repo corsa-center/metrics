@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 # README headings that answer a new user's first questions. Matched against
 # heading text only, so a passing mention in a paragraph doesn't count.
 _README_SECTIONS = {
-    "Installation": r"(?:install|build(?:ing)?\b|getting started|set ?up\b)",
+    # "Build Status" heads a CI badge, not build instructions (HDF5's README).
+    "Installation": r"(?:install|build(?:ing)?\b(?!\s*(?:status|badges?|state)\b)|getting started|set ?up\b)",
     "Usage": r"(?:usage|using|quick ?start|how to use|basic use|tutorial)",
     "Examples": r"(?:examples?|demos?|sample)",
     "Support": r"(?:support|help|contact|community|questions|mailing list|who (?:do|to) (?:i )?talk to)",
