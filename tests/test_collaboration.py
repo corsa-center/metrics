@@ -2,6 +2,7 @@
 
 import asyncio
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from collectors.ecosystem.collaboration import CollaborationCollector
 from tests.fakes import FakeForge
@@ -464,3 +465,32 @@ class TestEvidence:
         assert "<b>Spack recipes looked for by name:</b> R, r, any recipe" in page[deps:net]
         assert "<b>Found:</b> h5py (pypi): 3 dependent packages, 0 dependent repositories" in page[net:]
         assert "<b>Not found:</b> a dependency-audit graph for this repository" in page[net:]
+
+
+class TestGoFilterUsesThePackagesLanguage:
+    """The orchestrator records a repository's language as package["language"].
+    The filter read "primary_language", which nothing sets since 2dd04d3, so
+    HDF5 and Kokkos were credited with Go from pkg.go.dev entries."""
+
+    def _collect(self, language):
+        from tests.fakes import FakeForge
+        go = {"ecosystem": "go", "name": "github.com/hDFgroup/hdf5", "dependent_packages_count": 0,
+              "dependent_repos_count": 0, "install_command": "go get github.com/hDFgroup/hdf5"}
+        spack = {"ecosystem": "spack", "name": "hdf5", "dependent_packages": 222, "dependent_repos": 0,
+                 "install_command": "spack install hdf5", "registry_url": None}
+        collector = CollaborationCollector(FakeForge())
+        with patch.object(collector, "_lookup_by_repository",
+                          new=AsyncMock(return_value=[collector._normalize(go)])), \
+             patch.object(collector, "_lookup_spack", new=AsyncMock(return_value=spack)), \
+             patch.object(collector, "_lookup_conda_forge", new=AsyncMock(return_value=None)), \
+             patch.object(collector, "_source_dependents", new=AsyncMock(return_value=None)):
+            return asyncio.run(collector.collect(
+                {"name": "HDF5", "repo_url": "https://github.com/HDFGroup/hdf5", "language": language}))
+
+    def test_go_entry_dropped_for_a_c_repository(self):
+        sub = self._collect("C")["overall_score"]["sub_scores"]
+        assert sub["installation_success"]["value"] == "Installable from 1 package manager: spack"
+
+    def test_go_entry_kept_for_a_go_repository(self):
+        sub = self._collect("Go")["overall_score"]["sub_scores"]
+        assert "go" in sub["installation_success"]["value"]

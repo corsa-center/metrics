@@ -239,7 +239,7 @@ class ReliabilityCollector:
 
         overall = self._calculate_score(
             tools, hardening, trend, tools_gap, hardening_gap,
-            language=package.get("primary_language"))
+            language=package.get("language"))
         workflows_read = [{"path": p, "url": _url(tree, p)} for p, _ in workflows]
         self._add_evidence(
             overall["sub_scores"], workflows_read,

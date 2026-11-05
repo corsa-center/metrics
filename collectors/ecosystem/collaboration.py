@@ -134,7 +134,7 @@ class CollaborationCollector:
             lookups["conda"]["failed"] = True
 
         registries = self._merge(by_repo + [r for r in (spack, conda) if r])
-        registries = self._drop_spurious_go_entries(registries, package.get("primary_language"))
+        registries = self._drop_spurious_go_entries(registries, package.get("language"))
         return {
             "package_name": repo_name,
             "repository": ref,
