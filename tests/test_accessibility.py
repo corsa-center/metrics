@@ -197,10 +197,97 @@ class TestE4SContainerImage:
         monkeypatch.setattr(accessibility, "_e4s_specs", {"tau", "aml"})
         monkeypatch.setattr(collaboration, "_spack_by_repo", {"uo-oaciss/tau2": ["tau"]})
         c = accessibility.AccessibilityCollector(GitHubForge())
-        assert asyncio.run(c._e4s_image(None, "UO-OACISS/tau2")) == "E4S container image (Spack package tau)"
-        assert asyncio.run(c._e4s_image(None, "anlsys/aml")) == "E4S container image (Spack package aml)"
+        assert asyncio.run(c._e4s_image(None, "UO-OACISS/tau2")) == (
+            "E4S container image (Spack package tau)", ["tau2", "tau"])
+        assert asyncio.run(c._e4s_image(None, "anlsys/aml"))[0] == "E4S container image (Spack package aml)"
 
     def test_package_not_in_e4s_is_not(self, monkeypatch):
         from collectors.quality import accessibility
         monkeypatch.setattr(accessibility, "_e4s_specs", {"tau"})
-        assert asyncio.run(accessibility.AccessibilityCollector(GitHubForge())._e4s_image(None, "o/other")) is None
+        image, names = asyncio.run(accessibility.AccessibilityCollector(GitHubForge())._e4s_image(None, "o/other"))
+        assert image is None and names == ["other"]
+
+    def test_e4s_listing_is_where_the_image_was_found(self, monkeypatch):
+        from collectors.quality import accessibility
+        monkeypatch.setattr(accessibility, "_e4s_specs", {"r"})
+        result = _collect_on(FakeForge(files={"CMakeLists.txt": ""}))
+        found = _row(result, "Container Availability Assessment")["found"]
+        assert found == [{"text": "Listed in the E4S image environment",
+                          "path": "E4S-Project/e4s spack.yaml",
+                          "url": accessibility._E4S_ENVIRONMENT_PAGE}]
+
+    def test_unreadable_e4s_list_claims_no_lookup(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+        from collectors.quality import accessibility
+        monkeypatch.setattr(accessibility, "_e4s_specs", None)
+        client = MagicMock(get=AsyncMock(return_value=MagicMock(status_code=503)))
+        c = accessibility.AccessibilityCollector(GitHubForge())
+        assert asyncio.run(c._e4s_image(client, "o/r")) == (None, None)
+
+
+def _collect_on(forge):
+    return asyncio.run(AccessibilityCollector(forge).collect(
+        {"name": "r", "repo_url": "https://github.com/o/r"}))
+
+
+def _row(result, label):
+    rows = {r["label"]: r["evidence"] for r in result["row_evidence"].values()}
+    return rows[label]
+
+
+class TestRowEvidence:
+    """The two 4.3.5 rows built from this collector name the file behind
+    what they found, or say what would have counted and where (#99)."""
+
+    def test_found_names_the_file(self):
+        result = _collect_on(FakeForge(files={"cmakelists.txt": "", "docker/Dockerfile": ""}))
+        assert _row(result, "Portable Build System Detection") == {"found": [
+            {"text": "CMake", "path": "cmakelists.txt",
+             "url": "https://github.com/o/r/blob/HEAD/cmakelists.txt"}]}
+        assert _row(result, "Container Availability Assessment")["found"] == [
+            {"text": "Docker", "path": "docker/Dockerfile",
+             "url": "https://github.com/o/r/blob/HEAD/docker/Dockerfile"}]
+
+    def test_nothing_found_says_what_would_count_and_where(self):
+        result = _collect_on(FakeForge(files={"src/a.c": "", "pyproject.toml": "[tool.ruff]\n"}))
+        build = _row(result, "Portable Build System Detection")
+        assert build["missing"][0]["text"].startswith(
+            "A portable build system (looked for: CMake, Spack, Conda, Autoconf, Makefile files, listed below;")
+        assert build["missing"][1] == {"text": "A [build-system] or [project] table in pyproject.toml"}
+        paths = [p["path"] for p in build["searched"][0]["paths"]]
+        assert "CMakeLists.txt" in paths and "setup.py" in paths
+        container = _row(result, "Container Availability Assessment")
+        assert "Singularity or Apptainer" in container["missing"][0]["text"]
+        roots, e4s = container["searched"]
+        assert {"path": "Dockerfile"} in roots["paths"]
+        assert e4s["paths"] == [{"path": "r"}]
+
+    def test_unread_pyproject_claims_no_missing_table(self):
+        forge = FakeForge(files={"pyproject.toml": "[project]\n"}, gap_paths={"pyproject.toml"})
+        build = _row(_collect_on(forge), "Portable Build System Detection")
+        assert len(build["missing"]) == 1
+
+    def test_gapped_tree_claims_nothing(self):
+        assert "row_evidence" not in _collect_on(FakeForge(gaps={"repo_tree"}))
+
+
+class TestRowEvidenceInReport:
+    def test_evidence_lines_appear_under_the_four_three_five_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        accessibility = _collect_on(FakeForge(files={"CMakeLists.txt": "", "src/a.c": ""}))
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {}},
+            "quality": {"sub_results": {"accessibility": accessibility}},
+        }}
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        build = page.split("<b>Portable Build System Detection:</b>")[1].split("</li>")[0]
+        assert ('<b>Found:</b> CMake in <a href="https://github.com/o/r/blob/HEAD/CMakeLists.txt">'
+                'CMakeLists.txt</a>') in build
+        container = page.split("<b>Container Availability Assessment:</b>")[1].split("</li>")[0]
+        assert "<b>Not found:</b> A container recipe" in container
+        assert "<b>Container file paths tried first (any capitalization):</b> Dockerfile, " in container

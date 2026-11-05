@@ -34,8 +34,9 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from collectors.ecosystem.base import (
-    _VENDORED_DIR, RepoTree, RetryingTransport, get_threshold,
+    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
+from collectors.ecosystem.funding import _excerpt, _readme_source
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -145,12 +146,26 @@ _PLATFORM_GUIDE = (
 _GITLAB_CI_RE = re.compile(r"^(?:\.gitlab-ci\.ya?ml|\.gitlab/.*\.ya?ml)$", re.I)
 _MAX_GITLAB_FILES = 10
 
-# Platform names a project might document support for.
+# Platform names a project might document support for, matched as whole
+# words; listed (rather than written as regexes) so the report can say what
+# was looked for.
+_PLATFORM_DOC_WORDS = {
+    "Linux": ["linux", "ubuntu", "debian", "centos", "rhel", "red hat", "fedora", "suse"],
+    "Windows": ["windows", "win32", "win64", "msvc", "mingw"],
+    "macOS": ["macos", "mac os", "osx", "darwin", "apple"],
+    "HPC systems": ["cray", "frontier", "summit", "perlmutter", "aurora", "slurm", "hpc cluster"],
+}
 _PLATFORM_DOC_TERMS = {
-    "Linux": re.compile(r"\b(?:linux|ubuntu|debian|centos|rhel|red hat|fedora|suse)\b", re.I),
-    "Windows": re.compile(r"\b(?:windows|win32|win64|msvc|mingw)\b", re.I),
-    "macOS": re.compile(r"\b(?:macos|mac os|osx|darwin|apple)\b", re.I),
-    "HPC systems": re.compile(r"\b(?:cray|frontier|summit|perlmutter|aurora|slurm|hpc cluster)\b", re.I),
+    name: re.compile(r"\b(?:" + "|".join(map(re.escape, words)) + r")\b", re.I)
+    for name, words in _PLATFORM_DOC_WORDS.items()
+}
+
+# Runner labels each OS family is recognized by, as examples for the
+# report's "not found" lines.
+_RUNNER_EXAMPLES = {
+    "Linux": "ubuntu-24.04, ubuntu-latest, linux-x86_64 or fedora:40",
+    "Windows": "windows-2022, windows-latest or windows-x86_64",
+    "macOS": "macos-14, macos-latest or macos-arm64",
 }
 
 # Cap on workflow files read, to bound the request count on repositories that
@@ -182,7 +197,11 @@ class DeploymentEnvironmentCollector:
             )
             if isinstance(files, Exception):
                 logger.warning(f"Workflow listing failed: {files}")
-                files = []
+                files = None
+            # A failed listing reads the same as no CI here, but the report
+            # mustn't say the CI files were searched.
+            listing_ok = files is not None
+            files = files or []
             if isinstance(doc_text, Exception):
                 logger.warning(f"Platform doc read failed: {doc_text}")
                 doc_text = ""
@@ -211,36 +230,55 @@ class DeploymentEnvironmentCollector:
                 *[self._read_workflow(client, ref, p) for p in install_docs],
                 return_exceptions=True,
             ) if install_docs else []
-            doc_text = "\n".join(
-                [doc_text] + [t for t in install_texts if isinstance(t, str)]
-            )
+            # Searched one at a time, so the report can say which named what.
+            readme = _readme_source(tree if isinstance(tree, RepoTree) else None)
+            docs = [(readme, doc_text)] + [
+                ({"path": p, "url": self.forge.web_url(ref, p)}, t)
+                for p, t in zip(install_docs, install_texts)]
+            docs = [(source, t) for source, t in docs if isinstance(t, str) and t]
             gitlab_contents = await asyncio.gather(
                 *[self._read_workflow(client, ref, p) for p in gitlab_paths],
                 return_exceptions=True,
             ) if gitlab_paths else []
+            ci_paths = [f["path"] for f in files[:_MAX_WORKFLOW_FILES]]
             if own_gitlab_ci:
                 contents = list(contents) + list(gitlab_contents)
+                ci_paths += gitlab_paths
                 gitlab_contents = []
 
+        def read_ok(paths, texts):
+            return [(p, t) for p, t in zip(paths, texts) if isinstance(t, str) and t]
+        ci_read = read_ok(ci_paths, contents)
+        facility_read = read_ok(gitlab_paths, gitlab_contents)
+        # Where each family, architecture and accelerator was first seen,
+        # as report evidence items.
+        seen: Dict[str, Dict[str, Any]] = {}
+
+        def note(key: str, text: str, path: str, file_text: str, m) -> None:
+            if key not in seen:
+                seen[key] = {"text": text, "path": path, "url": self.forge.web_url(ref, path),
+                             "quote": _excerpt(file_text, m, None)}
+
         families: Dict[str, set] = {name: set() for name in _RUNNER_FAMILIES}
-        for text in contents:
-            if isinstance(text, Exception) or not text:
-                continue
+        for path, text in ci_read:
             for family, pattern in _RUNNER_FAMILIES.items():
-                for label in pattern.findall(text):
-                    families[family].add(label.lower())
+                for m in pattern.finditer(text):
+                    families[family].add(m.group(0).lower())
+                    note(family, f"{family} runner", path, text, m)
 
         architectures: set = set()
         accelerators: set = set()
-        for text in list(contents) + list(gitlab_contents):
-            if isinstance(text, Exception) or not text:
-                continue
+        for path, text in ci_read + facility_read:
             for arch, pattern in _ARCH_PATTERNS.items():
-                if pattern.search(text):
+                m = pattern.search(text)
+                if m:
                     architectures.add(arch)
+                    note(arch, arch, path, text, m)
             for accel, pattern in _ACCELERATOR_PATTERNS.items():
-                if pattern.search(text):
+                m = pattern.search(text)
+                if m:
                     accelerators.add(accel)
+                    note(accel, accel, path, text, m)
 
         if own_gitlab_ci:
             # GitLab runners are often named only by site-specific tags, so
@@ -249,21 +287,37 @@ class DeploymentEnvironmentCollector:
         else:
             unstated_ci = bool(gitlab_paths)
         unstated_ci = unstated_ci or (isinstance(tree, RepoTree) and bool(tree.find(_OTHER_CI)))
-        for text in contents:
-            if isinstance(text, Exception) or not text:
-                continue
+        for path, text in ci_read:
             for m in _SELF_HOSTED.finditer(text):
                 named = [f for f, p in _SELF_HOSTED_OS.items() if p.search(m.group(0))]
                 for family in named:
                     families[family].add("self-hosted")
+                    note(family, f"{family} self-hosted runner", path, text, m)
                 unstated_ci = unstated_ci or not named
             # A matrix-chosen runner is stated when the file lists standard ones.
             if _MATRIX_RUNNER.search(text) and not any(p.search(text) for p in _RUNNER_FAMILIES.values()):
                 unstated_ci = True
         detected = {f: sorted(labels) for f, labels in families.items() if labels}
-        documented = sorted(
-            name for name, pattern in _PLATFORM_DOC_TERMS.items()
-            if doc_text and pattern.search(doc_text)
+        documented = []
+        for name, pattern in _PLATFORM_DOC_TERMS.items():
+            for source, text in docs:
+                m = pattern.search(text)
+                if m:
+                    documented.append(name)
+                    seen[f"doc:{name}"] = {"text": name, **source, "quote": _excerpt(text, m, None)}
+                    break
+        documented.sort()
+
+        overall = self._calculate_score(
+            detected, sorted(architectures), documented, sorted(accelerators), unstated_ci)
+        ci_searched = {"text": "CI files read", "paths": [
+            {"path": p, "url": self.forge.web_url(ref, p)} for p, _ in ci_read]}
+        if len(files) > _MAX_WORKFLOW_FILES:
+            ci_searched["text"] += f", the first {_MAX_WORKFLOW_FILES} of {len(files)} listed"
+        self._add_evidence(
+            overall["sub_scores"], seen, listing_ok, ci_searched,
+            [{"path": p, "url": self.forge.web_url(ref, p)} for p, _ in facility_read],
+            [source for source, _ in docs],
         )
         return {
             "package_name": repo_name,
@@ -276,9 +330,57 @@ class DeploymentEnvironmentCollector:
             "architectures": sorted(architectures),
             "accelerators": sorted(accelerators),
             "documented_platforms": documented,
-            "overall_score": self._calculate_score(
-                detected, sorted(architectures), documented, sorted(accelerators), unstated_ci),
+            "overall_score": overall,
         }
+
+    @staticmethod
+    def _add_evidence(
+        sub: Dict[str, Dict], seen: Dict[str, Dict], listing_ok: bool, ci_searched: Dict,
+        facility_read: List[Dict], docs_read: List[Dict],
+    ) -> None:
+        """What each 4.3.5 row from this collector found and where it looked.
+
+        The rows name the families, architectures and platforms found; this
+        adds the file and line each was first seen in. A row that didn't pass
+        also lists what would have counted and the files read -- unless the
+        CI listing failed, when nothing was searched.
+        """
+        def looked(entry: Dict) -> bool:
+            return not entry["passing"] and not entry.get("unmeasured")
+
+        env = sub["deployment_environment_testing"]
+        evidence: Dict[str, List] = {"found": [seen[f] for f in _RUNNER_FAMILIES if f in seen]}
+        if looked(env) and listing_ok:
+            evidence["missing"] = [{"text": f"{family} runners (looked for labels such as {examples})"}
+                                   for family, examples in _RUNNER_EXAMPLES.items()
+                                   if family not in seen]
+            evidence["searched"] = [ci_searched]
+        env["evidence"] = evidence
+
+        arch = sub["architecture_compatibility"]
+        keys = list(_ARCH_PATTERNS) + list(_ACCELERATOR_PATTERNS)
+        evidence = {"found": [seen[k] for k in keys if k in seen]}
+        if looked(arch) and listing_ok:
+            evidence["missing"] = [
+                {"text": "A non-x86 CPU architecture (looked for: " + ", ".join(_ARCH_PATTERNS)
+                         + " runners or build targets)"},
+                {"text": "A GPU build target (looked for CUDA, ROCm/HIP or SYCL build options, "
+                         "and NVIDIA, AMD or Intel GPU architecture names)"},
+            ]
+            evidence["searched"] = [ci_searched]
+            if facility_read:
+                evidence["searched"].append({"text": "Other GitLab CI files read", "paths": facility_read})
+        arch["evidence"] = evidence
+
+        docs = sub["platform_documentation"]
+        evidence = {"found": [seen[f"doc:{n}"] for n in _PLATFORM_DOC_WORDS if f"doc:{n}" in seen]}
+        if looked(docs):
+            if docs_read:
+                evidence["missing"] = [{"text": f"{name} (looked for: {', '.join(words)})"}
+                                       for name, words in _PLATFORM_DOC_WORDS.items()
+                                       if f"doc:{name}" not in seen]
+            evidence["searched"] = [{"text": "Documents read", "paths": docs_read}]
+        docs["evidence"] = evidence
 
     async def _read_platform_docs(
         self, client: httpx.AsyncClient, ref: str
@@ -290,8 +392,11 @@ class DeploymentEnvironmentCollector:
     async def _list_workflows(
         self, client: httpx.AsyncClient, ref: str
     ) -> List[Dict[str, str]]:
-        """CI definition files (GitHub workflows, .gitlab-ci.yml and its includes)."""
+        """CI definition files (GitHub workflows, .gitlab-ci.yml and its
+        includes), or None if the listing failed."""
         entries = await self.forge.ci_config_files(client, ref)
+        if entries is COLLECTION_GAP:
+            return None
         if not entries:
             return []
         return [{"name": e["name"], "path": e["path"]} for e in entries]

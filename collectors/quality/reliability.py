@@ -24,7 +24,7 @@ import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
@@ -32,6 +32,7 @@ import httpx
 from collectors.ecosystem.base import (
     _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
+from collectors.ecosystem.funding import _excerpt, _readme_source
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,9 @@ _ANALYSIS_WORKFLOW_HINT = re.compile(
     r"(analy|lint|scan|secur|sanitiz|tidy|sonar|coverity|codeql|nightly|asan|ubsan)", re.I
 )
 _MAX_ANALYSIS_WORKFLOWS = 25
+# GitHub Actions workflows and GitLab CI files (the root file and the
+# .gitlab/ files it typically includes).
+_WORKFLOW_FILES = r"^(?:\.github/workflows/.*|\.gitlab-ci|\.gitlab/.*)\.ya?ml$"
 
 # Build-configuration files likely to carry hardening settings.
 _BUILD_FILES = ["CMakeLists.txt", "configure.ac", "Makefile.am", "meson.build"]
@@ -137,6 +141,14 @@ _HARDENING_MARKERS = {
     ),
     "CERT / MISRA reference": re.compile(r"\b(?:CERT[- ]?C\b|MISRA)\b", re.I),
 }
+# What each marker matches, in words, for the report's "not found" lines.
+_HARDENING_LOOKED_FOR = {
+    "Warnings as errors": "-Werror, CMAKE_COMPILE_WARNING_AS_ERROR or a WARNINGS_AS_ERRORS option",
+    "Fortify source": "_FORTIFY_SOURCE",
+    "Stack protector": "-fstack-protector",
+    "Sanitizers": "-fsanitize=, or an option such as ADDRESS_SANITIZER or ENABLE_ASAN",
+    "CERT / MISRA reference": "CERT C or MISRA named",
+}
 
 # Labels projects use for defect reports, across the conventions in common use.
 _DEFECT_LABELS = ["bug", "defect", "crash", "regression", "type: bug", "kind/bug",
@@ -156,6 +168,10 @@ _NEGATED_LABEL = re.compile(r"(?:^|[\s:/_-])(?:not|no|non)(?:[\s_-]|$)", re.I)
 _MAX_LABEL_PAGES = 3
 
 _TREND_WINDOW_DAYS = 365
+
+
+def _url(tree, path: str) -> Optional[str]:
+    return tree.url_for(path) if isinstance(tree, RepoTree) else None
 
 
 def _binomial_tail(recent: int, total: int, direction: str) -> float:
@@ -194,17 +210,22 @@ class ReliabilityCollector:
 
         if isinstance(results[0], Exception):
             logger.warning(f"COLLECTION-GAP category=analysis_tools reason=exception:{results[0]!r}")
-            tools, tools_gap = [], True
+            tools, tools_gap, tool_sources = [], True, {}
         else:
-            tools, tools_gap = results[0]
-        if isinstance(results[3], list):
-            tools = sorted(set(tools) | set(results[3]))
+            tools, tools_gap, tool_sources = results[0]
+        # None when the README couldn't be read, so no badge search is claimed.
+        badges = results[3] if isinstance(results[3], dict) else None
+        readme = _readme_source(tree)
+        if badges:
+            tools = sorted(set(tools) | set(badges))
+            for tool, badge in badges.items():
+                tool_sources.setdefault(tool, {"text": f"{tool} badge", **readme, "quote": badge})
 
         if isinstance(results[1], Exception):
             logger.warning(f"COLLECTION-GAP category=hardening reason=exception:{results[1]!r}")
-            hardening, hardening_gap = [], True
+            hardening, hardening_gap, hardening_seen = [], True, {"found": [], "read": []}
         else:
-            hardening, hardening_gap = results[1]
+            hardening, hardening_gap, hardening_seen = results[1]
 
         if isinstance(results[2], Exception):
             logger.warning(f"COLLECTION-GAP category=defect_trend reason=exception:{results[2]!r}")
@@ -216,6 +237,16 @@ class ReliabilityCollector:
         tools_gap = tools_gap or workflows_gap
         hardening_gap = hardening_gap or workflows_gap
 
+        overall = self._calculate_score(
+            tools, hardening, trend, tools_gap, hardening_gap,
+            language=package.get("primary_language"))
+        workflows_read = [{"path": p, "url": _url(tree, p)} for p, _ in workflows]
+        self._add_evidence(
+            overall["sub_scores"], workflows_read,
+            [tool_sources[t] for t in tools if t in tool_sources],
+            [readme] if badges is not None else [],
+            hardening_seen, trend,
+        )
         return {
             "package_name": repo_name,
             "repository": ref,
@@ -223,52 +254,114 @@ class ReliabilityCollector:
             "analysis_tools": tools,
             "hardening": hardening,
             "defect_trend": trend,
-            "overall_score": self._calculate_score(
-                tools, hardening, trend, tools_gap, hardening_gap,
-                language=package.get("primary_language")),
+            "overall_score": overall,
         }
+
+    @staticmethod
+    def _add_evidence(
+        sub: Dict[str, Dict], workflows_read: List[Dict], tools_found: List[Dict],
+        readme_read: List[Dict], hardening_seen: Dict, trend: Dict,
+    ) -> None:
+        """What each 4.3.1 row found and where it looked, for the report.
+
+        A row that didn't pass also lists what would have counted and every
+        file read, so a team can see where to put it; a gapped row claims no
+        search, since the gap may be where the thing was.
+        """
+        def looked(entry: Dict) -> bool:
+            return not entry["passing"] and not entry.get("not_collected")
+
+        workflows_searched = {"text": "CI workflows read", "paths": workflows_read}
+
+        analysis = sub["advanced_static_analysis"]
+        evidence: Dict[str, List] = {"found": tools_found}
+        if looked(analysis):
+            tools = sorted(set(_ANALYSIS_CONFIGS) | set(_ANALYSIS_IN_CI) | set(_ANALYSIS_BADGES))
+            evidence["missing"] = [{"text": "A defect-finding tool configured, run in CI or badged "
+                                            f"in the README (looked for: {', '.join(tools)})"}]
+            evidence["searched"] = [
+                {"text": "Analysis tool config files looked for (any capitalization)",
+                 "paths": [{"path": p} for paths in _ANALYSIS_CONFIGS.values() for p in paths]},
+                workflows_searched,
+            ] + ([{"text": "README read for hosted-analysis badges", "paths": readme_read}]
+                 if readme_read else [])
+        analysis["evidence"] = evidence
+
+        cert = sub["cert_compliance"]
+        evidence = {"found": hardening_seen["found"]}
+        if looked(cert):
+            found = {item["text"] for item in hardening_seen["found"]}
+            evidence["missing"] = [{"text": f"{label} (looked for: {terms})"}
+                                   for label, terms in _HARDENING_LOOKED_FOR.items()
+                                   if label not in found]
+            evidence["searched"] = [
+                {"text": "Build and compiler-flag files read", "paths": hardening_seen["read"]},
+                workflows_searched,
+            ]
+        cert["evidence"] = evidence
+
+        # The row says which convention the count came from; this says which
+        # types and labels, which is what a project needs to adopt to be counted.
+        if not trend.get("not_collected") and trend.get("issue_types"):
+            searched = [{"text": "Defect reports counted by issue type",
+                         "paths": [{"path": t} for t in trend["issue_types"]]}]
+            if trend.get("labels_searched"):
+                searched.append({"text": "Too few by type, so also counted by label",
+                                 "paths": [{"path": l} for l in trend["labels_searched"]]})
+            sub["reliability_trend"]["evidence"] = {"searched": searched}
 
     # ------------------------------------------------------------------ fetch
 
-    async def _analysis_badges(self, client: httpx.AsyncClient, ref: str) -> List[str]:
-        """Hosted analysis services with a README badge for this repository."""
+    async def _analysis_badges(self, client: httpx.AsyncClient, ref: str) -> Optional[Dict[str, str]]:
+        """Hosted analysis services with a README badge for this repository,
+        each with the badge URL text that matched; None if there was no
+        README to read."""
         text = await self.forge.readme(client, ref)
         if not text:
-            return []
+            return None
         slug = re.escape(ref)
         slug_ = re.escape(ref.replace("/", "_"))
-        return [tool for tool, pattern in _ANALYSIS_BADGES.items()
-                if re.search(pattern.format(repo=slug, repo_=slug_), text, re.I)]
+        found = {}
+        for tool, pattern in _ANALYSIS_BADGES.items():
+            m = re.search(pattern.format(repo=slug, repo_=slug_), text, re.I)
+            if m:
+                found[tool] = m.group(0)
+        return found
 
-    async def _find_analysis_tools(self, tree, workflows: List[str]) -> tuple:
+    async def _find_analysis_tools(self, tree, workflows: List[Tuple[str, str]]) -> tuple:
         """Defect-finding tools, from config files and analysis-shaped workflows.
 
-        Returns (sorted tool names, saw_gap). A tool found via a config file
-        or in the CI text is real regardless of gaps elsewhere; saw_gap only
-        matters to the caller when the result is otherwise empty. Config
-        files are matched against a RepoTree (case-insensitive, one fetch)
-        rather than probed one literal path at a time -- see
-        METRIC_BLIND_SPOTS.md class F1.
+        Returns (sorted tool names, saw_gap, sources): sources maps each tool
+        to where it was first found, as a report evidence item. A tool found
+        via a config file or in the CI text is real regardless of gaps
+        elsewhere; saw_gap only matters to the caller when the result is
+        otherwise empty. Config files are matched against a RepoTree
+        (case-insensitive, one fetch) rather than probed one literal path at
+        a time -- see METRIC_BLIND_SPOTS.md class F1.
         """
-        found = set()
+        found: Dict[str, Dict[str, Any]] = {}
         saw_gap = tree is COLLECTION_GAP
 
         if not saw_gap:
             for tool, paths in _ANALYSIS_CONFIGS.items():
-                if tree.match(paths):
-                    found.add(tool)
+                path = tree.match(paths)
+                if path:
+                    found[tool] = {"text": f"{tool} configuration", "path": path,
+                                   "url": tree.match_url(paths)}
 
-        for text in workflows:
+        for path, text in workflows:
             for tool, pattern in _ANALYSIS_IN_CI.items():
-                if pattern.search(text):
-                    found.add(tool)
-        return sorted(found), saw_gap
+                m = pattern.search(text)
+                if m and tool not in found:
+                    found[tool] = {"text": f"{tool} in CI", "path": path,
+                                   "url": _url(tree, path), "quote": _excerpt(text, m, None)}
+        return sorted(found), saw_gap, found
 
     async def _read_analysis_workflows(
         self, client: httpx.AsyncClient, ref: str, tree
     ) -> tuple:
-        """Text of up to _MAX_ANALYSIS_WORKFLOWS workflow files, and whether
-        any candidate read gapped.
+        """(path, text) of up to _MAX_ANALYSIS_WORKFLOWS workflow files, and
+        whether any candidate read gapped.
 
         Workflows whose name suggests analysis are read first; the rest of
         the budget is then filled with whatever workflows remain, rather
@@ -280,9 +373,7 @@ class ReliabilityCollector:
         """
         if tree is COLLECTION_GAP:
             return [], True
-        # GitHub Actions workflows and GitLab CI files (the root file and the
-        # .gitlab/ files it typically includes).
-        all_workflows = tree.find(r"^(?:\.github/workflows/.*|\.gitlab-ci|\.gitlab/.*)\.ya?ml$")
+        all_workflows = tree.find(_WORKFLOW_FILES)
         hinted = [w for w in all_workflows if _ANALYSIS_WORKFLOW_HINT.search(w.rsplit("/", 1)[-1])]
         rest = [w for w in all_workflows if w not in hinted]
         candidates = (hinted + rest)[:_MAX_ANALYSIS_WORKFLOWS]
@@ -300,21 +391,23 @@ class ReliabilityCollector:
 
         texts = await asyncio.gather(*[read(p) for p in candidates])
         saw_gap = truncated or any(t is None for t in texts)
-        return [t for t in texts if t], saw_gap
+        return [(p, t) for p, t in zip(candidates, texts) if t], saw_gap
 
     async def _find_hardening(
         self, client: httpx.AsyncClient, ref: str,
-        tree, workflows: List[str],
+        tree, workflows: List[Tuple[str, str]],
     ) -> tuple:
         """Secure-coding practice indicators in the build files and in CI.
 
         Large projects keep compiler flags out of the root build file — AMReX's
         live under Tools/CMake/, HDF5's under config/flags/ — and sanitizer runs
         are usually CI jobs rather than build settings, so both corpora are
-        searched. Returns (markers found, saw_gap): a marker actually found is
-        real regardless of gaps elsewhere, but an empty result needs saw_gap
-        to tell "no hardening configured" from "couldn't read enough of the
-        repo to tell".
+        searched. Returns (markers found, saw_gap, seen): a marker actually
+        found is real regardless of gaps elsewhere, but an empty result needs
+        saw_gap to tell "no hardening configured" from "couldn't read enough
+        of the repo to tell". `seen` is for the report: {"found": the file
+        and line each marker was first found in, "read": the build files
+        read}.
         """
 
         async def read(path: str):
@@ -324,18 +417,23 @@ class ReliabilityCollector:
             return text or ""
 
         flag_paths, flag_gap = self._find_flag_files(tree)
-        texts = await asyncio.gather(
-            *[read(p) for p in _BUILD_FILES + flag_paths]
-        )
+        build_paths = _BUILD_FILES + flag_paths
+        texts = await asyncio.gather(*[read(p) for p in build_paths])
         saw_gap = flag_gap or any(t is COLLECTION_GAP for t in texts)
         # COLLECTION_GAP is falsy, same as "", so this filter drops both.
-        corpus = "\n".join([t for t in texts if t] + workflows)
-        if not corpus:
-            return [], saw_gap
-        return [
-            label for label, pattern in _HARDENING_MARKERS.items()
-            if pattern.search(corpus)
-        ], saw_gap
+        build = [(p, t) for p, t in zip(build_paths, texts) if t]
+        seen: Dict[str, List] = {"found": [], "read": [{"path": p, "url": _url(tree, p)}
+                                                       for p, _ in build]}
+        markers = []
+        for label, pattern in _HARDENING_MARKERS.items():
+            for path, text in build + list(workflows):
+                m = pattern.search(text)
+                if m:
+                    markers.append(label)
+                    seen["found"].append({"text": label, "path": path, "url": _url(tree, path),
+                                          "quote": _excerpt(text, m, None)})
+                    break
+        return markers, saw_gap, seen
 
     def _find_flag_files(self, tree) -> tuple:
         """Paths of .cmake files whose names suggest compiler flags, searched
@@ -413,6 +511,8 @@ class ReliabilityCollector:
         )
         saw_gap = recent_gap or previous_gap
         source = "issue type"
+        # What was counted, for the report.
+        searched: Dict[str, List[str]] = {"issue_types": list(_DEFECT_ISSUE_TYPES)}
 
         # Fall back to labels whenever types alone can't carry the comparison,
         # not only when they return exactly zero. A single natively-typed
@@ -431,6 +531,7 @@ class ReliabilityCollector:
                 count(prev_start, recent_start, labels=labels),
             )
             saw_gap = saw_gap or recent_gap or previous_gap
+            searched["labels_searched"] = list(labels)
             # Keep whichever convention actually carries the project's
             # defects, rather than assuming the second query supersedes.
             if label_recent + label_previous > recent + previous:
@@ -443,7 +544,7 @@ class ReliabilityCollector:
 
         if recent + previous < get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume"):
             return {"measurable": False, "recent": recent, "previous": previous,
-                    "direction": None, "source": source}
+                    "direction": None, "source": source, **searched}
 
         if previous == 0:
             direction = "increasing"
@@ -462,7 +563,7 @@ class ReliabilityCollector:
             direction = "stable"
         return {"measurable": True, "recent": recent, "previous": previous,
                 "direction": direction, "source": source,
-                "within_normal_variation": within_variation}
+                "within_normal_variation": within_variation, **searched}
 
     # ---------------------------------------------------------------- scoring
 

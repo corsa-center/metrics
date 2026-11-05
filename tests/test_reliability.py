@@ -66,7 +66,7 @@ class TestReadAnalysisWorkflows:
             texts, saw_gap = asyncio.run(
                 collector._read_analysis_workflows(None, "o/r", tree)
             )
-        assert texts == ["run: cppcheck ."]
+        assert texts == [(".github/workflows/gcc.yml", "run: cppcheck .")]
         assert saw_gap is False
 
     def test_hinted_workflows_are_prioritized_within_the_cap(self, collector):
@@ -241,25 +241,25 @@ class TestFindAnalysisTools:
     """
 
     def test_gapped_tree_with_no_ci_matches_reports_gap(self, collector):
-        tools, saw_gap = asyncio.run(collector._find_analysis_tools(COLLECTION_GAP, []))
+        tools, saw_gap, _ = asyncio.run(collector._find_analysis_tools(COLLECTION_GAP, []))
         assert tools == []
         assert saw_gap is True
 
     def test_config_file_found(self, collector):
         tree = RepoTree(FakeForge(), "o/r", [".clang-tidy"], truncated=False)
-        tools, saw_gap = asyncio.run(collector._find_analysis_tools(tree, []))
+        tools, saw_gap, _ = asyncio.run(collector._find_analysis_tools(tree, []))
         assert tools == ["clang-tidy"]
         assert saw_gap is False
 
     def test_confirmed_absence_is_not_a_gap(self, collector):
         tree = RepoTree(FakeForge(), "o/r", ["README.md"], truncated=False)
-        tools, saw_gap = asyncio.run(collector._find_analysis_tools(tree, []))
+        tools, saw_gap, _ = asyncio.run(collector._find_analysis_tools(tree, []))
         assert tools == []
         assert saw_gap is False
 
     def test_ci_text_match_does_not_need_a_config_file(self, collector):
-        tools, saw_gap = asyncio.run(
-            collector._find_analysis_tools(COLLECTION_GAP, ["run: cppcheck ."])
+        tools, saw_gap, _ = asyncio.run(
+            collector._find_analysis_tools(COLLECTION_GAP, [("ci.yml", "run: cppcheck .")])
         )
         assert "Cppcheck" in tools
 
@@ -271,17 +271,17 @@ class TestPythonAnalysisTools:
         ("run: bandit -r src", "Bandit"),
     ])
     def test_python_defect_finders_in_ci(self, collector, ci_text, tool):
-        tools, _ = asyncio.run(collector._find_analysis_tools(COLLECTION_GAP, [ci_text]))
+        tools, _, _ = asyncio.run(collector._find_analysis_tools(COLLECTION_GAP, [("ci.yml", ci_text)]))
         assert tool in tools
 
     def test_mypy_config_file(self, collector):
         tree = RepoTree(FakeForge(), "o/r", ["mypy.ini"], truncated=False)
-        tools, _ = asyncio.run(collector._find_analysis_tools(tree, []))
+        tools, _, _ = asyncio.run(collector._find_analysis_tools(tree, []))
         assert tools == ["mypy"]
 
     def test_style_linters_still_not_counted(self, collector):
-        tools, _ = asyncio.run(collector._find_analysis_tools(
-            COLLECTION_GAP, ["run: ruff check . && black --check . && flake8"]))
+        tools, _, _ = asyncio.run(collector._find_analysis_tools(
+            COLLECTION_GAP, [("ci.yml", "run: ruff check . && black --check . && flake8")]))
         assert tools == []
 
 
@@ -485,8 +485,119 @@ class TestAnalysisBadges:
     def test_hosted_service_badges_for_this_repo(self, collector):
         md = ("[![CodeFactor](https://www.codefactor.io/repository/github/o/r/badge)](x)\n"
               "[![q](https://sonarcloud.io/api/project_badges/measure?project=o_r&metric=x)](y)")
-        assert self._badges(collector, md) == ["CodeFactor", "SonarQube/SonarCloud"]
+        badges = self._badges(collector, md)
+        assert list(badges) == ["CodeFactor", "SonarQube/SonarCloud"]
+        # The matched badge URL, as the report's quote.
+        assert badges["CodeFactor"] == "codefactor.io/repository/github/o/r"
 
     def test_badge_for_another_repository_does_not_count(self, collector):
         md = "[![CodeFactor](https://www.codefactor.io/repository/github/other/project/badge)](x)"
-        assert self._badges(collector, md) == []
+        assert self._badges(collector, md) == {}
+
+    def test_no_readme_is_no_search(self, collector):
+        with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=None)):
+            assert asyncio.run(collector._analysis_badges(MagicMock(), "o/r")) is None
+
+
+def _collect_on(forge, language=None):
+    return asyncio.run(ReliabilityCollector(forge).collect(
+        {"name": "r", "repo_url": "https://github.com/o/r", "primary_language": language}))
+
+
+class TestEvidence:
+    """Each 4.3.1 row says where its finding came from, or where it looked (#99)."""
+
+    def test_tools_and_hardening_name_the_file_and_line(self):
+        forge = FakeForge(files={
+            ".github/workflows/lint.yml": "steps:\n  - run: cppcheck --enable=all src\n",
+            ".clang-tidy": "Checks: '*'",
+            "CMakeLists.txt": "project(x)\nset(CMAKE_C_FLAGS -Werror)\n",
+        })
+        sub = _collect_on(forge)["overall_score"]["sub_scores"]
+        assert sub["advanced_static_analysis"]["evidence"] == {"found": [
+            {"text": "Cppcheck in CI", "path": ".github/workflows/lint.yml",
+             "url": "https://github.com/o/r/blob/HEAD/.github/workflows/lint.yml",
+             "quote": "run: cppcheck --enable=all src"},
+            {"text": "clang-tidy configuration", "path": ".clang-tidy",
+             "url": "https://github.com/o/r/blob/HEAD/.clang-tidy"},
+        ]}
+        assert sub["cert_compliance"]["evidence"] == {"found": [
+            {"text": "Warnings as errors", "path": "CMakeLists.txt",
+             "url": "https://github.com/o/r/blob/HEAD/CMakeLists.txt",
+             "quote": "set(CMAKE_C_FLAGS -Werror)"}]}
+
+    def test_readme_badge_keeps_the_matched_url(self):
+        forge = FakeForge(files={"README.md": "x"}, readme_text=(
+            "[![CodeFactor](https://www.codefactor.io/repository/github/o/r/badge)](x)"))
+        evidence = _collect_on(forge)["overall_score"]["sub_scores"]["advanced_static_analysis"]["evidence"]
+        assert evidence["found"] == [{"text": "CodeFactor badge", "path": "README.md",
+                                      "url": "https://github.com/o/r/blob/HEAD/README.md",
+                                      "quote": "codefactor.io/repository/github/o/r"}]
+
+    def test_nothing_found_says_what_would_count_and_where_it_looked(self):
+        forge = FakeForge(files={".github/workflows/ci.yml": "run: make", "CMakeLists.txt": "project(x)"},
+                          readme_text="# r\n")
+        sub = _collect_on(forge, language="C")["overall_score"]["sub_scores"]
+        tools = sub["advanced_static_analysis"]["evidence"]
+        assert "Cppcheck" in tools["missing"][0]["text"] and "CodeFactor" in tools["missing"][0]["text"]
+        configs, workflows, readme = tools["searched"]
+        assert {"path": ".clang-tidy"} in configs["paths"]
+        assert [p["path"] for p in workflows["paths"]] == [".github/workflows/ci.yml"]
+        # No README file in the tree, so the generic name.
+        assert readme["paths"] == [{"path": "README", "url": None}]
+        cert = sub["cert_compliance"]["evidence"]
+        assert [m["text"].split(" (")[0] for m in cert["missing"]] == list(_HARDENING_MARKERS)
+        assert "_FORTIFY_SOURCE" in cert["missing"][1]["text"]
+        assert [p["path"] for p in cert["searched"][0]["paths"]] == ["CMakeLists.txt"]
+
+    def test_no_readme_claims_no_badge_search(self):
+        sub = _collect_on(FakeForge(files={"a.c": ""}))["overall_score"]["sub_scores"]
+        texts = [s["text"] for s in sub["advanced_static_analysis"]["evidence"]["searched"]]
+        assert not any("README" in t for t in texts)
+
+    def test_gapped_rows_claim_no_search(self):
+        sub = _collect_on(FakeForge(gaps={"repo_tree"}))["overall_score"]["sub_scores"]
+        for key in ("advanced_static_analysis", "cert_compliance"):
+            assert sub[key].get("not_collected")
+            assert sub[key]["evidence"] == {"found": []}
+
+    def test_not_applicable_cert_lists_nothing_missing(self):
+        sub = _collect_on(FakeForge(files={"a.py": ""}), language="Python")["overall_score"]["sub_scores"]
+        assert sub["cert_compliance"]["evidence"] == {"found": []}
+
+    def test_trend_says_which_types_and_labels_were_counted(self):
+        forge = FakeForge(label_list=[{"name": "type-bug"}, {"name": "docs"}])
+        sub = _collect_on(forge)["overall_score"]["sub_scores"]
+        types, labels = sub["reliability_trend"]["evidence"]["searched"]
+        assert [p["path"] for p in types["paths"]] == ["Bug", "Defect"]
+        assert [p["path"] for p in labels["paths"]] == ["type-bug"]
+
+    def test_gapped_trend_claims_nothing(self):
+        sub = _collect_on(FakeForge(issue_count=lambda **f: None))["overall_score"]["sub_scores"]
+        assert "evidence" not in sub["reliability_trend"]
+
+
+class TestEvidenceInReport:
+    def test_evidence_lines_appear_under_the_four_three_one_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        forge = FakeForge(files={
+            ".github/workflows/ci.yml": "steps:\n  - run: cmake -DENABLE_ASAN=ON ..\n",
+            "CMakeLists.txt": "project(x)",
+        })
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {}},
+            "quality": {"sub_results": {"reliability": _collect_on(forge, language="C++"),
+                                        "static_analysis": {"has_codeql": False}}},
+        }}
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        cert = page.split("<b>CERT Guidelines Compliance:</b>")[1].split("</li>")[0]
+        assert ('<b>Found:</b> Sanitizers in <a href="https://github.com/o/r/blob/HEAD/.github/'
+                'workflows/ci.yml">.github/workflows/ci.yml</a>: “run: cmake -DENABLE_ASAN=ON ..”') in cert
+        analysis = page.split("<b>Advanced Static Analysis:</b>")[1].split("</li>")[0]
+        assert "<b>Not found:</b> A defect-finding tool configured" in analysis
+        assert "<b>CI workflows read:</b> <a href=" in analysis

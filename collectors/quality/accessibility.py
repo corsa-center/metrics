@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 _E4S_ENVIRONMENT = ("https://raw.githubusercontent.com/E4S-Project/e4s/HEAD/"
                     "environments/x86_64/gnu/cpu/spack.yaml")
 _E4S_SPEC = re.compile(r"^\s*-\s*([a-z0-9][\w-]*)", re.M)
+_E4S_ENVIRONMENT_PAGE = ("https://github.com/E4S-Project/e4s/blob/HEAD/"
+                         "environments/x86_64/gnu/cpu/spack.yaml")
 _e4s_specs: Optional[set] = None
 _e4s_lock = asyncio.Lock()
 
@@ -92,6 +94,10 @@ _OTHER_BUILD_PATTERNS = [
     ("Autoconf / configure", rf"^(?:{_NON_BUILD_DIR}[^/.][^/]*/)?configure(?:\.ac|\.in)?$"),
     ("Install script", r"^(?:install|build)\.sh$"),
 ]
+# The same, in words, for the report's "not found" line.
+_OTHER_BUILD_LOOKED_FOR = ("a root meson.build or fpm.toml, a Spack recipe or spack.yaml anywhere, "
+                           "a CMakeLists.txt one directory down, a configure script at the root or "
+                           "one directory down, or a root install.sh or build.sh")
 
 # Labels also searched across the whole tree when no candidate path matches.
 _TREE_PATTERNS = {
@@ -116,6 +122,7 @@ class AccessibilityCollector:
 
         logger.info(f"Checking accessibility / portability for {ref}")
 
+        e4s_names = pyproject_read = None
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             tree = await RepoTree.fetch(client, self.forge, ref)
             result = self._scan(tree, repo_name, ref)
@@ -125,29 +132,87 @@ class AccessibilityCollector:
                     result["has_portable_build_system"] = True
                     result["other_build"] = other
             if not result["has_container"] and tree is not COLLECTION_GAP:
-                image = await self._e4s_image(client, ref)
+                image, e4s_names = await self._e4s_image(client, ref)
                 if image:
                     result["has_container"] = True
                     result["container_image"] = image
             if not result["has_portable_build_system"] and tree is not COLLECTION_GAP:
-                package = await self._python_package(client, ref, result)
+                package, pyproject_read = await self._python_package(client, ref, result)
                 if package:
                     result["has_portable_build_system"] = True
                     result["python_package"] = package
-            return result
+        if tree is not COLLECTION_GAP:
+            result["row_evidence"] = self._row_evidence(result, e4s_names, pyproject_read)
+        return result
 
-    async def _e4s_image(self, client: httpx.AsyncClient, ref: str) -> Optional[str]:
-        """"E4S container image (Spack package <name>)" when the project's
-        Spack recipe is in the E4S image environment, else None."""
+    @staticmethod
+    def _row_evidence(result: Dict[str, Any], e4s_names: Optional[List[str]],
+                      pyproject_read: Optional[str]) -> Dict[str, Dict]:
+        """What the two 4.3.5 rows built from this collector found and where
+        they looked, for the report. The orchestrator builds these rows
+        itself, so they are keyed by row label here.
+
+        The rows name what was found (CMake, Docker) but not the file, so
+        that is what's added; a row that didn't pass lists what would have
+        counted and where. Only called with a tree, so every search named
+        here ran.
+        """
+        cats = result["categories"]
+
+        def found_files(category: str) -> List[Dict[str, Any]]:
+            details = cats[category]["details"]
+            return [{"text": label, "path": details[label]["file"], "url": details[label]["url"]}
+                    for label in cats[category]["found"]]
+
+        def root_files(*categories: str) -> List[Dict[str, str]]:
+            return [{"path": p} for c in categories for paths in _CHECKS[c].values() for p in paths]
+
+        build: Dict[str, List] = {"found": found_files("build_systems")}
+        if not result["has_portable_build_system"]:
+            build["missing"] = [{"text": "A portable build system (looked for: "
+                                         + ", ".join(_CHECKS["build_systems"])
+                                         + " files, listed below; " + _OTHER_BUILD_LOOKED_FOR
+                                         + "; a pip-installable Python package)"}]
+            if pyproject_read:
+                build["missing"].append({"text": f"A [build-system] or [project] table in {pyproject_read}"})
+            build["searched"] = [{"text": "Build and packaging files looked for (any capitalization)",
+                                  "paths": root_files("build_systems", "python_packaging")}]
+
+        container: Dict[str, List] = {"found": found_files("containers")}
+        if result.get("container_image"):
+            container["found"].append({"text": "Listed in the E4S image environment",
+                                       "path": "E4S-Project/e4s spack.yaml", "url": _E4S_ENVIRONMENT_PAGE})
+        if not result["has_container"]:
+            container["missing"] = [{"text": "A container recipe (looked for: a Dockerfile or Containerfile, "
+                                             "or a Singularity or Apptainer definition, anywhere in the "
+                                             "project's own code)"}]
+            container["searched"] = [{"text": "Container file paths tried first (any capitalization)",
+                                      "paths": root_files("containers")}]
+            if e4s_names is not None:
+                container["searched"].append({
+                    "text": "Spack package names looked for in the E4S image environment",
+                    "paths": [{"path": n} for n in e4s_names]})
+
+        return {
+            "portable_build": {"label": "Portable Build System Detection", "evidence": build},
+            "container": {"label": "Container Availability Assessment", "evidence": container},
+        }
+
+    async def _e4s_image(self, client: httpx.AsyncClient, ref: str) -> tuple:
+        """(image, names): image is "E4S container image (Spack package
+        <name>)" when the project's Spack recipe is in the E4S image
+        environment, else None; names are the Spack package names looked
+        for, or None if the environment couldn't be read, so that no lookup
+        is claimed."""
         global _e4s_specs
         async with _e4s_lock:
             if _e4s_specs is None:
                 try:
                     resp = await client.get(_E4S_ENVIRONMENT)
                 except httpx.HTTPError:
-                    return None
+                    return None, None
                 if resp.status_code != 200:
-                    return None
+                    return None, None
                 _e4s_specs = set(_E4S_SPEC.findall(resp.text.split("specs:", 1)[-1]))
         # The same recipe lookup the collaboration collector uses: the repo's
         # own name, then recipes whose URLs are this repository.
@@ -155,10 +220,11 @@ class AccessibilityCollector:
         owner, _, repo = ref.rpartition("/")
         names = [repo.lower()] + await CollaborationCollector(self.forge)._main_spack_recipe(
             client, owner, repo)
+        names = list(dict.fromkeys(names))
         for name in names:
             if name in _e4s_specs:
-                return f"E4S container image (Spack package {name})"
-        return None
+                return f"E4S container image (Spack package {name})", names
+        return None, names
 
     @staticmethod
     def _other_build(tree) -> Optional[str]:
@@ -174,8 +240,9 @@ class AccessibilityCollector:
 
     async def _python_package(
         self, client: httpx.AsyncClient, ref: str, result: Dict[str, Any]
-    ) -> Optional[str]:
-        """The file that makes the project pip-installable, or None.
+    ) -> tuple:
+        """(the file that makes the project pip-installable or None, the
+        pyproject.toml read for it or None).
 
         A pip-installable package is the portable, cross-platform install for
         a Python project, which otherwise has none of the listed build
@@ -185,14 +252,14 @@ class AccessibilityCollector:
         """
         details = result["categories"].get("python_packaging", {}).get("details", {})
         if details.get("setup.py", {}).get("exists"):
-            return details["setup.py"]["file"]
+            return details["setup.py"]["file"], None
         path = details.get("pyproject.toml", {}).get("file")
         if not path:
-            return None
+            return None, None
         text = await self.forge.file_content(client, ref, path)
         if not text:
-            return None
-        return path if re.search(r"^\[(?:build-system|project)\]", text, re.M) else None
+            return None, None
+        return (path if re.search(r"^\[(?:build-system|project)\]", text, re.M) else None), path
 
     def _scan(
         self,
