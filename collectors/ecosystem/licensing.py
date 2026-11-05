@@ -19,6 +19,9 @@ from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
+# What a forge's license detection reports when it can't name the license.
+_UNNAMED_SPDX = {None, "", "NOASSERTION"}
+
 
 class LicensingCollector:
     """Collects licensing metrics from GitHub repositories"""
@@ -185,6 +188,85 @@ class LicensingCollector:
             "compliance_score": self._calculate_compliance_score(
                 license_file_result, license_analysis
             ),
+            # The orchestrator builds these 4.2.2 rows itself, so the
+            # evidence the per-package report shows under them is keyed by
+            # row label here.
+            "row_evidence": self._row_evidence(
+                ref, license_api_result, license_file_result, license_analysis
+            ),
+        }
+
+    def _row_evidence(
+        self, ref: str, api: Dict[str, Any], info: Dict[str, Any], analysis: Dict[str, Any]
+    ) -> Dict[str, Dict]:
+        """Where the license was found and what named it, or where it was
+        looked for, for the Enhanced License Detection and OSI License
+        Validation rows; neither row links the license file.
+
+        A license the forge's detection can't name may still pass both rows
+        through FairLicensingCollector's reading of the text; its License
+        Exception Handling row says how, so these rows only say what this
+        collector saw.
+        """
+        host = getattr(self.forge, "display_name", None) or "the forge"
+        detection = f"{host}'s license detection"
+        from_api = info.get("source") == "github_api"
+        found, missing, searched, osi_missing, osi_searched = [], [], [], [], []
+
+        if info.get("found"):
+            # GitLab's detection is project-level and its file path only a
+            # guess (see GitLabForge.license); a download URL means the
+            # forge served the file it named.
+            where = {}
+            if not from_api or info.get("download_url"):
+                where = {"path": info.get("file_path"), "url": info.get("url")}
+            spdx = info.get("spdx_id")
+            if from_api and spdx not in _UNNAMED_SPDX:
+                found.append({"text": f"{spdx} license (identified by {detection})", **where})
+            elif from_api:
+                named = spdx or info.get("license_name") or "none"
+                found.append({"text": f"{'License file' if where else 'A license'} "
+                                      f"({detection} reported {named})", **where})
+            elif analysis.get("matched"):
+                phrases = ", ".join(f"“{p}”" for p in analysis["matched"])
+                found.append({"text": f"{analysis['license_type']} (text matched {phrases})",
+                              **where})
+            else:
+                found.append({"text": "License file", **where})
+                if not api.get("not_collected"):
+                    missing.append({"text": f"a license {detection} could name (it detected none)"})
+                # The text is fetched best-effort; only text that was read was searched.
+                if info.get("content"):
+                    missing.append({"text": "a license this check recognizes in the text of "
+                                            f"{info.get('file_path')} (MIT, Apache-2.0, GPL-2.0, "
+                                            "GPL-3.0, BSD-2-Clause, BSD-3-Clause)"})
+
+            spdx = analysis.get("spdx_id")
+            unknown = analysis.get("osi_approved") is None
+            if unknown and spdx not in _UNNAMED_SPDX:
+                osi_missing.append({"text": f"{spdx} among the OSI-approved licenses "
+                                            "this check recognizes"})
+                osi_searched.append({"text": "OSI-approved licenses recognized",
+                                     "paths": [{"path": k} for k in self.KNOWN_LICENSES]})
+            elif unknown and (from_api or not api.get("not_collected")):
+                reported = (spdx or info.get("license_name")) if from_api else None
+                said = f"reported {reported}" if reported else "gave none"
+                osi_missing.append({"text": "an SPDX license id to check against the "
+                                            f"OSI-approved list ({detection} {said})"})
+        elif not info.get("not_collected"):
+            missing.append({"text": f"License file ({detection} found none)"})
+            searched.append({"text": f"License file names tried in {ref}",
+                             "paths": [{"path": p} for p in self.LICENSE_PATTERNS]})
+
+        return {
+            "license_detection": {
+                "label": "Enhanced License Detection",
+                "evidence": {"found": found, "missing": missing, "searched": searched},
+            },
+            "osi_validation": {
+                "label": "OSI License Validation",
+                "evidence": {"missing": osi_missing, "searched": osi_searched},
+            },
         }
 
     async def _get_license_from_api(
@@ -322,62 +404,69 @@ class LicensingCollector:
         }
 
     def _detect_license_from_content(self, content: str) -> Optional[Dict[str, Any]]:
-        """Try to detect license type from file content"""
+        """Try to detect license type from file content. "matched" keeps the
+        phrases that decided it, for the report."""
         content_lower = content.lower()
 
+        def hit(*phrases: str) -> Optional[str]:
+            return next((p for p in phrases if p in content_lower), None)
+
         # Check for common license signatures
-        if "mit license" in content_lower:
+        if m := hit("mit license"):
             return {
                 "license_type": "MIT License",
                 "osi_approved": True,
                 "category": "Permissive",
                 "spdx_id": "MIT",
                 "description": "Detected from content: MIT License",
+                "matched": [m],
             }
-        elif (
-            "apache license, version 2.0" in content_lower
-            or "apache-2.0" in content_lower
-        ):
+        elif m := hit("apache license, version 2.0", "apache-2.0"):
             return {
                 "license_type": "Apache License 2.0",
                 "osi_approved": True,
                 "category": "Permissive",
                 "spdx_id": "Apache-2.0",
                 "description": "Detected from content: Apache 2.0",
+                "matched": [m],
             }
-        elif "gnu general public license" in content_lower:
-            if "version 3" in content_lower or "v3" in content_lower:
+        elif m := hit("gnu general public license"):
+            if v := hit("version 3", "v3"):
                 return {
                     "license_type": "GPL-3.0",
                     "osi_approved": True,
                     "category": "Copyleft",
                     "spdx_id": "GPL-3.0-only",
                     "description": "Detected from content: GPL 3.0",
+                    "matched": [m, v],
                 }
-            elif "version 2" in content_lower or "v2" in content_lower:
+            elif v := hit("version 2", "v2"):
                 return {
                     "license_type": "GPL-2.0",
                     "osi_approved": True,
                     "category": "Copyleft",
                     "spdx_id": "GPL-2.0-only",
                     "description": "Detected from content: GPL 2.0",
+                    "matched": [m, v],
                 }
-        elif "bsd" in content_lower:
-            if "3-clause" in content_lower or "modified" in content_lower:
+        elif m := hit("bsd"):
+            if v := hit("3-clause", "modified"):
                 return {
                     "license_type": "BSD-3-Clause",
                     "osi_approved": True,
                     "category": "Permissive",
                     "spdx_id": "BSD-3-Clause",
                     "description": "Detected from content: BSD 3-Clause",
+                    "matched": [m, v],
                 }
-            elif "2-clause" in content_lower or "simplified" in content_lower:
+            elif v := hit("2-clause", "simplified"):
                 return {
                     "license_type": "BSD-2-Clause",
                     "osi_approved": True,
                     "category": "Permissive",
                     "spdx_id": "BSD-2-Clause",
                     "description": "Detected from content: BSD 2-Clause",
+                    "matched": [m, v],
                 }
 
         return None
