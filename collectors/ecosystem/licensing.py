@@ -251,8 +251,11 @@ class LicensingCollector:
             elif unknown and (from_api or not api.get("not_collected")):
                 reported = (spdx or info.get("license_name")) if from_api else None
                 said = f"reported {reported}" if reported else "gave none"
+                # The row can still pass on the license FairLicensing reads
+                # from the text; then this line would read as a failure.
                 osi_missing.append({"text": "an SPDX license id to check against the "
-                                            f"OSI-approved list ({detection} {said})"})
+                                            f"OSI-approved list ({detection} {said})",
+                                    "unless_met": True})
         elif not info.get("not_collected"):
             missing.append({"text": f"License file ({detection} found none)"})
             searched.append({"text": f"License file names tried in {ref}",

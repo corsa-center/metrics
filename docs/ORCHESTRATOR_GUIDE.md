@@ -218,7 +218,7 @@ Rows and marks are rendered from the same per-section data as
 `metrics.json`, so they always match the dashboard. The found / looked-in
 lines come from an `evidence` entry a collector puts beside a row's `label`
 (`{"found": [{text, path, url, quote}], "missing": [{text}],
-"searched": [{text, paths}]}`), on a sub-score or, for rows the orchestrator
+"searched": [{text, paths}]}`; an item with `unless_met` is left off a ✓ row), on a sub-score or, for rows the orchestrator
 builds itself, in a `row_evidence` block. An entry whose row renders in
 another dimension's section names it with a `section` key beside the label
 (Installation Success Tracking, from collaboration, in 4.3.4). The dashboard

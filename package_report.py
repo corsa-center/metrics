@@ -509,7 +509,7 @@ def _render_row(row: Dict) -> str:
         )
     for detail in row["details"]:
         parts.append(f'<div class="detail">{_h(detail)}</div>')
-    parts.extend(_render_evidence(row.get("evidence") or {}))
+    parts.extend(_render_evidence(row.get("evidence") or {}, met=row["mark"] == "✓"))
     for i, line in enumerate(row["thresholds"]):
         prefix = "<b>Threshold:</b> " if i == 0 else ""
         parts.append(f'<div class="threshold">{prefix}{esc(line)}</div>')
@@ -526,12 +526,19 @@ def _is_web_url(url: Any) -> bool:
     return isinstance(url, str) and url.startswith(("https://", "http://"))
 
 
-def _render_evidence(evidence: Dict) -> List[str]:
+def _applicable(items: Optional[List[Dict]], met: bool) -> List[Dict]:
+    """Evidence items to show: an item marked "unless_met" explains a
+    shortfall the row may have made up some other way, so it is dropped
+    from a ✓ row."""
+    return [item for item in items or [] if not (met and item.get("unless_met"))]
+
+
+def _render_evidence(evidence: Dict, met: bool = False) -> List[str]:
     """A row's evidence as lines: each thing found and where, each thing
     looked for and not found, then each place looked. Every value is collected text, so all of it is escaped."""
     esc = html.escape
     lines = []
-    for item in evidence.get("found") or []:
+    for item in _applicable(evidence.get("found"), met):
         text = esc(item.get("text") or "")
         where = _path_link(item) if item.get("path") else ""
         if text and where:
@@ -541,9 +548,9 @@ def _render_evidence(evidence: Dict) -> List[str]:
         if item.get("quote"):
             body += f": “{esc(item['quote'])}”"
         lines.append(f'<div class="evidence"><b>Found:</b> {body}</div>')
-    for item in evidence.get("missing") or []:
+    for item in _applicable(evidence.get("missing"), met):
         lines.append(f'<div class="evidence"><b>Not found:</b> {esc(item.get("text") or "")}</div>')
-    for item in evidence.get("searched") or []:
+    for item in _applicable(evidence.get("searched"), met):
         paths = ", ".join(_path_link(p) for p in item.get("paths") or [] if p.get("path"))
         lines.append(
             f'<div class="evidence"><b>{esc(item.get("text") or "Searched")}:</b> '

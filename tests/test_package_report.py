@@ -341,3 +341,13 @@ class TestCrossSectionEvidence:
         ev = CollaborationCollector._install_evidence(registries, lookups)
         assert ev["missing"] == [{"text": "an install command for r (spack)"}]
         assert ev["searched"][0]["paths"] == [{"path": "https://github.com/o/r"}]
+
+
+class TestUnlessMet:
+    def test_item_is_dropped_from_a_met_row_only(self):
+        from package_report import _render_evidence
+        evidence = {"missing": [{"text": "an SPDX id", "unless_met": True}, {"text": "other"}]}
+        met = "".join(_render_evidence(evidence, met=True))
+        unmet = "".join(_render_evidence(evidence, met=False))
+        assert "an SPDX id" not in met and "other" in met
+        assert "an SPDX id" in unmet

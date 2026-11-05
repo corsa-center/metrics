@@ -240,7 +240,9 @@ class TestRowEvidence:
             "License file (GitHub's license detection reported NOASSERTION)")
         assert ev["OSI License Validation"]["missing"] == [{
             "text": "an SPDX license id to check against the OSI-approved list "
-                    "(GitHub's license detection reported NOASSERTION)"}]
+                    "(GitHub's license detection reported NOASSERTION)",
+            # Dropped when the row passes on the license text instead.
+            "unless_met": True}]
 
     def test_project_level_detection_cites_no_file(self, collector):
         # GitLab names a license without a file it served (no download URL).
