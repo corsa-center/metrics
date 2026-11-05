@@ -20,7 +20,7 @@ import httpx
 from collectors.ecosystem.base import (
     COLLECTION_GAP, PUBLIC_CHANNEL_PATTERNS, RepoTree, RetryingTransport, get_threshold,
 )
-from collectors.ecosystem.funding import _excerpt, _readme_source
+from collectors.ecosystem.base import excerpt, readme_source
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ class WelcomenessCollector:
             logger.warning(f"COLLECTION-GAP category=decision_documents reason=exception:{results[1]!r}")
         documents = self._find_decision_documents(tree)
         if looked.get("readme"):
-            looked["readme_source"] = _readme_source(tree)
+            looked["readme_source"] = readme_source(tree)
 
         return {
             "package_name": repo_name,
@@ -159,7 +159,7 @@ class WelcomenessCollector:
                 match = PUBLIC_CHANNEL_PATTERNS[label].search(text)
                 if match:
                     channels.append(label)
-                    looked["readme_matches"][label] = _excerpt(text, match, None)
+                    looked["readme_matches"][label] = excerpt(text, match, None)
         return channels, False, looked
 
     def _find_decision_documents(self, tree) -> Dict[str, Any]:

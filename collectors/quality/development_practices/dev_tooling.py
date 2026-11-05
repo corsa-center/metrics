@@ -21,7 +21,7 @@ import httpx
 from collectors.ecosystem.base import (
     _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
-from collectors.ecosystem.funding import _excerpt
+from collectors.ecosystem.base import excerpt
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,7 @@ class DevToolingCollector:
                     text = re.sub(r"(?m)^\s*#.*$", "", text)  # a comment isn't a step
                 m = marker.search(text) if text and text is not COLLECTION_GAP and marker else None
                 if m:
-                    mark(label, path, _excerpt(text, m, None))
+                    mark(label, path, excerpt(text, m, None))
                     break
         if any(t is COLLECTION_GAP for t in texts):
             for label in [l for l in wanted if l in missing]:
@@ -357,7 +357,7 @@ class DevToolingCollector:
             for label in list(wanted):
                 m = _TOOLING_SECTIONS[label].search(text)
                 if m:
-                    mark(label, path, _excerpt(text, m, None))
+                    mark(label, path, excerpt(text, m, None))
                     wanted.remove(label)
         return {**tooling, "found": found, "missing": missing, "details": details,
                 "searched": searched}

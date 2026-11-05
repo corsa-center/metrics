@@ -32,7 +32,7 @@ import httpx
 from collectors.ecosystem.base import (
     _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
-from collectors.ecosystem.funding import _excerpt, _readme_source
+from collectors.ecosystem.base import excerpt, readme_source
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -215,7 +215,7 @@ class ReliabilityCollector:
             tools, tools_gap, tool_sources = results[0]
         # None when the README couldn't be read, so no badge search is claimed.
         badges = results[3] if isinstance(results[3], dict) else None
-        readme = _readme_source(tree)
+        readme = readme_source(tree)
         if badges:
             tools = sorted(set(tools) | set(badges))
             for tool, badge in badges.items():
@@ -354,7 +354,7 @@ class ReliabilityCollector:
                 m = pattern.search(text)
                 if m and tool not in found:
                     found[tool] = {"text": f"{tool} in CI", "path": path,
-                                   "url": _url(tree, path), "quote": _excerpt(text, m, None)}
+                                   "url": _url(tree, path), "quote": excerpt(text, m, None)}
         return sorted(found), saw_gap, found
 
     async def _read_analysis_workflows(
@@ -431,7 +431,7 @@ class ReliabilityCollector:
                 if m:
                     markers.append(label)
                     seen["found"].append({"text": label, "path": path, "url": _url(tree, path),
-                                          "quote": _excerpt(text, m, None)})
+                                          "quote": excerpt(text, m, None)})
                     break
         return markers, saw_gap, seen
 

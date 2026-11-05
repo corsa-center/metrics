@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, excerpt, get_threshold
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -102,8 +102,6 @@ _MULTIPLE_HOLDERS = 3
 # Recent tags searched for a version number when there are no releases.
 _TAGS_SAMPLED = 20
 
-# Context kept either side of a match quoted from the license text.
-_EXCERPT_CONTEXT = 100
 
 _CITATION_PATHS = ["CITATION.cff"]
 _CODEMETA_PATHS = ["codemeta.json"]
@@ -126,16 +124,8 @@ _BIBTEX_TO_CITATION_FIELD = {
 
 
 def _excerpt(text: str, match: Optional["re.Match"]) -> Optional[str]:
-    """The line of `text` holding `match`, cut to the text around it."""
-    if match is None:
-        return None
-    line_start = text.rfind("\n", 0, match.start()) + 1
-    line_end = text.find("\n", match.end())
-    line_end = len(text) if line_end == -1 else line_end
-    start = max(line_start, match.start() - _EXCERPT_CONTEXT)
-    end = min(line_end, match.end() + _EXCERPT_CONTEXT)
-    body = re.sub(r"\s+", " ", text[start:end]).strip()
-    return ("…" if start > line_start else "") + body + ("…" if end < line_end else "")
+    """The text around `match`, or None without one."""
+    return excerpt(text, match, None) if match else None
 
 
 class FairLicensingCollector:

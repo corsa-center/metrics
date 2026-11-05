@@ -36,7 +36,7 @@ import httpx
 from collectors.ecosystem.base import (
     _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
-from collectors.ecosystem.funding import _excerpt, _readme_source
+from collectors.ecosystem.base import excerpt, readme_source
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -231,7 +231,7 @@ class DeploymentEnvironmentCollector:
                 return_exceptions=True,
             ) if install_docs else []
             # Searched one at a time, so the report can say which named what.
-            readme = _readme_source(tree if isinstance(tree, RepoTree) else None)
+            readme = readme_source(tree if isinstance(tree, RepoTree) else None)
             docs = [(readme, doc_text)] + [
                 ({"path": p, "url": self.forge.web_url(ref, p)}, t)
                 for p, t in zip(install_docs, install_texts)]
@@ -257,7 +257,7 @@ class DeploymentEnvironmentCollector:
         def note(key: str, text: str, path: str, file_text: str, m) -> None:
             if key not in seen:
                 seen[key] = {"text": text, "path": path, "url": self.forge.web_url(ref, path),
-                             "quote": _excerpt(file_text, m, None)}
+                             "quote": excerpt(file_text, m, None)}
 
         families: Dict[str, set] = {name: set() for name in _RUNNER_FAMILIES}
         for path, text in ci_read:
@@ -304,7 +304,7 @@ class DeploymentEnvironmentCollector:
                 m = pattern.search(text)
                 if m:
                     documented.append(name)
-                    seen[f"doc:{name}"] = {"text": name, **source, "quote": _excerpt(text, m, None)}
+                    seen[f"doc:{name}"] = {"text": name, **source, "quote": excerpt(text, m, None)}
                     break
         documented.sort()
 

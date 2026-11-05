@@ -204,10 +204,13 @@ be linked from the package's dashboard page:
 - how the dimension scores are computed (the average of each collector's
   percentage, listed per collector) and weighted into the overall score, and
   which collectors the project's config turned off
-- for rows whose collector records it, what was found and in which file (with
-  the quoted text, for a funder acknowledgment), what was looked for and not
-  found, and where it looked, so a ✗ row says which files were searched.
-  Governance documents (4.2.1) and funding (4.2.8) record this so far.
+- for rows whose collector records it, what was found and in which file
+  (with the matched text quoted where a pattern matched), what was looked for
+  and not found, and where it looked, so a ✗ row says which files were
+  searched. Every section records this except the rows that are counts
+  already shown in their value (4.2.3, 4.2.4, 4.2.10, CI/CD effectiveness,
+  test coverage, citations) and rows that are never collected. A lookup that
+  failed claims nothing.
 - a "How this is measured" link on each section to its entry in
   [METRICS_CATALOG.md](METRICS_CATALOG.md)
 

@@ -27,7 +27,7 @@ import httpx
 from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
 from forge.interface import Forge
 from collectors.ecosystem.community_health import _DEEP_DOC_PATTERNS, readme_contributing_section
-from collectors.ecosystem.funding import _readme_source
+from collectors.ecosystem.base import readme_source
 from collectors.quality.usability import readme_mentions
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ class OutreachCollector:
             if isinstance(readme, str):
                 # Recorded even when nothing in it counts, so the report can
                 # say the README was searched.
-                onboarding["readme"] = _readme_source(tree)
+                onboarding["readme"] = readme_source(tree)
             if readme:
                 self._credit_readme(onboarding, readme)
 

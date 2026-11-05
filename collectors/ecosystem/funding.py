@@ -32,7 +32,8 @@ import httpx
 import yaml
 
 from collectors.ecosystem.base import (
-    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
+    _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, excerpt, get_threshold,
+    readme_source,
 )
 from forge.interface import Forge
 
@@ -141,39 +142,6 @@ _FUNDING_HEADING = re.compile(
     rf"^\s{{0,3}}#{{1,6}}\s+{_FUNDING_TOPIC}.*$"
     rf"|^[ \t]*{_FUNDING_TOPIC}[^\n]*\n[ \t]*([=\-~^*#])\1{{2,}}[ \t]*$", re.I | re.M)
 _NEXT_HEADING = re.compile(r"^\s{0,3}#{1,6}\s|^[^\n]+\n[ \t]*([=\-~^*#])\1{2,}[ \t]*$", re.M)
-
-# Context kept either side of an agency's name in an acknowledgment excerpt.
-_EXCERPT_BEFORE, _EXCERPT_AFTER = 80, 120
-
-# Where forge.readme() can have read from. GitHub also accepts a README in
-# .github/ or docs/, but the root one is by far the usual case.
-_README_FILE = r"^(?:\.github/|docs/)?readme(?:\.[a-z]+)?$"
-
-
-def _readme_source(tree) -> Dict[str, Optional[str]]:
-    """The README's path and URL, from the tree; just "README" without one."""
-    if tree is None or tree is COLLECTION_GAP:
-        return {"path": "README", "url": None}
-    paths = sorted(tree.find(_README_FILE), key=lambda p: ("/" in p, p))
-    if not paths:
-        return {"path": "README", "url": None}
-    return {"path": paths[0], "url": tree.match_url([paths[0]])}
-
-
-def _excerpt(window: str, match: "re.Match", heading: Optional[str]) -> str:
-    """The line of `window` holding `match`, cut to the text around it, after
-    the heading it sits under (if any)."""
-    line_start = window.rfind("\n", 0, match.start()) + 1
-    line_end = window.find("\n", match.end())
-    line_end = len(window) if line_end == -1 else line_end
-    start = max(line_start, match.start() - _EXCERPT_BEFORE)
-    end = min(line_end, match.end() + _EXCERPT_AFTER)
-    text = re.sub(r"\s+", " ", window[start:end]).strip()
-    if start == line_start:
-        text = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text)  # list marker
-    text = ("…" if start > line_start else "") + text + ("…" if end < line_end else "")
-    return f"{heading}: {text}" if heading else text
-
 
 def _grant_evidence(grant: Dict[str, Any]) -> Dict[str, Any]:
     """A grant as a report evidence item: what was found, where, and for an
@@ -328,7 +296,7 @@ class FundingCollector:
         if text is COLLECTION_GAP:
             saw_gap = True
         elif text is not None:
-            texts.append((_readme_source(tree), text))
+            texts.append((readme_source(tree), text))
 
         if tree is COLLECTION_GAP:
             saw_gap = True
@@ -393,7 +361,7 @@ class FundingCollector:
                     continue
                 m = re.search(pattern, window, re.IGNORECASE)
                 if m:
-                    found[agency] = _excerpt(window, m, heading)
+                    found[agency] = excerpt(window, m, heading)
         return list(found.items())
 
     async def _get_affiliations(

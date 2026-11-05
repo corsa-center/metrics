@@ -21,7 +21,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.funding import _excerpt
+from collectors.ecosystem.base import excerpt
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.interface import Forge
 
@@ -178,7 +178,7 @@ class StaticAnalysisCollector:
                 m = pattern.search(text)
                 if m:
                     return {"file": entry["path"], "url": entry.get("html_url", ""),
-                            "scanner": scanner, "quote": _excerpt(text, m, None)}
+                            "scanner": scanner, "quote": excerpt(text, m, None)}
             return {}
 
         results = await asyncio.gather(*[check_file(e) for e in yaml_files])

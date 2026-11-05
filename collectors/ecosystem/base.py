@@ -409,3 +409,40 @@ def configure_threshold_overrides(overrides: Optional[Dict[str, Dict[str, Any]]]
     """Install threshold overrides from config/orchestrator.yaml's `thresholds:`
     block. Call once at startup, before any collector runs."""
     _REGISTRY.set_overrides(overrides)
+
+
+# --------------------------------------------------------------------------- #
+# Report evidence helpers (see package_report.py)                             #
+# --------------------------------------------------------------------------- #
+
+# Context kept either side of a match in a report excerpt.
+_EXCERPT_BEFORE, _EXCERPT_AFTER = 80, 120
+
+# Where forge.readme() can have read from. GitHub also accepts a README in
+# .github/ or docs/, but the root one is by far the usual case.
+_README_FILE = r"^(?:\.github/|docs/)?readme(?:\.[a-z]+)?$"
+
+
+def readme_source(tree) -> Dict[str, Optional[str]]:
+    """The README's path and URL, from the tree; just "README" without one."""
+    if tree is None or tree is COLLECTION_GAP:
+        return {"path": "README", "url": None}
+    paths = sorted(tree.find(_README_FILE), key=lambda p: ("/" in p, p))
+    if not paths:
+        return {"path": "README", "url": None}
+    return {"path": paths[0], "url": tree.match_url([paths[0]])}
+
+
+def excerpt(window: str, match: "re.Match", heading: Optional[str]) -> str:
+    """The line of `window` holding `match`, cut to the text around it, after
+    the heading it sits under (if any)."""
+    line_start = window.rfind("\n", 0, match.start()) + 1
+    line_end = window.find("\n", match.end())
+    line_end = len(window) if line_end == -1 else line_end
+    start = max(line_start, match.start() - _EXCERPT_BEFORE)
+    end = min(line_end, match.end() + _EXCERPT_AFTER)
+    text = re.sub(r"\s+", " ", window[start:end]).strip()
+    if start == line_start:
+        text = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text)  # list marker
+    text = ("…" if start > line_start else "") + text + ("…" if end < line_end else "")
+    return f"{heading}: {text}" if heading else text
