@@ -32,12 +32,14 @@ _MAX_WORKFLOWS_SAMPLED = 30
 
 
 def _duration(seconds: float) -> str:
-    """Seconds as the unit a reader would use: minutes, hours or days."""
+    """Seconds as seconds or minutes when short, else hours -- the unit
+    every threshold here is set in, so the two read side by side."""
+    if seconds < 60:
+        return f"{seconds:.0f} s"
     if seconds < 3600:
         return f"{seconds / 60:.0f} min"
-    if seconds < 3 * 86400:
-        return f"{seconds / 3600:.1f} h"
-    return f"{seconds / 86400:.1f} days"
+    hours = seconds / 3600
+    return f"{hours:.1f} h" if hours < 10 else f"{hours:,.0f} h"
 
 
 def _checks_evidence(checks: List[tuple]) -> Dict[str, List[Dict[str, str]]]:

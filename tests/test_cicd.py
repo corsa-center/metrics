@@ -189,3 +189,11 @@ class TestChecksEvidence:
                                      orch._metric_weights())
         assert "<b>Not found:</b> Workflow success rate over 60% (measured: 55%)" in page
         assert "Deployment frequency not scored: the repository records no deployments" in page
+
+
+class TestDuration:
+    @pytest.mark.parametrize("seconds,shown", [(25, "25 s"), (12 * 60, "12 min"),
+                                               (2 * 3600, "2.0 h"), (113 * 3600, "113 h")])
+    def test_units_match_the_thresholds(self, seconds, shown):
+        from collectors.quality.development_practices.ci_cd import _duration
+        assert _duration(seconds) == shown

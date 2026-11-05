@@ -1408,8 +1408,13 @@ class MetricsOrchestrator:
         sub_metrics = impact_sub.get("sub_metrics", {})
         if sub_metrics:
             citation_lines = []
+            # Shown at 0 too: the report's evidence under it says which DOIs
+            # were looked up, or that none was declared -- the line a team
+            # with no citations most needs.
             formal = sub_metrics.get("formal_citations", {})
-            if formal.get("raw_value", 0) > 0:
+            if formal.get("not_collected"):
+                citation_lines.append('<p><strong>Formal Citations:</strong> Not yet collected</p>')
+            elif formal.get("raw_value") is not None:
                 citation_lines.append(
                     f'<p><strong>Formal Citations:</strong> {formal["raw_value"]:,}</p>'
                 )
@@ -1452,8 +1457,10 @@ class MetricsOrchestrator:
                 )
             downloads = collab.get("package_downloads", {})
             if downloads.get("total", 0) > 0:
+                # Named by package: two conda packages ("hdf5", "hdf5-static")
+                # read as "conda …, conda …" otherwise.
                 by_registry = ", ".join(
-                    f'{d["ecosystem"]} {d["downloads"]:,} ({d.get("period") or "n/a"})'
+                    f'{d["name"]} ({d["ecosystem"]}) {d["downloads"]:,} ({d.get("period") or "n/a"})'
                     for d in downloads.get("by_registry", [])
                 )
                 citation_lines.append(

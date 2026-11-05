@@ -53,6 +53,9 @@ class SemanticScholarClient(BaseAPIClient):
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
+                # Whether any request failed rather than came back not found:
+                # "status" lets a caller tell no citations from no answer.
+                failed = False
                 # Search by DOI first (more accurate)
                 if doi:
                     url = f"{self.BASE_URL}/paper/DOI:{doi}"
@@ -69,10 +72,12 @@ class SemanticScholarClient(BaseAPIClient):
                             "title": data.get("title"),
                             "year": data.get("year"),
                             "paper_id": data.get("paperId"),
+                            "via": "doi", "status": "found",
                         }
                     elif response.status_code == 404:
                         self.logger.debug(f"Paper not found for DOI: {doi}")
                     else:
+                        failed = True
                         self.logger.warning(
                             f"Semantic Scholar API error: {response.status_code}"
                         )
@@ -101,16 +106,19 @@ class SemanticScholarClient(BaseAPIClient):
                                 "title": paper.get("title"),
                                 "year": paper.get("year"),
                                 "paper_id": paper.get("paperId"),
+                                "via": "title", "query": title, "status": "found",
                             }
+                    else:
+                        failed = True
 
-                return {"citation_count": 0}
+                return {"citation_count": 0, "status": "failed" if failed else "not_found"}
 
         except httpx.TimeoutException:
             self.logger.error("Semantic Scholar API timeout")
-            return {"citation_count": 0}
+            return {"citation_count": 0, "status": "failed"}
         except Exception as e:
             self.logger.error(f"Error fetching Semantic Scholar data: {e}")
-            return {"citation_count": 0}
+            return {"citation_count": 0, "status": "failed"}
 
     async def get_mentions(self, title: str, include_informal: bool = False) -> int:
         """

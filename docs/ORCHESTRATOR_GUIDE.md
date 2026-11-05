@@ -208,9 +208,11 @@ be linked from the package's dashboard page:
   (with the matched text quoted where a pattern matched), what was looked for
   and not found, and where it looked, so a ✗ row says which files were
   searched. Every section records this except the rows that are counts
-  already shown in their value (4.2.3, 4.2.4, 4.2.10, CI/CD effectiveness,
-  test coverage, citations) and rows that are never collected. A lookup that
-  failed claims nothing.
+  already shown in their value (4.2.3, 4.2.4, 4.2.10, test coverage) and
+  rows that are never collected. Formal Citations (4.1.1) links the citing
+  works on OpenAlex and the matched Semantic Scholar paper and names the
+  DOIs looked up; CI/CD Effectiveness gives each check's measured value
+  against its threshold. A lookup that failed claims nothing.
 - a "How this is measured" link on each section to its entry in
   [METRICS_CATALOG.md](METRICS_CATALOG.md)
 
