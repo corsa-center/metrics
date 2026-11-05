@@ -35,6 +35,14 @@ _README_SECTIONS = {
     "Support": r"(?:support|help|contact|community|questions|mailing list|who (?:do|to) (?:i )?talk to)",
 }
 
+# What each of _README_SECTIONS accepts, in words, for the report.
+README_SECTION_TERMS = {
+    "Installation": "install, build, building, getting started, setup",
+    "Usage": "usage, using, quick start, how to use, basic use, tutorial",
+    "Examples": "example, demo, sample",
+    "Support": "support, help, contact, community, questions, mailing list, who to talk to",
+}
+
 _DOC_DIRECTORIES = ["docs", "doc", "documentation"]
 
 # Markdown ATX headings and Setext underlines both appear in real READMEs.
@@ -60,12 +68,23 @@ def readme_covers(text: str, label: str) -> bool:
 def readme_mentions(text: str, pattern: str) -> bool:
     """Whether a README heading, or link text starting with the topic,
     matches pattern."""
+    return readme_match(text, pattern) is not None
+
+
+def readme_match(text: str, pattern: str) -> Optional[Tuple[str, str]]:
+    """The first README heading matching pattern, or else the first link
+    text starting with the topic, as ("heading" or "link", its text)."""
     atx = _ATX_HEADING.findall(text)
     headings = atx + _SETEXT_HEADING.findall(text)
     if not atx:
         headings += _PLAIN_HEADING.findall(text)
-    return (any(re.search(pattern, h, re.IGNORECASE) for h in headings)
-            or any(re.match(rf"\W*{pattern}", t, re.IGNORECASE) for t in _LINK_TEXT.findall(text)))
+    for heading in headings:
+        if re.search(pattern, heading, re.IGNORECASE):
+            return "heading", heading.strip()
+    for link in _LINK_TEXT.findall(text):
+        if re.match(rf"\W*{pattern}", link, re.IGNORECASE):
+            return "link", link.strip()
+    return None
 
 
 class UsabilityCollector:
@@ -91,6 +110,9 @@ class UsabilityCollector:
                 return_exceptions=False,
             )
         doc_dir, doc_dir_gap = self._find_doc_directory(tree)
+        overall = self._calculate_score(readme, doc_dir, site, doc_dir_gap or site_gap)
+        overall["sub_scores"]["documentation_completeness"]["evidence"] = (
+            self._documentation_evidence(readme, tree, doc_dir, site, doc_dir_gap, site_gap))
 
         return {
             "package_name": repo_name,
@@ -99,10 +121,48 @@ class UsabilityCollector:
             "readme": readme,
             "doc_directory": doc_dir,
             "documentation_site": site,
-            "overall_score": self._calculate_score(
-                readme, doc_dir, site, doc_dir_gap or site_gap
-            ),
+            "overall_score": overall,
         }
+
+    def _documentation_evidence(
+        self, readme: Dict, tree, doc_dir: Optional[str], site: Optional[Dict],
+        doc_dir_gap: bool, site_gap: bool,
+    ) -> Dict[str, Any]:
+        """What Documentation Completeness Analysis found and where it looked.
+
+        The dashboard lists the README sections found; this adds the heading
+        or link that counted, the words that would count for each one
+        missing, and where the documentation directory and site are, or
+        where they were looked for. Nothing is claimed for a lookup that
+        gapped.
+        """
+        found, missing, searched = [], [], []
+        for label, match in readme.get("matched", {}).items():
+            item = {"text": f"{label} (README {match['kind']})"}
+            # A heading that is just the section's name says nothing more.
+            if match["text"].casefold() != label.casefold():
+                item["quote"] = match["text"]
+            found.append(item)
+        if readme.get("exists"):
+            for label in readme.get("missing", []):
+                missing.append({"text": f"{label} section in the README (a heading or link "
+                                        f"text: {README_SECTION_TERMS[label]})"})
+        elif not readme.get("not_collected"):
+            missing.append({"text": "README"})
+        if doc_dir:
+            path = tree.match([doc_dir])
+            found.append({"path": f"{path}/", "url": tree.match_url([doc_dir])})
+        elif not doc_dir_gap:
+            missing.append({"text": "documentation directory"})
+            searched.append({"text": "Documentation directories looked for (any capitalization)",
+                             "paths": [{"path": f"{d}/"} for d in _DOC_DIRECTORIES]})
+        if site:
+            found.append({"text": f"Documentation site ({site['source']})",
+                          "path": site["url"], "url": site["url"]})
+        elif not site_gap:
+            missing.append({"text": "documentation site (the repository sets no homepage and "
+                                    f"has no {self.forge.display_name} Pages site)"})
+        return {"found": found, "missing": missing, "searched": searched}
 
     async def _analyze_readme(
         self, client: httpx.AsyncClient, ref: str
@@ -117,13 +177,17 @@ class UsabilityCollector:
         if text is None:
             return {"exists": False, "sections": [], "missing": list(_README_SECTIONS)}
 
-        found = [label for label in _README_SECTIONS if readme_covers(text, label)]
+        matches = {label: readme_match(text, pattern) for label, pattern in _README_SECTIONS.items()}
+        found = [label for label, match in matches.items() if match]
         return {
             "exists": True,
             "length": len(text),
             "heading_count": len(_ATX_HEADING.findall(text) + _SETEXT_HEADING.findall(text)),
             "sections": found,
             "missing": [s for s in _README_SECTIONS if s not in found],
+            # The heading or link text that counted for each, for the report.
+            "matched": {label: {"kind": match[0], "text": match[1]}
+                        for label, match in matches.items() if match},
         }
 
     def _find_doc_directory(self, tree) -> tuple:

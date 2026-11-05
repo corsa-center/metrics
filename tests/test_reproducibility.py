@@ -472,3 +472,181 @@ class TestManagedDependencies:
         import re
         assert not re.search(_TREE_PATTERNS[("reproducibility_docs", "Environment specification")],
                              "lib/spack/spack/package.py")
+
+
+class TestRowEvidence:
+    """What each 4.3.3 row found and where it looked, for report.html (#99)."""
+
+    def _collect(self, collector, files, readme=None, semver=None):
+        import base64
+        from unittest.mock import patch
+        tree = RepoTree(FakeForge(), "o/r", list(files), truncated=False)
+        semver = semver or {"uses_semver": False, "releases_checked": 0, "semver_count": 0,
+                            "example_tags": [], "tags_checked": [], "source": "releases"}
+
+        async def get(client, url, params=None):
+            if url.endswith("/readme"):
+                if readme is COLLECTION_GAP or not readme:
+                    return readme
+                return {"content": base64.b64encode(readme.encode()).decode()}
+            text = files.get(url.split("/contents/", 1)[-1])
+            return {"content": base64.b64encode(text.encode()).decode()} if text else None
+
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)), \
+             patch.object(collector.forge, "_github_get", side_effect=get):
+            r = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        return {v["label"]: v["evidence"] for v in r["row_evidence"].values()}
+
+    def test_found_files_keep_their_path_and_link(self, collector):
+        ev = self._collect(collector, {"CITATION.cff": "x", ".zenodo.json": "x",
+                                       "scripts/docker/Dockerfile": "x"})
+        assert ev["FAIR4RS Compliance Assessment"] == {"found": [
+            {"path": "CITATION.cff", "url": "https://github.com/o/r/blob/HEAD/CITATION.cff"},
+            {"path": ".zenodo.json", "url": "https://github.com/o/r/blob/HEAD/.zenodo.json",
+             "text": "Zenodo metadata"},
+        ]}
+        assert ev["Containerization Excellence"]["found"][0]["path"] == "scripts/docker/Dockerfile"
+
+    def test_nothing_found_says_what_was_looked_for_and_where(self, collector):
+        ev = self._collect(collector, {"src/main.c": "x"})["Containerization Excellence"]
+        assert ev["missing"] == [{"text": "Dockerfile, docker-compose, Singularity / Apptainer"}]
+        searched = {s["text"]: [p["path"] for p in s["paths"]] for s in ev["searched"]}
+        assert "docker/Dockerfile" in searched["Paths checked (any capitalization)"]
+        assert "anywhere outside vendored directories" in searched["Dockerfile also looked for"][0]
+
+    def test_gapped_tree_claims_nothing(self, collector):
+        from unittest.mock import patch
+        semver = {"uses_semver": False, "releases_checked": 0, "semver_count": 0,
+                  "example_tags": [], "not_collected": True}
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=COLLECTION_GAP)), \
+             patch.object(collector, "_check_semantic_versioning", new=AsyncMock(return_value=semver)):
+            r = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        assert all(v["evidence"] == {} for v in r["row_evidence"].values())
+
+    def test_environment_management_lists_what_it_read(self, collector):
+        dependabot = 'version: 2\nupdates:\n  - package-ecosystem: "github-actions"\n'
+        ev = self._collect(collector, {
+            "pyproject.toml": '[project]\ndependencies = ["numpy"]\n',
+            ".github/dependabot.yml": dependabot,
+        })["Environment Management"]
+        assert ev["missing"][0]["text"].startswith("a lockfile, a manifest")
+        searched = {s["text"]: [p["path"] for p in s["paths"]] for s in ev["searched"]}
+        assert searched["Root manifests read for version constraints "
+                        "(pyproject.toml, fpm.toml, Project.toml)"] == ["pyproject.toml"]
+        assert searched["Dependabot configuration read (it updates only github-actions)"] == [
+            ".github/dependabot.yml"]
+        assert "spack.yaml" in searched["Environment specification paths checked (any capitalization)"]
+
+    def test_environment_management_without_manifests_or_dependabot(self, collector):
+        ev = self._collect(collector, {"src/main.c": "x"})["Environment Management"]
+        searched = {s["text"]: s["paths"] for s in ev["searched"]}
+        assert searched["Root manifests read for version constraints "
+                        "(pyproject.toml, fpm.toml, Project.toml)"] == []
+        assert searched["Dependabot configuration (.github/dependabot.yml, "
+                        ".github/dependabot.yaml)"] == []
+
+    def test_unreadable_manifest_is_not_reported_as_absent(self, collector):
+        # Present in the tree, but its contents didn't come back.
+        ev = self._collect(collector, {"pyproject.toml": ""})["Environment Management"]
+        assert not any(s["text"].startswith("Root manifests") for s in ev["searched"])
+
+    def test_environment_specification_counts_for_environment_management(self, collector):
+        ev = self._collect(collector, {"share/spack/spack.yaml": "x"})["Environment Management"]
+        assert ev == {"found": [{"path": "share/spack/spack.yaml", "text": "Environment specification",
+                                 "url": "https://github.com/o/r/blob/HEAD/share/spack/spack.yaml"}]}
+
+    def test_readme_read_without_an_install_section_is_said(self, collector):
+        ev = self._collect(collector, {"src/main.c": "x"}, readme="# Pkg\ntext\n")
+        missing = [m["text"] for m in ev["Reproducibility Documentation"]["missing"]]
+        assert missing[0] == "Install / build guide, Release / build notes, Environment specification"
+        assert missing[1].startswith(
+            "an installation section in the README (a heading or link text: install")
+
+    def test_gapped_readme_is_not_claimed_as_read(self, collector):
+        ev = self._collect(collector, {"src/main.c": "x"}, readme=COLLECTION_GAP)
+        assert len(ev["Reproducibility Documentation"]["missing"]) == 1
+
+    def test_readme_install_section_is_found_in_the_readme(self, collector):
+        ev = self._collect(collector, {"src/main.c": "x"}, readme="# Pkg\n## Building\nmake\n")
+        assert ev["Reproducibility Documentation"]["found"] == [{
+            "text": "Install / build guide", "path": "README (installation section)",
+            "url": "https://github.com/o/r"}]
+
+
+class TestVersioningEvidence:
+    def test_tags_that_carried_a_version_by_scheme(self):
+        from collectors.quality.reproducibility import _versioning_evidence
+        semver = ReproducibilityCollector._summarize_tags(["26.09", "v1.2.3", "nightly", "26.08"])
+        assert _versioning_evidence(semver) == {"found": [
+            {"text": "26.09, 26.08 (calendar versions)"}, {"text": "v1.2.3 (semantic versions)"}]}
+
+    def test_release_tags_without_a_version(self):
+        from collectors.quality.reproducibility import _versioning_evidence
+        semver = {**ReproducibilityCollector._summarize_tags(["Initial release"]), "source": "releases"}
+        ev = _versioning_evidence(semver)
+        assert ev["missing"][0]["text"].startswith("a version in any tag checked")
+        assert ev["searched"] == [{"text": "Tags of the most recent releases checked",
+                                   "paths": [{"path": "Initial release"}]}]
+
+    def test_no_releases_says_tags_were_checked_instead(self, collector):
+        from collectors.quality.reproducibility import _versioning_evidence
+        release_resp = MagicMock(status_code=200)
+        release_resp.json.return_value = []
+        tag_resp = MagicMock(status_code=200)
+        tag_resp.json.return_value = [{"name": "nightly"}]
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[release_resp, tag_resp])
+        semver = asyncio.run(collector._check_semantic_versioning(client, "o/r"))
+        assert _versioning_evidence(semver)["searched"] == [
+            {"text": "Published releases", "paths": []},
+            {"text": "Tags checked instead", "paths": [{"path": "nightly"}]},
+        ]
+
+    def test_gap_claims_nothing(self):
+        from collectors.quality.reproducibility import _versioning_evidence
+        assert _versioning_evidence({"uses_semver": False, "not_collected": True}) == {}
+
+    def test_every_tree_search_is_described(self):
+        from collectors.quality.reproducibility import _TREE_PATTERNS, _TREE_SEARCHES
+        assert _TREE_SEARCHES.keys() == _TREE_PATTERNS.keys()
+
+
+class TestReportRendering:
+    def test_row_evidence_reaches_the_four_three_three_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import build_report, render_package_report
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        collector = ReproducibilityCollector(GitHubForge())
+        categories = collector._scan_files(
+            RepoTree(FakeForge(), "o/r", ["CITATION.cff", "src/main.c"], truncated=False))
+        categories["semantic_versioning"] = {
+            **ReproducibilityCollector._summarize_tags(["v1.2.3"]), "source": "releases"}
+        reproducibility = {
+            "has_fair4rs_metadata": True, "has_container": False,
+            "uses_semantic_versioning": True, "has_dependency_pinning": False,
+            "has_reproducibility_docs": False, "categories": categories,
+            "overall_score": {"percentage": 50.0},
+            "row_evidence": collector._row_evidence(categories, None, False),
+        }
+        metrics = {"overall_score": 0, "last_updated": "2026-11-05T00:00:00+00:00", "dimensions": {
+            "impact": {"score": 0.0, "metadata": {"status": "placeholder"}},
+            "ecosystem": {"score": 0.0, "sub_results": {}},
+            "quality": {"score": 50.0, "sub_results": {"reproducibility": reproducibility}},
+        }}
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        sec = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.3.3")
+        rows = {r["label"]: r["evidence"] for r in sec["rows"]}
+        assert rows["FAIR4RS Compliance Assessment"]["found"][0]["path"] == "CITATION.cff"
+        assert rows["Containerization Excellence"]["missing"][0]["text"].startswith("Dockerfile")
+        assert rows["Version Control Best Practices"]["found"] == [
+            {"text": "v1.2.3 (semantic versions)"}]
+
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        assert ('<b>Found:</b> <a href="https://github.com/o/r/blob/HEAD/CITATION.cff">'
+                'CITATION.cff</a>') in page
+        assert "<b>Found:</b> v1.2.3 (semantic versions)" in page
+        assert "<b>Not found:</b> Dockerfile, docker-compose, Singularity / Apptainer" in page
+        assert "<b>Paths checked (any capitalization):</b> Dockerfile, docker/Dockerfile" in page
+        assert "<b>Lockfile paths checked (any capitalization):</b> requirements.txt" in page
