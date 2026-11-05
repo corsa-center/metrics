@@ -269,3 +269,27 @@ class TestEvidence:
         assert evidence_index(impact)["Advanced Dependency Analysis"]["found"][0]["text"] == "impact"
         assert evidence_index(eco)["Advanced Dependency Analysis"]["found"][0]["text"] == "eco"
         assert evidence_index(None) == {}
+
+
+class TestGovernanceEvidence:
+    def test_row_evidence_reaches_the_four_two_one_rows(self, orchestrator):
+        from collectors.ecosystem.community_health import CommunityHealthCollector
+        c = CommunityHealthCollector(None)
+        missing = {"exists": False, "looked_in_repos": ["o/r", "o/governance"]}
+        found = {"exists": True, "file_path": "CODE_OF_CONDUCT.md", "url": "https://x/coc",
+                 "repository": "o/r"}
+        keywords = {"terms_found": {"Decision process": ["<vote>"]}, "documents": []}
+        governance = {
+            "code_of_conduct": found, "governance": missing, "contributing_guidelines": found,
+            "keyword_analysis": {"groups_found": ["Decision process"], **keywords},
+            "effectiveness": {}, "overall_score": {"max_score": 3},
+            "row_evidence": c._row_evidence("o/r", found, missing, found, keywords, {}),
+        }
+        metrics = _metrics(sub_results={"governance": governance})
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        assert "<b>Not found:</b> Governance</div>" in page
+        assert "<b>Governance also looked for in:</b> the o/governance repository" in page
+        assert "<b>Found:</b> Decision process (matched: &lt;vote&gt;)" in page
+        assert "<b>Not found:</b> Membership lifecycle (looked for: nomination" in page

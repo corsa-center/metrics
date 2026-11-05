@@ -279,3 +279,125 @@ class TestDeeperLookup:
             result = asyncio.run(collector._analyze_governance_keywords(None, [doc]))
             get.assert_not_called()
         assert result["documents_read"] == 1
+
+
+class TestWhereItLooked:
+    """Each stage of the search records where a missing document was looked
+    for, so the report can say (#99)."""
+
+    def test_primary_miss_records_the_repo(self, collector):
+        out = collector._match_pattern({}, collector.GOVERNANCE_PATTERNS, "o/r")
+        assert out["looked_in_repos"] == ["o/r"]
+
+    def test_gapped_miss_claims_no_search(self, collector):
+        out = collector._match_pattern({}, collector.GOVERNANCE_PATTERNS, "o/r", has_gap=True)
+        assert "looked_in_repos" not in out
+
+    def test_fallback_repos_are_added_whether_or_not_they_exist(self, collector):
+        index = {"governance.md": _entry("GOVERNANCE.md")}
+
+        async def fake_index(client, ref):
+            # o/governance exists with only a governance doc; o/.github doesn't exist.
+            return (index, False) if ref == "o/governance" else ({}, False)
+
+        primary = collector._match_pattern({}, collector.COC_PATTERNS, "o/r")
+        with patch.object(collector, "_build_file_index", new=fake_index):
+            coc, gov, _ = asyncio.run(collector._check_fallback_repos(
+                None, "o", primary, _not_found(), _found("CONTRIBUTING.md")))
+        assert coc["looked_in_repos"] == ["o/r", "o/governance", "o/.github"]
+        assert gov["exists"] and gov["repository"] == "o/governance"
+
+    def test_deeper_lookup_records_the_doc_tree_and_readme(self, collector):
+        coc, _, contrib = TestDeeperLookup()._run(collector, ["src/main.c"], "# X\n")
+        assert coc["searched_doc_tree"] and contrib["searched_doc_tree"]
+        assert contrib["searched_readme"] and "searched_readme" not in coc
+
+    def test_keyword_analysis_keeps_matched_terms_and_documents(self, collector):
+        doc = _found("GOVERNANCE.md")
+        with patch.object(collector, "_get_file_text",
+                          new=AsyncMock(return_value="Decided by consensus or a vote of maintainers")):
+            result = asyncio.run(collector._analyze_governance_keywords(None, [doc]))
+        assert result["terms_found"] == {
+            "Decision process": ["consensus", "vote"], "Defined roles": ["maintainer"]}
+        assert result["documents"] == [
+            {"path": "GOVERNANCE.md", "url": doc["url"], "repository": "x/y"}]
+
+    def test_effectiveness_names_the_codeowners_file_and_freshest_doc(self, collector):
+        collector.forge = FakeForge()
+        docs = [_found("GOVERNANCE.md"), _found("CONTRIBUTING.md")]
+
+        async def exists(client, ref, path):
+            return {"exists": path == ".github/CODEOWNERS", "url": f"https://x/{path}"}
+
+        async def age(client, ref, path):
+            return {"GOVERNANCE.md": 400, "CONTRIBUTING.md": 12}[path]
+
+        with patch.object(collector, "_check_file_exists", new=exists), \
+             patch.object(collector, "_days_since_last_change", new=age):
+            eff = asyncio.run(collector._assess_effectiveness(None, "x/y", docs))
+        assert eff["codeowners"] == {"path": ".github/CODEOWNERS", "url": "https://x/.github/CODEOWNERS"}
+        assert eff["days_since_governance_update"] == 12
+        assert eff["freshest_document"]["path"] == "CONTRIBUTING.md"
+        assert ".github/CODEOWNERS" in eff["codeowners_paths_checked"]
+
+
+class TestRowEvidence:
+    def _evidence(self, collector, coc=None, gov=None, contrib=None, keywords=None, eff=None):
+        def here(path):
+            return {**_found(path), "repository": "o/r"}
+        rows = collector._row_evidence(
+            "o/r", coc or here("CODE_OF_CONDUCT.md"), gov or here("GOVERNANCE.md"),
+            contrib or here("CONTRIBUTING.md"), keywords or {}, eff or {},
+        )
+        return {row["label"]: row["evidence"] for row in rows.values()}
+
+    def test_missing_document_says_what_was_tried_and_where(self, collector):
+        missing = {**_not_found(), "looked_in_repos": ["o/r", "o/governance", "o/.github"],
+                   "searched_doc_tree": True, "searched_readme": True}
+        ev = self._evidence(collector, contrib=missing)["Enhanced Document Detection"]
+        assert ev["missing"] == [{"text": "Contributing Guidelines"}]
+        names, elsewhere = ev["searched"]
+        assert names["text"] == "Contributing Guidelines file names tried in o/r (any capitalization)"
+        assert {"path": ".github/CONTRIBUTING.md"} in names["paths"]
+        assert [p["path"] for p in elsewhere["paths"]] == [
+            "the o/governance repository", "the o/.github repository",
+            "anywhere in the documentation tree (docs/, doc/)",
+            "a Contributing section in the README",
+        ]
+
+    def test_not_collected_document_claims_nothing(self, collector):
+        gapped = {**_not_found(), "not_collected": True}
+        ev = self._evidence(collector, gov=gapped)["Enhanced Document Detection"]
+        assert ev == {"found": [], "missing": [], "searched": []}
+
+    def test_found_documents_only_repeat_what_the_dashboard_link_doesnt_say(self, collector):
+        # Same-repo files are already linked on the dashboard row.
+        from_fallback = {**_found("GOVERNANCE.md"), "repository": "o/governance"}
+        readme = {**_found("README"), "repository": "o/r", "source": "README section"}
+        ev = self._evidence(collector, gov=from_fallback, contrib=readme)["Enhanced Document Detection"]
+        assert [(f["text"], f["path"]) for f in ev["found"]] == [
+            ("Governance", "o/governance/GOVERNANCE.md"),
+            ("Contributing Guidelines as a Contributing section", "README"),
+        ]
+
+    def test_keywords_list_matched_and_missing_concepts(self, collector):
+        ev = self._evidence(collector, keywords={
+            "terms_found": {"Decision process": ["consensus"]},
+            "documents": [{"path": "GOVERNANCE.md", "url": "u", "repository": "o/governance"}],
+        })["Governance Keyword Analysis"]
+        assert ev["found"] == [{"text": "Decision process (matched: consensus)"}]
+        assert [m["text"].split(" (")[0] for m in ev["missing"]] == [
+            "Defined roles", "Membership lifecycle", "Conflict resolution"]
+        assert "nomination" in ev["missing"][1]["text"]
+        assert ev["searched"][0]["paths"] == [{"path": "o/governance/GOVERNANCE.md", "url": "u"}]
+
+    def test_effectiveness_without_codeowners_lists_where_it_looked(self, collector):
+        ev = self._evidence(collector, eff={
+            "codeowners": None, "codeowners_paths_checked": ["CODEOWNERS", ".github/CODEOWNERS"],
+            "days_since_governance_update": 12,
+            "freshest_document": {"path": "GOVERNANCE.md", "url": "u", "repository": "o/governance"},
+        })["Governance Effectiveness Assessment"]
+        assert ev["missing"] == [{"text": "CODEOWNERS"}]
+        assert ev["searched"][0]["paths"] == [{"path": "CODEOWNERS"}, {"path": ".github/CODEOWNERS"}]
+        assert ev["found"] == [{"text": "most recent change 12 days ago",
+                                "path": "o/governance/GOVERNANCE.md", "url": "u"}]

@@ -198,8 +198,10 @@ def methodology_links(path: Path = METRICS_CATALOG) -> Dict[str, str]:
 def evidence_index(sub_results: Any) -> Dict[str, Dict]:
     """Row label -> the evidence a collector recorded for it.
 
-    Collectors put an "evidence" dict on a sub-score beside its "label"
-    (see collectors/ecosystem/funding.py); sub-scores sit at different
+    Collectors put an "evidence" dict beside a row's "label": on a
+    sub-score (collectors/ecosystem/funding.py), or for rows the
+    orchestrator builds itself, in a "row_evidence" block
+    (collectors/ecosystem/community_health.py). These sit at different
     depths in different collectors, so every dict is searched. Labels are
     unique within a dimension, which is the scope this is called on.
     """
@@ -503,8 +505,8 @@ def _is_web_url(url: Any) -> bool:
 
 
 def _render_evidence(evidence: Dict) -> List[str]:
-    """A row's evidence as lines: each thing found and where, then each
-    place looked. Every value is collected text, so all of it is escaped."""
+    """A row's evidence as lines: each thing found and where, each thing
+    looked for and not found, then each place looked. Every value is collected text, so all of it is escaped."""
     esc = html.escape
     lines = []
     for item in evidence.get("found") or []:
@@ -517,6 +519,8 @@ def _render_evidence(evidence: Dict) -> List[str]:
         if item.get("quote"):
             body += f": “{esc(item['quote'])}”"
         lines.append(f'<div class="evidence"><b>Found:</b> {body}</div>')
+    for item in evidence.get("missing") or []:
+        lines.append(f'<div class="evidence"><b>Not found:</b> {esc(item.get("text") or "")}</div>')
     for item in evidence.get("searched") or []:
         paths = ", ".join(_path_link(p) for p in item.get("paths") or [] if p.get("path"))
         lines.append(

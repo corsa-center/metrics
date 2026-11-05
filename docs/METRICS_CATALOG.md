@@ -12,6 +12,11 @@ files and by `SECTION_SUBMETRICS` in [`orchestrator.py`](orchestrator.py).
 > [!NOTE]
 > Throughout the metrics collection framework and sustainability dashboard, we refer to 'Ecosystem' in place of the CASS 'Sustainability' dimension.
 
+Each package's `report.html` links every section to its entry here ("How this
+is measured"). For a project's own results, that report also shows, for rows
+whose collector records it, what was found and in which file, and where the
+collector looked when it found nothing.
+
 **Legend:** ✅ collected · 🔲 rendered as "Not yet collected" · ⬜ whole section
 is a stub
 
