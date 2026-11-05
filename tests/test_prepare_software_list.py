@@ -8,10 +8,11 @@ one per scheduled invocation caps what any single run attempts.
 """
 
 import asyncio
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
+from catalog.catalog import Catalog
 from orchestrator import MetricsOrchestrator
 
 
@@ -29,9 +30,10 @@ def orch():
 
 
 async def _prepare(orch, catalog, **kwargs):
-    with patch.object(orch, "load_software_catalog", new=AsyncMock(return_value=catalog)):
-        result = await orch.prepare_software_list(**kwargs)
-        return set(result[1])
+    orch.catalog = Catalog()
+    orch.catalog.load = AsyncMock(return_value=catalog)
+    result = await orch.prepare_software_list(**kwargs)
+    return set(result[1])
 
 
 class TestNoGrouping:
@@ -111,10 +113,11 @@ class TestSingleRepo:
     def test_builds_a_one_entry_catalog_without_the_catalog_url(self, orch):
         async def go():
             # Patched to blow up: the catalog must not be fetched at all.
-            with patch.object(orch, "load_software_catalog", new=AsyncMock(side_effect=AssertionError)):
-                return await orch.prepare_software_list(
-                    repo="https://github.com/HDFGroup/hdf5", repo_type="github", name="HDF5"
-                )
+            orch.catalog = Catalog()
+            orch.catalog.load = AsyncMock(side_effect=AssertionError)
+            return await orch.prepare_software_list(
+                repo="https://github.com/HDFGroup/hdf5", repo_type="github", name="HDF5"
+            )
 
         catalog, software_list = asyncio.run(go())
         assert software_list == ["HDF5"]
@@ -136,6 +139,8 @@ class TestSingleRepo:
 class TestCatalogFetchFailure:
     def test_unreachable_catalog_raises_instead_of_returning_empty(self, orch):
         # An empty dict made a scheduled run report success with 0 packages.
-        with patch.object(orch, "_fetch_catalog_files", return_value=None):
-            with pytest.raises(RuntimeError, match="software catalog"):
-                asyncio.run(orch.load_software_catalog())
+        orch.catalog = Catalog()
+        orch.catalog._fetch_catalog_files=MagicMock(return_value=None)
+        orch.catalog.catalog_url = "https://github.com/HDFGroup/hdf5"
+        with pytest.raises(RuntimeError, match="software catalog"):
+            asyncio.run(orch.prepare_software_list())

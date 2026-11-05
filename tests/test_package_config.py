@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestrator import MetricsOrchestrator, _sanitize_package_config
+from orchestrator import MetricsOrchestrator
+from catalog.catalog import _sanitize_package_config, Catalog
 
 
 def _orch(config=None):
@@ -138,9 +139,9 @@ overrides:
 
 class TestFetchPackageConfig:
     def _fetch(self, resp):
-        o = _orch()
+        c = Catalog(api_credentials={})
         with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
-            return asyncio.run(o._fetch_package_config("https://api.github.com/x"))
+            return asyncio.run(c._fetch_package_config("https://api.github.com/x"))
 
     def test_valid_package_is_returned(self):
         package = self._fetch(_mock_response(content_b64=_b64(_HDF5_YAML)))
@@ -160,11 +161,10 @@ class TestFetchPackageConfig:
 
 class TestLoadSoftwareCatalog:
     def _load(self, entries, packages):
-        o = _orch()
-        o.catalog_url = "https://api.github.com/repos/o/r/contents/package_config"
-        o._fetch_catalog_files = MagicMock(return_value=entries)
-        o._fetch_package_config = AsyncMock(side_effect=lambda url: packages[url])
-        return asyncio.run(o.load_software_catalog())
+        c = Catalog("https://api.github.com/repos/o/r/contents/package_config",)
+        c._fetch_catalog_files = MagicMock(return_value=entries)
+        c._fetch_package_config = AsyncMock(side_effect=lambda url: packages[url])
+        return asyncio.run(c.load())
 
     @staticmethod
     def _entry(name, type_="file"):
@@ -199,9 +199,9 @@ class TestLoadSoftwareCatalog:
 
 class TestGithubHeaders:
     def test_token_only_sent_to_api_github_com(self):
-        o = _orch({"api_credentials": {"github": {"token": "t"}}})
-        assert o._github_headers("https://api.github.com/x", "a")["Authorization"] == "token t"
-        assert "Authorization" not in o._github_headers("https://example.com/x", "a")
+        c = Catalog(api_credentials={"github": {"token": "t"}})
+        assert c._github_headers("https://api.github.com/x", "a")["Authorization"] == "token t"
+        assert "Authorization" not in c._github_headers("https://example.com/x", "a")
 
 
 class TestOutputDirName:
