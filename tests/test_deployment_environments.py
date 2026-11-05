@@ -400,3 +400,16 @@ class TestEvidenceInReport:
         assert "<b>Not found:</b> Windows runners (looked for labels such as windows-2022" in env
         docs = page.split("<b>Platform Documentation Evaluation:</b>")[1].split("</li>")[0]
         assert "<b>Found:</b> macOS in README: “Tested on Ubuntu and macOS.”" in docs
+
+
+class TestOrganizationNamesAreNotPlatforms:
+    def test_linux_foundation_is_not_linux_support(self):
+        from collectors.quality.deployment_environments import _PLATFORM_DOC_TERMS
+        text = "Kokkos is a [Linux Foundation](https://linuxfoundation.org) project."
+        assert not _PLATFORM_DOC_TERMS["Linux"].search(text)
+
+    def test_a_later_real_mention_still_counts(self):
+        from collectors.quality.deployment_environments import _PLATFORM_DOC_TERMS
+        text = "A Linux Foundation project.\n\nTested on Linux and macOS."
+        m = _PLATFORM_DOC_TERMS["Linux"].search(text)
+        assert m and text[m.start():].startswith("Linux and")
