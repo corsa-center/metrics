@@ -66,20 +66,17 @@ _DOC_GENERATOR_FILES = ["Doxyfile", "docs/conf.py", "docs/source/conf.py", "mkdo
 
 # Commit subjects that indicate deliberate structural work. "remove" alone is
 # deliberately absent — it matches bug fixes like "Remove abort on infinite
-# loop", which is not refactoring.
-_REFACTOR_INTENT = re.compile(
-    r"\b(refactor\w*|cleanup|clean[- ]up|simplif\w+|deprecat\w+|restructur\w+"
-    r"|rework\w*|moderni[sz]\w+|tidy|dead code"
-    r"|remove (?:unused|dead|obsolete|redundant|noop|no-op|legacy|stale))\b",
-    re.IGNORECASE,
-)
-# _REFACTOR_INTENT's vocabulary as the report lists it, for a team wondering
-# which commit subjects count.
-_REFACTOR_WORDS = [
-    "refactor…", "cleanup", "clean up", "simplif…", "deprecat…", "restructur…",
-    "rework…", "moderniz…", "tidy", "dead code",
-    "remove unused / dead / obsolete / redundant / noop / no-op / legacy / stale",
-]
+# loop", which is not refactoring. Each word, as the report lists it, maps to
+# the pattern it stands for, so the list a team reads is the one matched.
+_REFACTOR_WORDS = {
+    "refactor…": r"refactor\w*", "cleanup": r"cleanup", "clean up": r"clean[- ]up",
+    "simplif…": r"simplif\w+", "deprecat…": r"deprecat\w+", "restructur…": r"restructur\w+",
+    "rework…": r"rework\w*", "moderniz…": r"moderni[sz]\w+", "tidy": r"tidy",
+    "dead code": r"dead code",
+    "remove unused / dead / obsolete / redundant / noop / no-op / legacy / stale":
+        r"remove (?:unused|dead|obsolete|redundant|noop|no-op|legacy|stale)",
+}
+_REFACTOR_INTENT = re.compile(r"\b(" + "|".join(_REFACTOR_WORDS.values()) + r")\b", re.IGNORECASE)
 
 # Sampled across three pages. At 100 commits each commit is worth a full
 # percentage point, which makes a 3% threshold indistinguishable from noise.

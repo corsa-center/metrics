@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from collectors.ecosystem.base import (
-    COLLECTION_GAP, PUBLIC_CHANNEL_PATTERNS, RepoTree, RetryingTransport, get_threshold,
+    COLLECTION_GAP, PUBLIC_CHANNEL_PATTERNS, PUBLIC_CHANNEL_WORDS, RepoTree, RetryingTransport, get_threshold,
 )
 from collectors.ecosystem.base import excerpt, readme_source
 from forge.interface import Forge
@@ -63,15 +63,14 @@ _PUBLIC_CHANNELS = {
 _README_CHANNELS = ("Mailing list", "Forum", "Chat (Slack/Discord/Matrix)")
 
 # What each search above matches, in words, for the report's "looked for"
-# lines. Keep in step with _DECISION_PATTERNS and base.PUBLIC_CHANNEL_PATTERNS.
+# lines. Keep in step with _DECISION_PATTERNS; the channel terms come from
+# base.PUBLIC_CHANNEL_WORDS, the same source as the patterns.
 _PATTERN_DESCRIPTIONS = {
     "Roadmap": ["any file named *roadmap*.md, .rst or .txt"],
     "Meeting notes": ["a meeting-notes directory", "any file named *meeting-notes*.md, .rst or .txt"],
 }
 _README_CHANNEL_TERMS = {
-    "Mailing list": "mailing list, listserv, groups.google.com, majordomo, mailman",
-    "Forum": "forum, discourse., stackoverflow.com/questions/tagged",
-    "Chat (Slack/Discord/Matrix)": "slack.com, discord.gg, discord.com, matrix.to, gitter.im, zulipchat",
+    label: ", ".join(PUBLIC_CHANNEL_WORDS[label]) for label in _README_CHANNELS
 }
 
 
