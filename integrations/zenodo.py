@@ -78,20 +78,21 @@ class ZenodoClient(BaseAPIClient):
                             "version_views": stats.get("version_views", 0),
                             "record_id": record.get("id"),
                             "created": record.get("created"),
+                            "status": "found",
                         }
                     else:
                         self.logger.debug(f"No Zenodo record found for DOI: {doi}")
-                        return {"downloads": 0, "views": 0}
+                        return {"downloads": 0, "views": 0, "status": "not_found"}
                 else:
                     self.logger.warning(f"Zenodo API error: {response.status_code}")
-                    return {"downloads": 0, "views": 0}
+                    return {"downloads": 0, "views": 0, "status": "failed"}
 
         except httpx.TimeoutException:
             self.logger.error("Zenodo API timeout")
-            return {"downloads": 0, "views": 0}
+            return {"downloads": 0, "views": 0, "status": "failed"}
         except Exception as e:
             self.logger.error(f"Error fetching Zenodo stats: {e}")
-            return {"downloads": 0, "views": 0}
+            return {"downloads": 0, "views": 0, "status": "failed"}
 
     async def get_record_by_id(self, record_id: str) -> Dict[str, Any]:
         """

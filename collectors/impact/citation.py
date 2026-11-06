@@ -9,6 +9,7 @@ import httpx
 import logging
 import re
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 import yaml
 
 from integrations.semantic_scholar import SemanticScholarClient
@@ -74,6 +75,33 @@ def _citation_evidence(declared: Dict[str, Any], trace: Dict[str, Any],
         searched.append({"text": "DOIs looked for in",
                          "paths": [{"path": p} for p in declared["looked_in"]]})
     return {"found": found, "missing": missing, "notes": notes, "searched": searched}
+
+
+def _mentions_evidence(mentions: Optional[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """The search behind Informal Mentions: it counts search results, at
+    most 100, so a reader should see the query to judge them."""
+    if not mentions:
+        return {}
+    return {
+        "found": [{"text": f"{mentions['count']:,} papers returned by a search for "
+                           f"{mentions['query']}",
+                   "path": "Semantic Scholar",
+                   "url": "https://www.semanticscholar.org/search?q=" + quote(mentions["query"])}],
+        "notes": [{"text": "A search result can mention the name without using the software; "
+                           "at most 100 results are counted."}],
+    }
+
+
+def _zenodo_evidence(zenodo: Optional[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """The Zenodo record DOI Resolutions came from, or that there was none."""
+    if not zenodo:
+        return {}
+    if zenodo.get("status") == "found" and zenodo.get("record_id"):
+        return {"found": [{"text": f"{zenodo.get('downloads', 0):,} downloads and "
+                                   f"{zenodo.get('views', 0):,} views",
+                           "path": f"Zenodo record {zenodo['record_id']}",
+                           "url": f"https://zenodo.org/records/{zenodo['record_id']}"}]}
+    return {"missing": [{"text": f"a Zenodo record for {zenodo['doi']}"}]}
 
 
 class CitationMetricCollector:
@@ -149,9 +177,9 @@ class CitationMetricCollector:
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
                 self._get_formal_citations(package, citation_trace),
-                self._get_informal_mentions(package),
+                self._get_informal_mentions(package, citation_trace),
                 self._get_dependent_packages(client, package),
-                self._get_doi_resolutions(package),
+                self._get_doi_resolutions(package, citation_trace),
                 self._get_repo_stats(client, package),
                 return_exceptions=True,
             )
@@ -160,9 +188,9 @@ class CitationMetricCollector:
         # None: every source failed -- not collected, rather than a
         # confident zero.
         formal_citations = results[0] if not isinstance(results[0], Exception) else None
-        informal_mentions = results[1] if not isinstance(results[1], Exception) else 0
+        informal_mentions = results[1] if not isinstance(results[1], Exception) else None
         dependent_packages = results[2] if not isinstance(results[2], Exception) else 0
-        doi_resolutions = results[3] if not isinstance(results[3], Exception) else 0
+        doi_resolutions = results[3] if not isinstance(results[3], Exception) else None
         repo_stats = results[4] if not isinstance(results[4], Exception) else {"stars": 0, "forks": 0}
 
         # Log any exceptions
@@ -181,9 +209,11 @@ class CitationMetricCollector:
         normalized_scores = {
             "formal_citations": (None if formal_citations is None
                                  else self._normalize_citations(formal_citations)),
-            "informal_mentions": self._normalize_mentions(informal_mentions),
+            "informal_mentions": (None if informal_mentions is None
+                                  else self._normalize_mentions(informal_mentions)),
             "dependent_packages": self._normalize_dependents(dependent_packages),
-            "doi_resolutions": self._normalize_dois(doi_resolutions),
+            "doi_resolutions": (None if doi_resolutions is None
+                                else self._normalize_dois(doi_resolutions)),
         }
 
         # Calculate weighted total score
@@ -209,6 +239,7 @@ class CitationMetricCollector:
                     "raw_value": informal_mentions,
                     "normalized_score": normalized_scores["informal_mentions"],
                     "weight": self.sub_metric_weights["informal_mentions"],
+                    **({"not_collected": True} if informal_mentions is None else {}),
                 },
                 "dependent_packages": {
                     "raw_value": dependent_packages,
@@ -219,6 +250,7 @@ class CitationMetricCollector:
                     "raw_value": doi_resolutions,
                     "normalized_score": normalized_scores["doi_resolutions"],
                     "weight": self.sub_metric_weights["doi_resolutions"],
+                    **({"not_collected": True} if doi_resolutions is None else {}),
                 },
             },
             # Unweighted evidence — stars/forks on the project's forge, shown
@@ -231,10 +263,20 @@ class CitationMetricCollector:
             },
             # The orchestrator builds 4.1.1's rows itself, so their evidence
             # is keyed by row label here.
-            "row_evidence": {"formal_citations": {
-                "label": "Formal Citations",
-                "evidence": _citation_evidence(declared, citation_trace, package.get("name")),
-            }},
+            "row_evidence": {
+                "formal_citations": {
+                    "label": "Formal Citations",
+                    "evidence": _citation_evidence(declared, citation_trace, package.get("name")),
+                },
+                "informal_mentions": {
+                    "label": "Informal Mentions",
+                    "evidence": _mentions_evidence(citation_trace.get("mentions")),
+                },
+                "doi_resolutions": {
+                    "label": "DOI Resolutions",
+                    "evidence": _zenodo_evidence(citation_trace.get("zenodo")),
+                },
+            },
             "metadata": {
                 "timestamp": asyncio.get_event_loop().time(),
                 "package_name": package.get("name"),
@@ -376,8 +418,11 @@ class CitationMetricCollector:
         # The maximum count found (most authoritative source)
         return max(citations) if citations else 0
 
-    async def _get_informal_mentions(self, package: Dict[str, Any]) -> int:
-        """Get informal mentions from blogs, docs, etc."""
+    async def _get_informal_mentions(
+        self, package: Dict[str, Any], trace: Optional[Dict[str, Any]] = None
+    ) -> Optional[int]:
+        """Papers a Semantic Scholar search for the software's name returns
+        (at most 100), or None if the search failed."""
         name = package.get("name")
 
         if not name:
@@ -388,10 +433,12 @@ class CitationMetricCollector:
             count = await self.semantic_scholar.get_mentions(
                 name, include_informal=True
             )
-            return count
         except Exception as e:
             self.logger.warning(f"Error fetching informal mentions: {e}")
-            return 0
+            count = None
+        if trace is not None and count is not None:
+            trace["mentions"] = {"query": f'"{name}" software', "count": count}
+        return count
 
     async def _get_dependent_packages(
         self, client: httpx.AsyncClient, package: Dict[str, Any]
@@ -425,7 +472,9 @@ class CitationMetricCollector:
             return {"stars": 0, "forks": 0}
         return {"stars": stats.get("stars", 0), "forks": stats.get("forks", 0)}
 
-    async def _get_doi_resolutions(self, package: Dict[str, Any]) -> int:
+    async def _get_doi_resolutions(
+        self, package: Dict[str, Any], trace: Optional[Dict[str, Any]] = None
+    ) -> Optional[int]:
         """Get DOI resolution statistics from Zenodo"""
         doi = package.get("doi")
 
@@ -434,11 +483,15 @@ class CitationMetricCollector:
 
         try:
             stats = await self.zenodo.get_doi_stats(doi)
-            # Combine views and downloads
-            return stats.get("downloads", 0) + stats.get("views", 0)
         except Exception as e:
             self.logger.warning(f"Error fetching DOI stats: {e}")
-            return 0
+            return None
+        if stats.get("status") == "failed":
+            return None
+        if trace is not None:
+            trace["zenodo"] = {**stats, "doi": doi}
+        # Combine views and downloads
+        return stats.get("downloads", 0) + stats.get("views", 0)
 
     # Normalization functions (0-100 scale)
 

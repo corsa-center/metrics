@@ -230,3 +230,26 @@ def test_semantic_scholar_without_the_paper_says_so():
     ev = _citation_evidence({"all": ["10.1/a"], "sources": {}},
                             {"semantic_scholar": {"status": "not_found", "citation_count": 0}}, "x")
     assert {"text": "a paper for the first DOI in Semantic Scholar"} in ev["missing"]
+
+
+class TestMentionsAndDoiResolutions:
+    def test_failed_mentions_search_is_not_collected(self, collector):
+        collector.semantic_scholar.get_mentions = AsyncMock(return_value=None)
+        assert asyncio.run(collector._get_informal_mentions({"name": "x"})) is None
+
+    def test_failed_zenodo_lookup_is_not_collected(self, collector):
+        collector.zenodo.get_doi_stats = AsyncMock(return_value={"downloads": 0, "views": 0, "status": "failed"})
+        assert asyncio.run(collector._get_doi_resolutions({"doi": "10.5281/zenodo.1"})) is None
+
+    def test_mentions_evidence_links_the_search(self):
+        from collectors.impact.citation import _mentions_evidence
+        ev = _mentions_evidence({"query": '"AMReX" software', "count": 42})
+        assert ev["found"][0]["text"] == '42 papers returned by a search for "AMReX" software'
+        assert ev["found"][0]["url"] == "https://www.semanticscholar.org/search?q=%22AMReX%22%20software"
+
+    def test_zenodo_evidence_names_the_record_or_its_absence(self):
+        from collectors.impact.citation import _zenodo_evidence
+        found = _zenodo_evidence({"status": "found", "record_id": 7, "downloads": 5, "views": 9, "doi": "d"})
+        assert found["found"][0]["url"] == "https://zenodo.org/records/7"
+        assert _zenodo_evidence({"status": "not_found", "doi": "10.1/x"}) == {
+            "missing": [{"text": "a Zenodo record for 10.1/x"}]}

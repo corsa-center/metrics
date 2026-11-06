@@ -120,7 +120,7 @@ class SemanticScholarClient(BaseAPIClient):
             self.logger.error(f"Error fetching Semantic Scholar data: {e}")
             return {"citation_count": 0, "status": "failed"}
 
-    async def get_mentions(self, title: str, include_informal: bool = False) -> int:
+    async def get_mentions(self, title: str, include_informal: bool = False) -> Optional[int]:
         """
         Get mention count for a software/package
 
@@ -162,12 +162,13 @@ class SemanticScholarClient(BaseAPIClient):
                     )
                     return mention_count
                 else:
+                    # None, not 0: no answer isn't "no mentions".
                     self.logger.warning(f"Search failed: {response.status_code}")
-                    return 0
+                    return None
 
         except Exception as e:
             self.logger.error(f"Error searching for mentions: {e}")
-            return 0
+            return None
 
     async def get_paper_details(self, paper_id: str) -> Dict[str, Any]:
         """

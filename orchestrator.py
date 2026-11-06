@@ -1419,7 +1419,9 @@ class MetricsOrchestrator:
                     f'<p><strong>Formal Citations:</strong> {formal["raw_value"]:,}</p>'
                 )
             informal = sub_metrics.get("informal_mentions", {})
-            if informal.get("raw_value", 0) > 0:
+            if informal.get("not_collected"):
+                citation_lines.append('<p><strong>Informal Mentions:</strong> Not yet collected</p>')
+            elif (informal.get("raw_value") or 0) > 0:
                 citation_lines.append(
                     f'<p><strong>Informal Mentions:</strong> {informal["raw_value"]:,}</p>'
                 )
@@ -1429,7 +1431,9 @@ class MetricsOrchestrator:
             # It is already listed as Forks below, so it isn't repeated
             # under a name that claims more than it measures.
             dois = sub_metrics.get("doi_resolutions", {})
-            if dois.get("raw_value", 0) > 0:
+            if dois.get("not_collected"):
+                citation_lines.append('<p><strong>DOI Resolutions:</strong> Not yet collected</p>')
+            elif (dois.get("raw_value") or 0) > 0:
                 citation_lines.append(
                     f'<p><strong>DOI Resolutions:</strong> {dois["raw_value"]:,}</p>'
                 )
