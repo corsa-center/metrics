@@ -10,10 +10,6 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -78,8 +74,7 @@ class Catalog:
         :param api_credentials: API credentials for catalog
         """
         self.catalog_url = catalog_url
-        self.api_credentials = api_credentials
-        self.catalog = {}
+        self.api_credentials = api_credentials or {}
 
     async def load(self) -> Dict:
         """Load the full software catalog from the catalog_url
@@ -123,7 +118,7 @@ class Catalog:
 
     def to_catalog(self, name: str, repo_url: str, repo_type: str) -> Dict:
         """
-        Covert strings into a catalog entry
+        Convert strings into a catalog entry
 
         :param name: name of the package
         :param repo_url:  url of package repository

@@ -140,7 +140,7 @@ overrides:
 class TestFetchPackageConfig:
     def _fetch(self, resp):
         c = Catalog(api_credentials={})
-        with patch("orchestrator.httpx.AsyncClient", return_value=_mock_async_client(resp)):
+        with patch("catalog.catalog.httpx.AsyncClient", return_value=_mock_async_client(resp)):
             return asyncio.run(c._fetch_package_config("https://api.github.com/x"))
 
     def test_valid_package_is_returned(self):
