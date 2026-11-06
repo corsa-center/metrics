@@ -7,17 +7,23 @@ adds what the dashboard leaves implicit:
   - the threshold each row was judged against, next to the row
   - which rows show text set by configuration rather than a measurement
   - how the dimension and overall scores were computed, and from what
+  - what each row found and where it looked, for collectors that record
+    it (issue #99), and a link to how each section is measured
 
-It is built from the dashboard's own per-section HTML, not from the raw
-collector output, so the report can never say something different from
-what the dashboard shows. That HTML is parsed back to plain text and
-re-escaped here, so nothing collected (commit messages, file names) is
-ever emitted as markup.
+Rows, values and marks are built from the dashboard's own per-section
+HTML, not from the raw collector output, so the report can never say
+something different from what the dashboard shows. Evidence is the one
+exception: it is supplementary, never a verdict, and comes from the
+"evidence" a collector puts beside a sub-score. The dashboard HTML is
+parsed back to plain text and everything is re-escaped here, so nothing
+collected (commit messages, file names, README text) is ever emitted as
+markup.
 """
 
 import html
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from collectors.ecosystem.base import _THRESHOLDS_PATH, get_section_thresholds
@@ -57,6 +63,12 @@ COLLECTOR_LABELS = {
     "maintainability": "Maintainability (4.3.6)",
     "supply_chain": "Supply chain integrity (4.3.8)",
 }
+
+# Where each section's method is written down: what is checked, where, and
+# what passes. Section headings there are "### 4.2.8 Financial Sustainability".
+METRICS_CATALOG = Path(__file__).parent / "docs" / "METRICS_CATALOG.md"
+METRICS_CATALOG_URL = "https://github.com/corsa-center/metrics/blob/main/docs/METRICS_CATALOG.md"
+_CATALOG_HEADING = re.compile(r"^### (\d+\.\d+\.\d+) (.+?)\s*$", re.M)
 
 # Rows whose dashboard label differs from their thresholds.yaml key.
 THRESHOLD_ROW_ALIASES = {
@@ -166,6 +178,89 @@ def threshold_descriptions(path=_THRESHOLDS_PATH) -> Dict[tuple, str]:
     return descriptions
 
 
+def methodology_links(path: Path = METRICS_CATALOG) -> Dict[str, str]:
+    """Section number -> URL of its heading in METRICS_CATALOG.md.
+
+    Anchors follow GitHub's rule: lowercase, drop punctuation other than
+    hyphens and spaces, spaces to hyphens. A missing file yields no links.
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return {}
+    links: Dict[str, str] = {}
+    for number, title in _CATALOG_HEADING.findall(text):
+        anchor = re.sub(r"[^\w\- ]", "", f"{number} {title}".lower()).replace(" ", "-")
+        links.setdefault(number, f"{METRICS_CATALOG_URL}#{anchor}")
+    return links
+
+
+def evidence_index(sub_results: Any) -> Dict[str, Dict]:
+    """Row label -> the evidence a collector recorded for it.
+
+    Collectors put an "evidence" dict beside a row's "label": on a
+    sub-score (collectors/ecosystem/funding.py), or for rows the
+    orchestrator builds itself, in a "row_evidence" block
+    (collectors/ecosystem/community_health.py). These sit at different
+    depths in different collectors, so every dict is searched. Labels are
+    unique within a dimension, which is the scope this is called on.
+    """
+    index: Dict[str, Dict] = {}
+    stack = [sub_results]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        if (isinstance(node.get("evidence"), dict) and isinstance(node.get("label"), str)
+                and "section" not in node):
+            index.setdefault(node["label"], node["evidence"])
+        stack.extend(v for v in node.values() if isinstance(v, dict))
+    return index
+
+
+def sectioned_evidence(dims: Dict) -> Dict[Tuple[str, str], Dict]:
+    """(section, row label) -> evidence, for rows a collector in one
+    dimension supplies to a section of another (collaboration's
+    Installation Success Tracking, rendered in 4.3.4). Such an entry names
+    its "section" beside its "label", and is matched in every dimension.
+    """
+    index: Dict[Tuple[str, str], Dict] = {}
+    stack = [dim.get("sub_results") for dim in dims.values() if isinstance(dim, dict)]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        if (isinstance(node.get("evidence"), dict) and isinstance(node.get("label"), str)
+                and isinstance(node.get("section"), str)):
+            index.setdefault((node["section"], node["label"]), node["evidence"])
+        stack.extend(v for v in node.values() if isinstance(v, dict))
+    return index
+
+
+def _uncovered_details(row: Dict) -> List[Segments]:
+    """The row's dashboard detail lines, less any its evidence already says.
+
+    The dashboard's detail line ("CITATION.cff", "Installation, Usage,
+    Support") is often a terser form of the evidence beneath it, and the
+    report showed both. A line is dropped only when every comma-separated
+    part of it appears in the row's "Found" lines; one the evidence covers
+    only in part ("GitHub Discussions, Wiki, Forum" with only Forum found)
+    is kept.
+    """
+    found = _applicable((row.get("evidence") or {}).get("found"), row.get("mark") == "✓")
+    if not found:
+        return row["details"]
+    covered = " ".join(
+        str(item.get(k) or "") for item in found for k in ("text", "path", "quote")
+    ).casefold()
+
+    def redundant(detail: Segments) -> bool:
+        parts = [p.strip() for p in "".join(t for t, _ in detail).split(",")]
+        return all(p and p.casefold() in covered for p in parts)
+
+    return [d for d in row["details"] if not redundant(d)]
+
+
 def _fmt_value(value: Any) -> str:
     if isinstance(value, list):
         return " or ".join(str(v) for v in value)
@@ -222,11 +317,14 @@ def build_report(
     overrides = overrides or {}
     dims = metrics.get("dimensions", {})
     descriptions = threshold_descriptions()
+    methodology = methodology_links()
+    cross_section = sectioned_evidence(dims)
 
     dimensions = []
     for key, name in DIMENSIONS:
         dim = dims.get(key, {})
         placeholder = dim.get("metadata", {}).get("status") == "placeholder"
+        evidence = evidence_index(dim.get("sub_results"))
         sections = []
         for number, section in dashboard.get(key, {}).items():
             rows, score = parse_section(section.get("data"))
@@ -235,11 +333,16 @@ def build_report(
             for row in rows:
                 row["thresholds"] = thresholds.pop(row["label"], [])
                 row["overridden"] = row["label"] in overridden
+                # Config-set text wasn't measured, so nothing backs it.
+                row["evidence"] = None if row["overridden"] else (
+                    cross_section.get((number, row["label"])) or evidence.get(row["label"]))
+                row["details"] = _uncovered_details(row)
             sections.append({
                 "number": number,
                 "title": section.get("title", ""),
                 "collected": bool(section.get("data")),
                 "score": score,
+                "methodology": methodology.get(number),
                 "rows": rows,
                 # Thresholds for rows this package's section didn't render.
                 "other_thresholds": thresholds,
@@ -297,8 +400,10 @@ ul.rows > li { display: grid; grid-template-columns: 5.5rem 1fr; gap: .5rem;
                padding: .45rem 0; border-bottom: 1px solid var(--line); }
 .mark { font-size: .8rem; font-weight: 600; padding-top: .15rem; }
 .pass { color: var(--pass); } .fail { color: var(--fail); } .unscored { color: var(--muted); }
-.detail, .threshold, .override { margin: .15rem 0 0; font-size: .9rem; }
-.detail { color: var(--muted); }
+.detail, .evidence, .threshold, .override { margin: .15rem 0 0; font-size: .9rem; }
+.detail, .evidence { color: var(--muted); }
+.evidence b { color: var(--fg); font-weight: 600; }
+h3 .how { font-size: .85rem; font-weight: 400; }
 .threshold { color: var(--muted); }
 .threshold b { color: var(--fg); font-weight: 600; }
 .override { color: var(--note); }
@@ -336,7 +441,9 @@ def render_html(report: Dict) -> str:
         '<span class="unscored">Not scored</span> rows were reported but not judged — not '
         "yet collected, not applicable, or too little data — and are left out of the "
         "section score, which is ✓ rows out of ✓ and ✗ rows. Grey lines under a row are "
-        "the evidence it was based on.</p>",
+        "the evidence it was based on; where a collector records it, they also say "
+        "what was <b>found</b> and where, and <b>where it looked</b>. Each section's "
+        "<i>How this is measured</i> link explains what is checked and what passes.</p>",
         "</div>",
     ]
 
@@ -386,9 +493,11 @@ def render_html(report: Dict) -> str:
         out.append(f'<h2>{esc(dim["name"])} dimension</h2>')
         for sec in dim["sections"]:
             score = f'<span class="score">Score {esc(sec["score"])}</span>' if sec["score"] else ""
+            how = (f'<a class="how" href="{esc(sec["methodology"])}">How this is measured</a>'
+                   if sec["methodology"] else "")
             out.append(
                 f'<h3 id="{_anchor(sec["number"])}">{esc(sec["number"])} '
-                f'{esc(sec["title"])}{score}</h3>'
+                f'{esc(sec["title"])}{score}{how}</h3>'
             )
             if not sec["collected"]:
                 out.append('<p class="muted">Not yet collected.</p>')
@@ -425,11 +534,54 @@ def _render_row(row: Dict) -> str:
         )
     for detail in row["details"]:
         parts.append(f'<div class="detail">{_h(detail)}</div>')
+    parts.extend(_render_evidence(row.get("evidence") or {}, met=row["mark"] == "✓"))
     for i, line in enumerate(row["thresholds"]):
         prefix = "<b>Threshold:</b> " if i == 0 else ""
         parts.append(f'<div class="threshold">{prefix}{esc(line)}</div>')
     parts.append("</div></li>")
     return "".join(parts)
+
+
+def _path_link(item: Dict) -> str:
+    path, url = item.get("path") or "", item.get("url")
+    return _h([(path, url if _is_web_url(url) else None)])
+
+
+def _is_web_url(url: Any) -> bool:
+    return isinstance(url, str) and url.startswith(("https://", "http://"))
+
+
+def _applicable(items: Optional[List[Dict]], met: bool) -> List[Dict]:
+    """Evidence items to show: an item marked "unless_met" explains a
+    shortfall the row may have made up some other way, so it is dropped
+    from a ✓ row."""
+    return [item for item in items or [] if not (met and item.get("unless_met"))]
+
+
+def _render_evidence(evidence: Dict, met: bool = False) -> List[str]:
+    """A row's evidence as lines: each thing found and where, each thing
+    looked for and not found, then each place looked. Every value is collected text, so all of it is escaped."""
+    esc = html.escape
+    lines = []
+    for item in _applicable(evidence.get("found"), met):
+        text = esc(item.get("text") or "")
+        where = _path_link(item) if item.get("path") else ""
+        if text and where:
+            body = f"{text} in {where}"
+        else:
+            body = text or where
+        if item.get("quote"):
+            body += f": “{esc(item['quote'])}”"
+        lines.append(f'<div class="evidence"><b>Found:</b> {body}</div>')
+    for item in _applicable(evidence.get("missing"), met):
+        lines.append(f'<div class="evidence"><b>Not found:</b> {esc(item.get("text") or "")}</div>')
+    for item in _applicable(evidence.get("searched"), met):
+        paths = ", ".join(_path_link(p) for p in item.get("paths") or [] if p.get("path"))
+        lines.append(
+            f'<div class="evidence"><b>{esc(item.get("text") or "Searched")}:</b> '
+            f'{paths or "none present"}</div>'
+        )
+    return lines
 
 
 def render_package_report(

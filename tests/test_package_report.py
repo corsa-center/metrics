@@ -183,3 +183,210 @@ class TestDimensionScoreComponents:
         ))
         assert result["score_components"] == {"governance": 50, "licensing": 100}
         assert result["score"] == 75.0
+
+
+class TestMethodologyLinks:
+    def test_every_section_links_to_its_catalog_heading(self, orchestrator):
+        from package_report import METRICS_CATALOG_URL
+        metrics = _metrics()
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
+        links = {s["number"]: s["methodology"] for d in report["dimensions"] for s in d["sections"]}
+        assert all(links.values()), [n for n, url in links.items() if not url]
+        assert links["4.2.8"] == f"{METRICS_CATALOG_URL}#428-financial-sustainability"
+        # GitHub drops the "&" and keeps both hyphens around it.
+        assert links["4.2.9"].endswith("#429-institutional--organizational-support")
+
+    def test_first_heading_for_a_number_wins(self, tmp_path):
+        from package_report import methodology_links
+        path = tmp_path / "catalog.md"
+        path.write_text("### 4.1.1 Software Citation\n\n### 4.1.1 / 4.2.7 additions\n")
+        assert methodology_links(path)["4.1.1"].endswith("#411-software-citation")
+
+    def test_missing_catalog_means_no_links(self, tmp_path):
+        from package_report import methodology_links
+        assert methodology_links(tmp_path / "absent.md") == {}
+
+
+def _funding_metrics(**doc_entry):
+    entry = {
+        "label": "Enhanced Funding Documentation Analysis",
+        "value": "No funding documentation found", "passing": False,
+        "evidence": {
+            "found": [{"text": "<b>DOE</b> named as a funder", "quote": "funded by <i>DOE</i>",
+                       "path": "NOTICE", "url": "https://github.com/o/r/blob/HEAD/NOTICE"}],
+            "searched": [
+                {"text": "Files searched for award numbers and funder acknowledgments",
+                 "paths": [{"path": "README.md", "url": "javascript:alert(1)"}]},
+                {"text": "Funding files looked for", "paths": []},
+            ],
+        },
+        **doc_entry,
+    }
+    return _metrics(sub_results={"funding": {"overall_score": {
+        "score": 0, "max_score": 1, "sub_scores": {"funding_documentation": entry},
+    }}})
+
+
+class TestEvidence:
+    def _row(self, orchestrator, metrics, overrides=None):
+        dashboard = orchestrator._transform_for_dashboard(metrics, overrides or {})
+        report = build_report("owner/repo", dashboard, metrics,
+                              orchestrator._metric_weights(), overrides)
+        sec = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")
+        return next(r for r in sec["rows"] if r["label"] == "Enhanced Funding Documentation Analysis")
+
+    def test_attached_to_the_row_it_was_recorded_for(self, orchestrator):
+        metrics = _funding_metrics()
+        row = self._row(orchestrator, metrics)
+        assert row["evidence"]["found"][0]["path"] == "NOTICE"
+
+    def test_rendered_escaped_with_links_and_where_it_looked(self, orchestrator):
+        metrics = _funding_metrics()
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
+        assert ('<b>Found:</b> &lt;b&gt;DOE&lt;/b&gt; named as a funder in '
+                '<a href="https://github.com/o/r/blob/HEAD/NOTICE">NOTICE</a>: '
+                '“funded by &lt;i&gt;DOE&lt;/i&gt;”') in page
+        # Only web URLs become links.
+        assert ("<b>Files searched for award numbers and funder acknowledgments:</b> README.md"
+                in page)
+        assert "javascript:" not in page
+        assert "<b>Funding files looked for:</b> none present" in page
+
+    def test_config_overridden_row_shows_no_evidence(self, orchestrator):
+        overrides = {"4.2.8": {"Enhanced Funding Documentation Analysis": "See our NOTICE"}}
+        row = self._row(orchestrator, _funding_metrics(), overrides)
+        assert row["overridden"] and row["evidence"] is None
+
+    def test_labels_are_matched_within_their_own_dimension(self):
+        from package_report import evidence_index
+        # "Advanced Dependency Analysis" is a row in both 4.1.1 and 4.2.7.
+        impact = {"citation": {"x": {"label": "Advanced Dependency Analysis",
+                                     "evidence": {"found": [{"text": "impact"}]}}}}
+        eco = {"collaboration": {"sub_scores": {"deps": {"label": "Advanced Dependency Analysis",
+                                                         "evidence": {"found": [{"text": "eco"}]}}}}}
+        assert evidence_index(impact)["Advanced Dependency Analysis"]["found"][0]["text"] == "impact"
+        assert evidence_index(eco)["Advanced Dependency Analysis"]["found"][0]["text"] == "eco"
+        assert evidence_index(None) == {}
+
+
+class TestGovernanceEvidence:
+    def test_row_evidence_reaches_the_four_two_one_rows(self, orchestrator):
+        from collectors.ecosystem.community_health import CommunityHealthCollector
+        c = CommunityHealthCollector(None)
+        missing = {"exists": False, "looked_in_repos": ["o/r", "o/governance"]}
+        found = {"exists": True, "file_path": "CODE_OF_CONDUCT.md", "url": "https://x/coc",
+                 "repository": "o/r"}
+        keywords = {"terms_found": {"Decision process": ["<vote>"]}, "documents": []}
+        governance = {
+            "code_of_conduct": found, "governance": missing, "contributing_guidelines": found,
+            "keyword_analysis": {"groups_found": ["Decision process"], **keywords},
+            "effectiveness": {}, "overall_score": {"max_score": 3},
+            "row_evidence": c._row_evidence("o/r", found, missing, found, keywords, {}),
+        }
+        metrics = _metrics(sub_results={"governance": governance})
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        assert "<b>Not found:</b> Governance</div>" in page
+        assert "<b>Governance also looked for in:</b> the o/governance repository" in page
+        assert "<b>Found:</b> Decision process (matched: &lt;vote&gt;)" in page
+        assert "<b>Not found:</b> Membership lifecycle (looked for: nomination" in page
+
+
+class TestCrossSectionEvidence:
+    """Installation Success Tracking renders in 4.3.4 (Quality) but comes
+    from the Ecosystem collaboration collector."""
+
+    def _metrics(self, installation_success):
+        metrics = _metrics(sub_results={"collaboration": {"overall_score": {
+            "score": 0, "max_score": 0, "sub_scores": {"installation_success": installation_success},
+        }}})
+        # 4.3.4 renders only alongside a usability result.
+        metrics["dimensions"]["quality"]["sub_results"]["usability"] = {
+            "overall_score": {"sub_scores": {}}}
+        return metrics
+
+    def test_evidence_reaches_the_row_in_the_other_dimension(self, orchestrator):
+        from collectors.ecosystem.collaboration import CollaborationCollector
+        registries = [{"name": "h5py", "ecosystem": "pypi", "registry_url": "https://pypi.org/project/h5py",
+                       "install_command": "pip install h5py"}]
+        entry = {"label": "Installation Success Tracking", "value": "Installable from 1 package manager: pypi",
+                 "passing": True, "section": "4.3.4",
+                 "evidence": CollaborationCollector._install_evidence(registries, {})}
+        metrics = self._metrics(entry)
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        rows = {(s["number"], r["label"]): r for d in report["dimensions"]
+                for s in d["sections"] for r in s["rows"]}
+        row = rows[("4.3.4", "Installation Success Tracking")]
+        assert row["evidence"]["found"] == [{"path": "h5py (pypi)", "url": "https://pypi.org/project/h5py",
+                                             "quote": "pip install h5py"}]
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        assert ('<b>Found:</b> <a href="https://pypi.org/project/h5py">h5py (pypi)</a>: '
+                '“pip install h5py”') in page
+
+    def test_sectioned_entries_stay_out_of_the_label_index(self):
+        from package_report import evidence_index, sectioned_evidence
+        entry = {"label": "Installation Success Tracking", "section": "4.3.4", "evidence": {"found": []}}
+        dims = {"ecosystem": {"sub_results": {"collaboration": {"x": entry}}}}
+        assert evidence_index(dims["ecosystem"]["sub_results"]) == {}
+        assert sectioned_evidence(dims) == {("4.3.4", "Installation Success Tracking"): {"found": []}}
+
+    def test_no_install_path_names_the_packages_and_the_search(self):
+        from collectors.ecosystem.collaboration import CollaborationCollector
+        registries = [{"name": "r", "ecosystem": "spack", "registry_url": None}]
+        lookups = {"repository": {"url": "https://github.com/o/r", "failed": False}}
+        ev = CollaborationCollector._install_evidence(registries, lookups)
+        assert ev["missing"] == [{"text": "an install command for r (spack)"}]
+        assert ev["searched"][0]["paths"] == [{"path": "https://github.com/o/r"}]
+
+
+class TestUnlessMet:
+    def test_item_is_dropped_from_a_met_row_only(self):
+        from package_report import _render_evidence
+        evidence = {"missing": [{"text": "an SPDX id", "unless_met": True}, {"text": "other"}]}
+        met = "".join(_render_evidence(evidence, met=True))
+        unmet = "".join(_render_evidence(evidence, met=False))
+        assert "an SPDX id" not in met and "other" in met
+        assert "an SPDX id" in unmet
+
+
+class TestRepeatedDetailLines:
+    def _details(self, details, found, mark="✓"):
+        from package_report import _uncovered_details
+        row = {"details": [[(d, None)] for d in details], "mark": mark,
+               "evidence": {"found": found}}
+        return ["".join(t for t, _ in d) for d in _uncovered_details(row)]
+
+    def test_detail_fully_covered_by_found_lines_is_dropped(self):
+        found = [{"text": "Installation (README heading)"}, {"text": "Usage (README heading)"},
+                 {"text": "Support (README heading)"}]
+        assert self._details(["Installation, Usage, Support"], found) == []
+
+    def test_a_path_counts_as_covering(self):
+        assert self._details(["CITATION.cff"], [{"path": "CITATION.cff", "url": "u"}]) == []
+
+    def test_partly_covered_detail_is_kept(self):
+        found = [{"text": "Forum", "path": "README.md"}]
+        assert self._details(["GitHub Discussions, Wiki, Forum"], found) == [
+            "GitHub Discussions, Wiki, Forum"]
+
+    def test_no_evidence_keeps_every_detail(self):
+        from package_report import _uncovered_details
+        row = {"details": [[("x", None)]], "mark": "✓", "evidence": None}
+        assert _uncovered_details(row) == row["details"]
+
+    def test_funding_award_number_appears_once(self, orchestrator):
+        entry = {"label": "Enhanced Funding Documentation Analysis",
+                 "value": "1 award reference(s)", "passing": True, "detail": "DE-AC05-00OR22725",
+                 "evidence": {"found": [{"text": "DE-AC05-00OR22725 (DOE contract)",
+                                         "path": "README.md", "url": None}]}}
+        metrics = _metrics(sub_results={"funding": {"overall_score": {
+            "score": 1, "max_score": 1, "sub_scores": {"funding_documentation": entry}}}})
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        assert page.count("DE-AC05-00OR22725") == 1
+        # The dashboard keeps its own detail line.
+        assert "DE-AC05-00OR22725</p>" in dashboard["ecosystem"]["4.2.8"]["data"]

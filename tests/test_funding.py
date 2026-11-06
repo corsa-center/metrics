@@ -303,7 +303,7 @@ class TestFindGrantReferences:
         async def go():
             with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
                 return await collector._find_grant_references(MagicMock(), "o/r")
-        grants, gap = asyncio.run(go())
+        grants, gap, _ = asyncio.run(go())
         return [g["value"] for g in grants]
 
     def test_hyphenated_doe_award_counted_separately_from_contract(self, collector):
@@ -352,8 +352,8 @@ class TestAcknowledgmentFiles:
 
         collector.forge._github_get = fake_get
         tree = RepoTree(FakeForge(), "o/r", ["NOTICE", "docs/NOTICE"], truncated=False)
-        grants, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
-        assert grants == [{"value": "DOE", "kind": "acknowledgment"}]
+        grants, gap, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
+        assert [(g["value"], g["kind"], g["source"]) for g in grants] == [("DOE", "acknowledgment", "NOTICE")]
         assert gap is False
 
     def test_docs_landing_and_acknowledgment_pages_are_read(self, collector):
@@ -379,7 +379,7 @@ class TestAcknowledgmentFiles:
             "docs/source/index.rst", "docs/acknowledgements.rst",
             "docs/_build/html/_sources/index.rst", "third_party/lib/docs/index.rst",
         ], truncated=False)
-        grants, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
+        grants, _, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
         assert {g["value"] for g in grants} == {"DOE", "NSF"}
         assert not any("_build" in p or "third_party" in p for p in read)
 
@@ -391,7 +391,7 @@ class TestAcknowledgmentFiles:
             return None
 
         collector.forge._github_get = fake_get
-        _, gap = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", COLLECTION_GAP))
+        _, gap, _ = asyncio.run(collector._find_grant_references(MagicMock(), "o/r", COLLECTION_GAP))
         assert gap is True
 
 
@@ -445,3 +445,122 @@ class TestInternationalAwards:
     def test_underlined_acknowledgments_heading_is_a_section(self):
         rst = "Acknowledgments\n---------------\n\n* Department of Defense\n* NASA\n\nLicense\n-------\n\nNSF\n"
         assert set(FundingCollector._acknowledged_agencies(rst)) == {"NASA", "DoD"}
+
+
+class TestEvidence:
+    """Where each finding came from and where the collector looked (#99)."""
+
+    def _find(self, collector, files, tree_paths):
+        import base64
+        from unittest.mock import MagicMock
+
+        async def fake_get(client, url, params=None):
+            for key, text in files.items():
+                if url.endswith(key):
+                    return {"content": base64.b64encode(text.encode()).decode()}
+            return None
+
+        collector.forge._github_get = fake_get
+        tree = RepoTree(FakeForge(), "o/r", tree_paths, truncated=False)
+        return asyncio.run(collector._find_grant_references(MagicMock(), "o/r", tree))
+
+    def test_each_finding_keeps_its_file_and_every_file_read_is_listed(self, collector):
+        grants, _, read = self._find(collector, {
+            "/readme": "Supported by award DE-SC0021354.",
+            "/contents/NOTICE": "developed under funding from the U.S. Department of Energy",
+        }, ["README.md", "NOTICE", "src/main.c"])
+        assert [(g["value"], g["source"]) for g in grants] == [
+            ("DE-SC0021354", "README.md"), ("DOE", "NOTICE"),
+        ]
+        assert all(g["url"] for g in grants)
+        assert [r["path"] for r in read] == ["README.md", "NOTICE"]
+
+    def test_acknowledgment_carries_the_text_that_named_the_funder(self, collector):
+        grants, _, _ = self._find(collector, {
+            "/readme": "# Acknowledgments\n\nThis work was supported by the National Science Foundation.\n",
+        }, ["README.md"])
+        assert grants[0]["value"] == "NSF"
+        assert "National Science Foundation" in grants[0]["excerpt"]
+
+    def test_bare_funder_list_is_quoted_under_its_heading(self):
+        mentions = FundingCollector._agency_mentions(
+            "## Acknowledgments\n\n- National Science Foundation\n- NASA\n")
+        assert mentions == [
+            ("NSF", "Acknowledgments: National Science Foundation"),
+            ("NASA", "Acknowledgments: NASA"),
+        ]
+
+    @pytest.mark.parametrize("readme", [
+        "# HDF5\n\n## Acknowledgments\n\nThis work was supported by the U.S. Department of Energy.\n",
+        "HDF5\n====\n\nAcknowledgments\n---------------\n\nThis work was supported by the U.S. Department of Energy.\n",
+    ])
+    def test_heading_after_other_content_still_prefixes_the_quote(self, readme):
+        (agency, excerpt), = FundingCollector._agency_mentions(readme)
+        assert (agency, excerpt) == (
+            "DOE", "Acknowledgments: This work was supported by the U.S. Department of Energy.")
+
+    def test_long_line_is_cut_around_the_funder(self):
+        text = "x" * 500 + " funded by the National Science Foundation " + "y" * 500
+        (_, excerpt), = FundingCollector._agency_mentions(text)
+        assert "National Science Foundation" in excerpt
+        assert len(excerpt) < 300
+
+    def test_readme_without_a_tree_is_still_named(self, collector):
+        import base64
+        from unittest.mock import MagicMock
+        data = {"content": base64.b64encode(b"Funded by NASA.").decode()}
+
+        async def go():
+            with patch.object(collector.forge, "_github_get", new=AsyncMock(return_value=data)):
+                return await collector._find_grant_references(MagicMock(), "o/r")
+        grants, _, read = asyncio.run(go())
+        assert grants[0]["source"] == "README" and grants[0]["url"] is None
+        assert read == [{"path": "README", "url": None}]
+
+    def test_root_readme_preferred_over_docs_readme(self, collector):
+        _, _, read = self._find(collector, {"/readme": "text"}, ["docs/README.md", "README.rst"])
+        assert read[0]["path"] == "README.rst"
+
+    def test_documentation_row_says_where_it_looked_when_nothing_found(self, collector):
+        read = [{"path": "README.md", "url": "https://x/README.md"}]
+        sub = collector._calculate_score(
+            {"found": [], "platforms": []}, [],
+            {"organizations": [], "sampled": 0, "with_affiliation": 0}, None,
+            grants_read=read,
+        )["sub_scores"]
+        evidence = sub["funding_documentation"]["evidence"]
+        assert evidence["found"] == []
+        searched = {s["text"]: s["paths"] for s in evidence["searched"]}
+        assert searched["Files searched for award numbers and funder acknowledgments"] == read
+        assert {p["path"] for p in searched["Funding files looked for"]} >= {"FUNDING.yml", "funding.json"}
+
+    def test_portfolio_lists_only_the_sources_it_counted(self, collector):
+        grants = [
+            {"value": "DE-SC0021354", "kind": "DOE award", "source": "README.md", "url": None},
+            {"value": "DOE", "kind": "acknowledgment", "excerpt": "funded by DOE",
+             "source": "NOTICE", "url": None},
+            {"value": "NSF", "kind": "acknowledgment", "excerpt": "funded by NSF",
+             "source": "NOTICE", "url": None},
+        ]
+        sub = collector._calculate_score(
+            {"found": [], "platforms": ["github"]}, grants,
+            {"organizations": [], "sampled": 0, "with_affiliation": 0}, None,
+        )["sub_scores"]
+        assert sub["funding_portfolio"]["value"] == "3 distinct funding source(s)"
+        found = [f["text"] for f in sub["funding_portfolio"]["evidence"]["found"]]
+        # DOE's acknowledgment is already covered by its award.
+        assert found == ["github (funding platform)", "DE-SC0021354 (DOE award)", "NSF named as a funder"]
+
+
+class TestFundingSentenceStaysInItsParagraph:
+    def test_verb_before_a_heading_does_not_reach_the_next_section(self):
+        # AMReX's README: "supported" ends a feature list; DOE is named under
+        # the next heading as a deployment site, not a funder.
+        readme = ("- Plotfile format supported by Amrvis, VisIt, ParaView and yt\n"
+                  "- Built-in profiling tools\n\n## Installation\n\n"
+                  "AMReX runs on Linux, macOS and Windows, and is deployed on DOE HPC systems\n")
+        assert FundingCollector._acknowledged_agencies(readme) == []
+
+    def test_wrapped_funding_sentence_still_counts(self):
+        text = "This software was developed under funding\nfrom the U.S. Department\nof Energy.\n"
+        assert FundingCollector._acknowledged_agencies(text) == ["DOE"]

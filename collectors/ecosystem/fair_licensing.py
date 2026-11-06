@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
+from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, excerpt, get_threshold
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,10 @@ _EXCEPTION_MARKERS = [
 _COPYRIGHT_LINE = re.compile(r"(?im)^\s*copyright\b.*$")
 _MULTIPLE_HOLDERS = 3
 
+# Recent tags searched for a version number when there are no releases.
+_TAGS_SAMPLED = 20
+
+
 _CITATION_PATHS = ["CITATION.cff"]
 _CODEMETA_PATHS = ["codemeta.json"]
 _ZENODO_PATHS = [".zenodo.json", "zenodo.json"]
@@ -117,6 +121,11 @@ _BIBTEX_TO_CITATION_FIELD = {
     "title": "title", "author": "authors", "version": "version",
     "license": "license", "doi": "doi",
 }
+
+
+def _excerpt(text: str, match: Optional["re.Match"]) -> Optional[str]:
+    """The text around `match`, or None without one."""
+    return excerpt(text, match, None) if match else None
 
 
 class FairLicensingCollector:
@@ -171,10 +180,34 @@ class FairLicensingCollector:
             exceptions, metadata, has_codemeta, has_zenodo, releases,
             codemeta_gap, zenodo_gap, releases_gap,
         )
-        bibtex = None
+        bibtex, bibtex_read = None, None
         if not metadata.get("exists") and tree is not COLLECTION_GAP:
+            bibtex_read = []
             async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
-                bibtex = await self._get_bibtex_citation(client, ref, tree)
+                bibtex = await self._get_bibtex_citation(client, ref, tree, read=bibtex_read)
+
+        overall = self._calculate_score(exceptions, metadata, fair, bibtex)
+        # Each row's evidence, for the per-package report (#99).
+        citation_src = self._located(tree, _CITATION_PATHS)
+        # Only text that came back was read; GitLab's detection carries none.
+        license_src = ({"path": license_data.get("file_path"), "url": license_data.get("url")}
+                       if license_data.get("text") else {})
+        evidence = {
+            "fair4rs_assessment": self._fair_evidence(
+                fair, exceptions, metadata, releases, releases_gap, tree is COLLECTION_GAP,
+                citation_src, self._located(tree, _CODEMETA_PATHS),
+                self._located(tree, _ZENODO_PATHS),
+                citation_src if exceptions.get("resolved_via") == "citation" else license_src,
+            ),
+            "license_exception_handling": self._exception_evidence(
+                exceptions, license_data, license_src, citation, citation_gap, citation_src,
+            ),
+            "fair_metadata": self._metadata_evidence(
+                metadata, citation, citation_gap, citation_src, bibtex, bibtex_read,
+            ),
+        }
+        for key, ev in evidence.items():
+            overall["sub_scores"][key]["evidence"] = ev
 
         return {
             "package_name": repo_name,
@@ -184,7 +217,7 @@ class FairLicensingCollector:
             "citation_metadata": metadata,
             "bibtex_citation": bibtex,
             "fair": fair,
-            "overall_score": self._calculate_score(exceptions, metadata, fair, bibtex),
+            "overall_score": overall,
         }
 
     # ------------------------------------------------------------------ fetch
@@ -202,6 +235,8 @@ class FairLicensingCollector:
             "spdx_id": data["spdx_id"],
             "name": data["name"],
             "text": data["text"],
+            "file_path": data.get("file_path"),
+            "url": data.get("html_url"),
         }, False
 
     async def _get_citation(
@@ -247,7 +282,7 @@ class FairLicensingCollector:
             return False, True
         if data:
             return True, False
-        tags = await self.forge.tags(client, ref, per_page=20)
+        tags = await self.forge.tags(client, ref, per_page=_TAGS_SAMPLED)
         if tags is COLLECTION_GAP:
             return False, True
         return any(re.search(r"\d+\.\d+", t.get("name", "")) for t in tags or []
@@ -302,11 +337,18 @@ class FairLicensingCollector:
             result["not_collected"] = True
         return result
 
+    @classmethod
+    def _license_named_in_text(cls, text: str) -> Optional[str]:
+        hit = cls._license_name_match(text)
+        return hit[0] if hit else None
+
     @staticmethod
-    def _license_named_in_text(text: str) -> Optional[str]:
+    def _license_name_match(text: str) -> Optional[tuple]:
+        """(family, match) for the first license named in `text`, or None."""
         for name, pattern in _LICENSE_TEXT_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE):
-                return name
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                return name, m
         return None
 
     @staticmethod
@@ -333,34 +375,43 @@ class FairLicensingCollector:
         return None
 
     async def _get_bibtex_citation(
-        self, client: httpx.AsyncClient, ref: str, tree
+        self, client: httpx.AsyncClient, ref: str, tree, read: Optional[List] = None,
     ) -> Dict[str, Any]:
         """Citation fields carried by BibTeX in a root-level citation file,
         or None if there's no such file or it has no BibTeX entries.
 
         Scored separately from CITATION.cff and not fed into FAIR4RS: the
         entries usually cite papers, so their DOI identifies a paper rather
-        than the software.
+        than the software. Each file actually read is appended to `read`, as
+        {"path", "url"}, so a report can say where BibTeX was looked for.
         """
+        read = [] if read is None else read
         paths = [p for p in tree.find(_BIBTEX_CITATION_FILE) if "/" not in p]
         for path in paths:
             text = await self.forge.file_content(client, ref, path)
+            if isinstance(text, str):
+                read.append({"path": path, "url": tree.url_for(path)})
             if not text:
                 continue
             if not _BIBTEX_ENTRY.search(text):
                 continue
-            return {"path": path, **self._analyze_bibtex(text, self._repo_ref(ref))}
-        return await self._readme_bibtex(client, ref)
+            return {"path": path, "url": tree.url_for(path),
+                    **self._analyze_bibtex(text, self._repo_ref(ref))}
+        return await self._readme_bibtex(client, ref, read)
 
     def _repo_ref(self, ref: str) -> str:
         """"host/owner/repo", as a BibTeX url field would contain it."""
         return f"{self.forge.host}/{ref}".lower()
 
-    async def _readme_bibtex(self, client: httpx.AsyncClient, ref: str) -> Dict[str, Any]:
+    async def _readme_bibtex(
+        self, client: httpx.AsyncClient, ref: str, read: Optional[List] = None,
+    ) -> Dict[str, Any]:
         """BibTeX under the README's own citation heading ("Citation", "How to
         cite", "Citing"), or None. Only that section is read: BibTeX elsewhere
         in a README is usually related work, not how to cite this project."""
         text = await self.forge.readme(client, ref)
+        if isinstance(text, str) and read is not None:
+            read.append({"path": "README (under a Citation, Citing or How to cite heading)"})
         if not text:
             return None
         m = _README_CITATION_HEADING.search(text)
@@ -499,6 +550,173 @@ class FairLicensingCollector:
             "satisfied": [k for k, v in principles.items() if v],
             "count": sum(principles.values()),
         }
+
+    # --------------------------------------------------------------- evidence
+    # What each row found and where, or what it looked for and where, for the
+    # per-package report (#99). Nothing is claimed as searched for an input
+    # that gapped.
+
+    @staticmethod
+    def _located(tree, paths: List[str]) -> Dict[str, Any]:
+        """The first of `paths` in the tree as {"path", "url"}, or {}."""
+        if tree is COLLECTION_GAP:
+            return {}
+        path = tree.match(paths)
+        return {"path": path, "url": tree.match_url([path])} if path else {}
+
+    def _fair_evidence(
+        self, fair: Dict, exceptions: Dict, metadata: Dict,
+        releases: bool, releases_gap: bool, tree_gap: bool,
+        citation_src: Dict, codemeta_src: Dict, zenodo_src: Dict, license_src: Dict,
+    ) -> Dict[str, List]:
+        """What satisfied each principle, and for each that certainly
+        failed, what would satisfy it."""
+        principles = fair.get("principles", {})
+        gaps = fair.get("principle_gaps", {})
+
+        found = []
+        if "doi" in metadata.get("present", []):
+            found.append({"text": "DOI (Findable)", **citation_src})
+        if zenodo_src:
+            found.append({"text": "Zenodo metadata (Findable)", **zenodo_src})
+        if exceptions.get("identified"):
+            name = (exceptions.get("api_spdx") if exceptions.get("api_classified")
+                    else exceptions.get("resolved_from_text"))
+            found.append({"text": f"{name} license (Accessible)", **license_src})
+        if metadata.get("exists"):
+            found.append({"text": "Citation metadata (Interoperable)", **citation_src})
+        if codemeta_src:
+            found.append({"text": "CodeMeta metadata (Interoperable)", **codemeta_src})
+        if principles.get("Reusable"):
+            found.append({"text": "A release or version tag, with the license (Reusable)"})
+
+        def failed(principle: str) -> bool:
+            return principle in principles and not principles[principle] and not gaps.get(principle)
+
+        missing = []
+        if failed("Findable"):
+            missing.append({"text": "Findable: a DOI in CITATION.cff, or a .zenodo.json file"})
+        if failed("Accessible"):
+            missing.append({"text": "Accessible: a license that can be identified "
+                                    "(see License Exception Handling)"})
+        if failed("Interoperable"):
+            missing.append({"text": "Interoperable: CITATION.cff or codemeta.json"})
+        if failed("Reusable"):
+            needs = []
+            if not exceptions.get("identified") and not exceptions.get("not_collected"):
+                needs.append("a license that can be identified")
+            if not releases and not releases_gap:
+                needs.append(f"a release, or a version tag like 1.2 among the "
+                             f"{_TAGS_SAMPLED} most recent tags")
+            missing.append({"text": "Reusable: " + " and ".join(needs)})
+
+        searched = []
+        if not tree_gap and (failed("Findable") or failed("Interoperable")):
+            searched.append({
+                "text": "Metadata files looked for at the repository root (any capitalization)",
+                "paths": [{"path": p} for p in _CITATION_PATHS + _CODEMETA_PATHS + _ZENODO_PATHS],
+            })
+        return {"found": found, "missing": missing, "searched": searched}
+
+    def _exception_evidence(
+        self, exceptions: Dict, license_data: Dict, license_src: Dict,
+        citation: Dict, citation_gap: bool, citation_src: Dict,
+    ) -> Dict[str, List]:
+        """The text that identified the license and each extra term, or,
+        for a license nothing identified, what each method looked for."""
+        text = license_data.get("text") or ""
+        declared = (citation or {}).get("license")
+        if isinstance(declared, list):
+            declared = ", ".join(str(d) for d in declared)
+        family = exceptions.get("resolved_from_text")
+        via = exceptions.get("resolved_via")
+
+        found = []
+        if exceptions.get("api_classified"):
+            if license_src:
+                found.append({"text": "License text", **license_src})
+        elif via == "text":
+            hit = self._license_name_match(text)
+            found.append({"text": f"{family} named", **license_src,
+                          "quote": _excerpt(text, hit[1] if hit else None)})
+        elif via == "clauses":
+            # The endorsement clause is BSD-3's distinguishing one; for the
+            # others the last phrase is as telling as any.
+            phrase = dict(_LICENSE_CLAUSE_FINGERPRINTS)[family][-1]
+            m = re.search(phrase, re.sub(r"\s+", " ", text), re.IGNORECASE)
+            found.append({"text": f"The standard {family} clauses", **license_src,
+                          "quote": m.group(0) if m else None})
+        elif via == "citation":
+            found.append({"text": "License declaration", **citation_src,
+                          "quote": f"license: {declared}"})
+
+        markers = exceptions.get("exception_markers", [])
+        for label, pattern in _EXCEPTION_MARKERS:
+            if label in markers:
+                found.append({"text": label, **license_src,
+                              "quote": _excerpt(text, re.search(pattern, text, re.IGNORECASE))})
+        if "Multiple copyright holders" in markers:
+            count = len(_COPYRIGHT_LINE.findall(text))
+            found.append({"text": f"Multiple copyright holders ({count} copyright lines)",
+                          **license_src})
+
+        missing = []
+        if not exceptions.get("identified") and not exceptions.get("not_collected"):
+            host = getattr(self.forge, "display_name", None) or "the forge"
+            if "file_path" not in license_data:
+                missing.append({"text": f"license text from {host}'s license detection "
+                                        "(it detected no license)"})
+            elif text:
+                path = license_data.get("file_path")
+                names = ", ".join(dict.fromkeys(n for n, _ in _LICENSE_TEXT_PATTERNS))
+                clauses = [n for n, _ in _LICENSE_CLAUSE_FINGERPRINTS]
+                missing.append({"text": f"a license name in {path} (looked for: {names})"})
+                missing.append({"text": f"the standard clauses of {', '.join(clauses[:-1])} "
+                                        f"or {clauses[-1]} in {path}"})
+            if not citation_gap:
+                cff = citation_src.get("path", "CITATION.cff")
+                if not citation_src:
+                    reason = "there is no CITATION.cff"
+                elif not citation:
+                    reason = f"{cff} could not be read or parsed"
+                elif not declared:
+                    reason = f"{cff} has no license field"
+                else:
+                    reason = f"{cff} declares “{declared}”, which isn't one this check accepts"
+                missing.append({"text": f"an OSI-approved SPDX license id declared in "
+                                        f"CITATION.cff ({reason})"})
+        return {"found": found, "missing": missing}
+
+    def _metadata_evidence(
+        self, metadata: Dict, citation: Dict, citation_gap: bool, citation_src: Dict,
+        bibtex: Optional[Dict], bibtex_read: Optional[List],
+    ) -> Dict[str, List]:
+        """The citation file and the fields it lacks, or, without one, the
+        BibTeX used instead or where BibTeX was looked for."""
+        found, missing, searched = [], [], []
+        if metadata.get("exists"):
+            cff = citation_src.get("path", "CITATION.cff")
+            found.append({"text": "Citation metadata", **citation_src})
+            for field in metadata.get("missing", []):
+                if field == "doi":
+                    field = "doi (top level, or an identifiers entry of type doi)"
+                missing.append({"text": f"{field} in {cff}"})
+            return {"found": found, "missing": missing}
+
+        if not citation_gap:
+            if citation_src:
+                missing.append({"text": f"readable citation metadata ({citation_src['path']} "
+                                        "could not be read or parsed)"})
+            else:
+                missing.append({"text": "CITATION.cff (looked for at the repository root, "
+                                        "any capitalization)"})
+        if bibtex:
+            found.append({"text": "BibTeX entry", "path": bibtex.get("path"),
+                          "url": bibtex.get("url")})
+            missing += [{"text": f"{field} in the BibTeX"} for field in bibtex.get("missing", [])]
+        elif bibtex_read:
+            searched.append({"text": "BibTeX looked for in", "paths": bibtex_read})
+        return {"found": found, "missing": missing, "searched": searched}
 
     # ---------------------------------------------------------------- scoring
 

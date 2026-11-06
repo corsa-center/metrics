@@ -233,3 +233,113 @@ class TestMoreReadmeShapes:
     def test_markdown_bullets_are_not_headings(self):
         from collectors.quality.usability import readme_covers
         assert not readme_covers("# Tool\n\n* Examples of output\n\nmore\n", "Examples")
+
+
+class TestDocumentationEvidence:
+    """What Documentation Completeness Analysis found and where it looked (#99)."""
+
+    README = ("# Pkg\n\n## Building from source\nmake\n\n"
+              "See [Quick start guide](https://x/qs) and [Contact Us](https://x/c).\n")
+
+    def _collect(self, collector, readme, tree_paths, repo_info):
+        import asyncio, base64
+        from unittest.mock import AsyncMock, patch
+        tree = (COLLECTION_GAP if tree_paths is COLLECTION_GAP
+                else RepoTree(FakeForge(), "o/r", tree_paths, truncated=False))
+
+        async def get(client, url, params=None):
+            if url.endswith("/readme"):
+                if readme is COLLECTION_GAP or readme is None:
+                    return readme
+                return {"content": base64.b64encode(readme.encode()).decode()}
+            return repo_info
+
+        with patch.object(RepoTree, "fetch", new=AsyncMock(return_value=tree)), \
+             patch.object(collector.forge, "_github_get", side_effect=get):
+            r = asyncio.run(collector.collect({"name": "r", "repo_url": "https://github.com/o/r"}))
+        return r["overall_score"]["sub_scores"]["documentation_completeness"]["evidence"]
+
+    def test_matched_heading_or_link_is_quoted(self, collector):
+        ev = self._collect(collector, self.README, ["src/a.c"], {"homepage": "", "has_pages": False})
+        assert ev["found"] == [
+            {"text": "Installation (README heading)", "quote": "Building from source"},
+            {"text": "Usage (README link)", "quote": "Quick start guide"},
+            {"text": "Support (README link)", "quote": "Contact Us"},
+        ]
+
+    def test_heading_that_is_the_section_name_is_not_quoted(self, collector):
+        ev = self._collect(collector, "# Pkg\n## Usage\nrun\n", ["src/a.c"],
+                           {"homepage": "", "has_pages": False})
+        assert ev["found"] == [{"text": "Usage (README heading)"}]
+
+    def test_missing_sections_say_what_would_count(self, collector):
+        ev = self._collect(collector, self.README, ["src/a.c"], {"homepage": "", "has_pages": False})
+        assert ev["missing"] == [
+            {"text": "Examples section in the README (a heading or link text: example, demo, sample)"},
+            {"text": "documentation directory"},
+            {"text": "documentation site (the repository sets no homepage and has no GitHub Pages site)"},
+        ]
+        assert ev["searched"] == [{"text": "Documentation directories looked for (any capitalization)",
+                                   "paths": [{"path": "docs/"}, {"path": "doc/"},
+                                             {"path": "documentation/"}]}]
+
+    def test_doc_directory_and_site_are_linked(self, collector):
+        ev = self._collect(collector, self.README, ["Docs/index.rst"],
+                           {"homepage": "https://pkg.example.org", "has_pages": False})
+        assert {"path": "Docs/", "url": "https://github.com/o/r/tree/HEAD/Docs"} in ev["found"]
+        assert {"text": "Documentation site (repository homepage)",
+                "path": "https://pkg.example.org", "url": "https://pkg.example.org"} in ev["found"]
+        assert not ev["searched"]
+
+    def test_absent_readme(self, collector):
+        ev = self._collect(collector, None, ["src/a.c"], {"homepage": "", "has_pages": False})
+        assert ev["missing"][0] == {"text": "README"}
+        assert not any("section in the README" in m["text"] for m in ev["missing"])
+
+    def test_gaps_claim_nothing(self, collector):
+        ev = self._collect(collector, COLLECTION_GAP, COLLECTION_GAP, COLLECTION_GAP)
+        assert ev == {"found": [], "missing": [], "searched": []}
+
+    def test_every_section_is_described(self):
+        from collectors.quality.usability import README_SECTION_TERMS
+        assert README_SECTION_TERMS.keys() == _README_SECTIONS.keys()
+
+    def test_readme_match_prefers_a_heading_over_a_link(self):
+        from collectors.quality.usability import readme_match
+        text = "[Install guide](x)\n\n## Installing\n"
+        assert readme_match(text, _README_SECTIONS["Installation"]) == ("heading", "Installing")
+        assert readme_match("[Install guide](x)", _README_SECTIONS["Installation"]) == (
+            "link", "Install guide")
+        assert readme_match("# Pkg\n", _README_SECTIONS["Installation"]) is None
+
+    def test_evidence_reaches_the_report_row(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import build_report, render_package_report
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        collector = UsabilityCollector(GitHubForge())
+        readme = {"exists": True, "sections": ["Installation"],
+                  "missing": ["Usage", "Examples", "Support"],
+                  "matched": {"Installation": {"kind": "heading", "text": "Building <HDF5>"}}}
+        tree = RepoTree(FakeForge(), "o/r", ["src/a.c"], truncated=False)
+        overall = collector._calculate_score(readme, None, None)
+        overall["sub_scores"]["documentation_completeness"]["evidence"] = (
+            collector._documentation_evidence(readme, tree, None, None, False, False))
+        usability = {"readme": readme, "doc_directory": None, "documentation_site": None,
+                     "overall_score": overall}
+        metrics = {"overall_score": 0, "last_updated": "2026-11-05T00:00:00+00:00", "dimensions": {
+            "impact": {"score": 0.0, "metadata": {"status": "placeholder"}},
+            "ecosystem": {"score": 0.0, "sub_results": {}},
+            "quality": {"score": 0.0, "sub_results": {"usability": usability}},
+        }}
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        sec = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.3.4")
+        row = next(r for r in sec["rows"] if r["label"] == "Documentation Completeness Analysis")
+        assert row["evidence"]["found"][0]["quote"] == "Building <HDF5>"
+
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        assert "<b>Found:</b> Installation (README heading): “Building &lt;HDF5&gt;”" in page
+        assert ("<b>Not found:</b> Usage section in the README (a heading or link text: "
+                "usage, using, quick start") in page
+        assert ("<b>Documentation directories looked for (any capitalization):</b> "
+                "docs/, doc/, documentation/") in page

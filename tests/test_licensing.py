@@ -11,6 +11,8 @@ from collectors.ecosystem.licensing import LicensingCollector
 class FakeForge:
     """Minimal stand-in for GitHubForge/GitLabForge."""
 
+    display_name = "GitHub"
+
     def __init__(self):
         self.license_result = None
         self.file_metadata_results = {}
@@ -209,3 +211,131 @@ class TestCollectGapHandling:
         result = asyncio.run(go())
         manual_check.assert_not_called()
         assert result["license_info"]["found"] is True
+
+
+class TestRowEvidence:
+    """What the report shows under the license rows (#99)."""
+
+    API_MIT = {"found": True, "source": "github_api", "file_path": "LICENSE",
+               "url": "https://x/LICENSE", "download_url": "https://raw/LICENSE",
+               "spdx_id": "MIT", "license_key": "mit", "license_name": "MIT License"}
+
+    def _evidence(self, collector, info, api=None):
+        api = info if api is None else api
+        rows = collector._row_evidence("o/r", api, info, collector._analyze_license(info))
+        return {row["label"]: row["evidence"] for row in rows.values()}
+
+    def test_identified_license_names_its_file_and_identifier(self, collector):
+        ev = self._evidence(collector, self.API_MIT)
+        assert ev["Enhanced License Detection"]["found"] == [{
+            "text": "MIT license (identified by GitHub's license detection)",
+            "path": "LICENSE", "url": "https://x/LICENSE"}]
+        assert ev["OSI License Validation"] == {"missing": [], "searched": []}
+
+    def test_unnamed_license_says_what_detection_reported(self, collector):
+        info = {**self.API_MIT, "spdx_id": "NOASSERTION", "license_key": "other",
+                "license_name": "Other"}
+        ev = self._evidence(collector, info)
+        assert ev["Enhanced License Detection"]["found"][0]["text"] == (
+            "License file (GitHub's license detection reported NOASSERTION)")
+        assert ev["OSI License Validation"]["missing"] == [{
+            "text": "an SPDX license id to check against the OSI-approved list "
+                    "(GitHub's license detection reported NOASSERTION)",
+            # Dropped when the row passes on the license text instead.
+            "unless_met": True}]
+
+    def test_project_level_detection_cites_no_file(self, collector):
+        # GitLab names a license without a file it served (no download URL).
+        collector.forge.display_name = "GitLab"
+        info = {**self.API_MIT, "spdx_id": None, "download_url": ""}
+        found = self._evidence(collector, info)["Enhanced License Detection"]["found"]
+        assert found == [{"text": "A license (GitLab's license detection reported MIT License)"}]
+
+    def test_unrecognized_spdx_id_lists_the_recognized_ones(self, collector):
+        info = {**self.API_MIT, "spdx_id": "EPL-2.0", "license_name": "Eclipse Public License 2.0"}
+        osi = self._evidence(collector, info)["OSI License Validation"]
+        assert osi["missing"] == [{"text": "EPL-2.0 among the OSI-approved licenses "
+                                           "this check recognizes"}]
+        assert {"path": "BSD-3-Clause"} in osi["searched"][0]["paths"]
+
+    def test_text_detection_keeps_the_phrases_that_decided_it(self, collector):
+        info = {"found": True, "source": "manual_check", "file_path": "COPYING",
+                "url": "https://x/COPYING", "spdx_id": None, "license_key": None,
+                "license_name": None, "content": "GNU General Public License\nVersion 3, 29 June 2007"}
+        ev = self._evidence(collector, info, api={"found": False})
+        assert ev["Enhanced License Detection"]["found"] == [{
+            "text": "GPL-3.0 (text matched “gnu general public license”, “version 3”)",
+            "path": "COPYING", "url": "https://x/COPYING"}]
+
+    def test_unrecognized_file_says_what_was_looked_for(self, collector):
+        info = {"found": True, "source": "manual_check", "file_path": "COPYING",
+                "url": "https://x/COPYING", "content": "All rights reserved."}
+        detection = self._evidence(collector, info, api={"found": False})["Enhanced License Detection"]
+        assert detection["found"] == [{"text": "License file", "path": "COPYING",
+                                       "url": "https://x/COPYING"}]
+        assert [m["text"] for m in detection["missing"]] == [
+            "a license GitHub's license detection could name (it detected none)",
+            "a license this check recognizes in the text of COPYING (MIT, Apache-2.0, "
+            "GPL-2.0, GPL-3.0, BSD-2-Clause, BSD-3-Clause)",
+        ]
+
+    def test_gapped_api_and_unread_text_claim_no_search(self, collector):
+        info = {"found": True, "source": "manual_check", "file_path": "COPYING",
+                "url": "https://x/COPYING", "content": ""}
+        ev = self._evidence(collector, info, api={"found": False, "not_collected": True})
+        assert ev["Enhanced License Detection"]["missing"] == []
+        assert ev["OSI License Validation"]["missing"] == []
+
+    def test_no_license_lists_the_file_names_tried(self, collector):
+        detection = self._evidence(collector, {"found": False})["Enhanced License Detection"]
+        assert detection["missing"] == [{"text": "License file (GitHub's license detection found none)"}]
+        assert detection["searched"][0]["text"] == "License file names tried in o/r"
+        assert {"path": "COPYING"} in detection["searched"][0]["paths"]
+
+    def test_gapped_lookup_claims_nothing(self, collector):
+        ev = self._evidence(collector, {"found": False, "not_collected": True})
+        assert ev["Enhanced License Detection"] == {"found": [], "missing": [], "searched": []}
+
+    def test_collect_returns_the_rows(self, collector, forge):
+        forge.license_result = {"file_path": "LICENSE", "html_url": "https://x/LICENSE", "size": 1,
+                                "download_url": "https://raw/LICENSE", "key": "mit",
+                                "name": "MIT License", "spdx_id": "MIT"}
+        result = asyncio.run(collector.collect({"name": "x", "repo_url": "https://github.com/o/r"}))
+        labels = [row["label"] for row in result["row_evidence"].values()]
+        assert labels == ["Enhanced License Detection", "OSI License Validation"]
+
+
+class TestReportEvidence:
+    def test_evidence_reaches_the_four_two_two_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        from tests.fakes import FakeForge as RepoForge
+
+        forge = RepoForge(license_data={
+            "file_path": "LICENSE", "html_url": "https://github.com/o/r/blob/HEAD/LICENSE",
+            "size": 1, "download_url": "https://raw/LICENSE", "spdx_id": "EPL-2.0",
+            "key": "epl-2.0", "name": "Eclipse Public License 2.0", "text": "EPL"})
+        licensing = asyncio.run(LicensingCollector(forge).collect(
+            {"name": "x", "repo_url": "https://github.com/o/r"}))
+        metrics = {
+            "overall_score": 27, "last_updated": "2026-09-30T02:25:04+00:00",
+            "dimensions": {
+                "impact": {"score": 0.0, "metadata": {"status": "placeholder"}},
+                "ecosystem": {"score": 80.0, "sub_results": {"licensing": licensing}},
+                "quality": {"score": 0.0, "sub_results": {}},
+            },
+        }
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        def row(label):
+            text = page[page.index(f"<b>{label}:</b>"):]
+            return text[:text.index("</li>")]
+
+        assert ("<b>Found:</b> EPL-2.0 license (identified by GitHub&#x27;s license detection) in "
+                '<a href="https://github.com/o/r/blob/HEAD/LICENSE">LICENSE</a>'
+                ) in row("Enhanced License Detection")
+        osi = row("OSI License Validation")
+        assert "<b>Not found:</b> EPL-2.0 among the OSI-approved licenses" in osi
+        assert "<b>OSI-approved licenses recognized:</b> MIT, Apache-2.0" in osi

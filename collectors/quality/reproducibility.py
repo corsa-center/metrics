@@ -20,7 +20,7 @@ import re
 import tomllib
 from typing import Any, Dict, List, Optional
 
-from collectors.quality.usability import readme_covers
+from collectors.quality.usability import README_SECTION_TERMS, readme_covers
 from collectors.ecosystem.base import (
     COLLECTION_GAP, CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN, RepoTree, RetryingTransport,
 )
@@ -146,6 +146,133 @@ _TREE_PATTERNS = {
     ("reproducibility_docs", "Environment specification"): ENVIRONMENT_SPEC_PATTERN,
 }
 
+# Where each tree-wide search above looked, in words, for the report.
+_TREE_SEARCHES = {
+    ("containers", "Dockerfile"):
+        "a Dockerfile or Containerfile (or a variant such as Dockerfile.cuda, or *.dockerfile) "
+        "anywhere outside vendored directories",
+    ("containers", "docker-compose"):
+        "a compose.yml or docker-compose.yml anywhere outside vendored directories",
+    ("containers", "Singularity / Apptainer"):
+        "a Singularity or Apptainer file (or a variant), or a .def file naming either, "
+        "anywhere outside vendored directories",
+    ("reproducibility_docs", "Environment specification"):
+        "environment*.yml or conda-env*.yml (not under docs/), spack.yaml, spack.lock, "
+        ".devcontainer, .uberenv_config.json, shell.nix, flake.nix, pixi.toml, or a Spack "
+        "package recipe, anywhere outside vendored directories",
+}
+
+_SCHEME_NAMES = {"semver": "semantic versions", "calver": "calendar versions",
+                 "major.minor": "major.minor versions"}
+
+
+def _found_item(label: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+    """A found file as a report evidence item. The label is kept only when
+    the file's name doesn't already say it (Zenodo metadata, .zenodo.json)."""
+    path = detail.get("file") or ""
+    item: Dict[str, Any] = {"path": path, "url": detail.get("url")}
+    if label.lower() != path.rsplit("/", 1)[-1].lower():
+        item["text"] = label
+    return item
+
+
+def _searched_files(category: str, labels: List[str], text: str) -> List[Dict[str, Any]]:
+    """Where `labels` were looked for: the candidate paths, then any
+    tree-wide search."""
+    searched = [{"text": text, "paths": [{"path": p} for label in labels
+                                         for p in _FILE_CHECKS[category][label]]}]
+    for label in labels:
+        where = _TREE_SEARCHES.get((category, label))
+        if where:
+            searched.append({"text": f"{label} also looked for", "paths": [{"path": where}]})
+    return searched
+
+
+def _file_evidence(category: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Evidence for a row that passes on any one file of a category: the
+    files found, or else what was looked for and where. Labels that gapped
+    sit in not_collected rather than missing, so nothing is claimed for them."""
+    found = [_found_item(label, result["details"][label]) for label in result.get("found", [])]
+    if found:
+        return {"found": found}
+    labels = result.get("missing", [])
+    if not labels:
+        return {}
+    return {"missing": [{"text": ", ".join(labels)}],
+            "searched": _searched_files(category, labels, "Paths checked (any capitalization)")}
+
+
+def _versioning_evidence(semver: Dict[str, Any]) -> Dict[str, Any]:
+    """The tags that carried a version, by scheme, or else the tags read."""
+    if semver.get("not_collected"):
+        return {}
+    tags = [t for t in semver.get("tags_checked", semver.get("example_tags", [])) if t]
+    by_scheme: Dict[str, List[str]] = {}
+    for tag in tags:
+        scheme = _versioning_scheme(tag)
+        if scheme:
+            by_scheme.setdefault(scheme, []).append(tag)
+    if by_scheme:
+        return {"found": [{"text": f"{', '.join(t)} ({_SCHEME_NAMES[s]})"}
+                          for s, t in by_scheme.items()]}
+    searched = []
+    if semver.get("source") == "tags":
+        # No releases at all, which is what sent the check to tags.
+        searched.append({"text": "Published releases", "paths": []})
+        searched.append({"text": "Tags checked instead", "paths": [{"path": t} for t in tags]})
+    else:
+        searched.append({"text": "Tags of the most recent releases checked",
+                         "paths": [{"path": t} for t in tags]})
+    return {
+        "missing": [{"text": "a version in any tag checked (x.y.z, a calendar version "
+                             "such as 26.09 or 2024.05.1, or major.minor)"}],
+        "searched": searched,
+    }
+
+
+def _environment_evidence(
+    pinning: Dict[str, Any], docs: Dict[str, Any], managed: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Environment Management passes on a lockfile, managed dependencies or
+    an environment specification, so its evidence spans both categories."""
+    found = [_found_item(label, pinning["details"][label]) for label in pinning.get("found", [])]
+    env = docs.get("details", {}).get("Environment specification", {})
+    if env.get("exists"):
+        found.append(_found_item("Environment specification", env))
+    if found:
+        return {"found": found}
+    if pinning.get("not_collected") or not pinning.get("missing"):
+        return {}
+    searched = _searched_files("dependency_pinning", pinning["missing"],
+                               "Lockfile paths checked (any capitalization)")
+    if managed is not None:
+        # A manifest that couldn't be read wasn't checked, so the line would
+        # undercount; leave it out rather than say less was there.
+        if not managed["manifests_unread"]:
+            searched.append({
+                "text": f"Root manifests read for version constraints "
+                        f"({', '.join(_VERSIONED_MANIFESTS)})",
+                "paths": managed["manifests"],
+            })
+        dependabot = managed["dependabot"]
+        if dependabot:
+            ecosystems = ", ".join(dependabot["ecosystems"]) or "no package ecosystem"
+            searched.append({"text": f"Dependabot configuration read (it updates only {ecosystems})",
+                             "paths": [{"path": dependabot["path"], "url": dependabot["url"]}]})
+        elif not managed["dependabot_present"]:
+            searched.append({"text": f"Dependabot configuration ({', '.join(_DEPENDABOT_PATHS)})",
+                             "paths": []})
+    if "Environment specification" in docs.get("missing", []):
+        searched += _searched_files("reproducibility_docs", ["Environment specification"],
+                                    "Environment specification paths checked (any capitalization)")
+    return {
+        "missing": [{"text": "a lockfile, a manifest that constrains dependency versions, "
+                             "Dependabot updating the project's own dependencies, or an "
+                             "environment specification"}],
+        "searched": searched,
+    }
+
+
 # Dependency management shown by content rather than by a lockfile: a
 # manifest that constrains versions, or Dependabot keeping the software's own
 # dependencies current (not just CI actions or pre-commit hooks).
@@ -216,13 +343,16 @@ class ReproducibilityCollector:
             )
             categories = {**self._scan_files(tree), "semantic_versioning": semver}
             pinning = categories["dependency_pinning"]
+            managed_read = None
             if tree is not COLLECTION_GAP and not pinning["found"]:
-                for label, path in await self._managed_dependencies(client, ref, tree):
+                managed, managed_read = await self._managed_dependencies(client, ref, tree)
+                for label, path in managed:
                     pinning["found"].append(label)
                     pinning["details"][label] = {"exists": True, "file": path, "url": tree.url_for(path)}
             docs = categories["reproducibility_docs"]
+            readme_read = False
             if tree is not COLLECTION_GAP and "Install / build guide" in docs["missing"]:
-                readme = await self._readme_install_section(client, ref)
+                readme, readme_read = await self._readme_install_section(client, ref)
                 if readme:
                     docs["missing"].remove("Install / build guide")
                     docs["found"].append("Install / build guide")
@@ -242,6 +372,47 @@ class ReproducibilityCollector:
             "uses_semantic_versioning": semver["uses_semver"],
             "categories": categories,
             "overall_score": overall,
+            # The orchestrator builds 4.3.3's rows itself, so the evidence the
+            # per-package report shows under them is keyed by row label here.
+            "row_evidence": self._row_evidence(categories, managed_read, readme_read),
+        }
+
+    @staticmethod
+    def _row_evidence(
+        categories: Dict[str, Any], managed_read: Optional[Dict[str, Any]], readme_read: bool,
+    ) -> Dict[str, Dict]:
+        """What each 4.3.3 row found and where it looked, for the report.
+
+        The dashboard names what was found but not the file it was found in,
+        and says nothing when a row fails; a team needs the paths tried to
+        know where to put theirs.
+        """
+        docs = categories["reproducibility_docs"]
+        docs_evidence = _file_evidence("reproducibility_docs", docs)
+        if readme_read and not docs.get("found"):
+            docs_evidence.setdefault("missing", []).append({
+                "text": "an installation section in the README (a heading or link text: "
+                        f"{README_SECTION_TERMS['Installation']})"})
+        return {
+            "fair4rs_metadata": {
+                "label": "FAIR4RS Compliance Assessment",
+                "evidence": _file_evidence("fair4rs_metadata", categories["fair4rs_metadata"]),
+            },
+            "containers": {
+                "label": "Containerization Excellence",
+                "evidence": _file_evidence("containers", categories["containers"]),
+            },
+            "semantic_versioning": {
+                "label": "Version Control Best Practices",
+                "evidence": _versioning_evidence(categories["semantic_versioning"]),
+            },
+            "environment": {
+                "label": "Environment Management",
+                "evidence": _environment_evidence(
+                    categories["dependency_pinning"], docs, managed_read),
+            },
+            "reproducibility_docs": {"label": "Reproducibility Documentation",
+                                     "evidence": docs_evidence},
         }
 
     # ------------------------------------------------------------------ #
@@ -302,25 +473,35 @@ class ReproducibilityCollector:
 
     async def _managed_dependencies(
         self, client: httpx.AsyncClient, ref: str, tree
-    ) -> List[tuple]:
+    ) -> tuple:
         """(label, path) for root manifests that constrain dependency
         versions, and for Dependabot configured for the software's own
-        package ecosystem."""
+        package ecosystem; and what was read to decide, for the report."""
         found = []
+        read: Dict[str, Any] = {"manifests": [], "manifests_unread": False,
+                                "dependabot": None, "dependabot_present": False}
         for name in _VERSIONED_MANIFESTS:
             path = tree.match([name])
             if path:
                 text = await self._file_text(client, ref, path)
+                if text:
+                    read["manifests"].append({"path": path, "url": tree.url_for(path)})
+                else:
+                    read["manifests_unread"] = True
                 if text and _versioned_dependencies(name, text):
                     found.append(("Versioned dependency manifest", path))
                     break
         path = tree.match(_DEPENDABOT_PATHS)
         if path:
-            text = await self._file_text(client, ref, path) or ""
-            ecosystems = set(re.findall(r"package-ecosystem:\s*[\"']?([\w-]+)", text))
+            read["dependabot_present"] = True
+            text = await self._file_text(client, ref, path)
+            ecosystems = set(re.findall(r"package-ecosystem:\s*[\"']?([\w-]+)", text or ""))
+            if text:
+                read["dependabot"] = {"path": path, "url": tree.url_for(path),
+                                      "ecosystems": sorted(ecosystems)}
             if ecosystems - _DEPENDABOT_CI_ONLY:
                 found.append(("Dependabot dependency updates", path))
-        return found
+        return found, read
 
     async def _file_text(self, client: httpx.AsyncClient, ref: str, path: str) -> Optional[str]:
         text = await self.forge.file_content(client, ref, path)
@@ -328,14 +509,17 @@ class ReproducibilityCollector:
 
     async def _readme_install_section(
         self, client: httpx.AsyncClient, ref: str
-    ) -> Optional[Dict[str, str]]:
+    ) -> tuple:
         """The README's installation section, if it has one: build
-        instructions often live there rather than in a separate INSTALL file."""
+        instructions often live there rather than in a separate INSTALL file.
+        Also whether a README was read at all, so the report claims to have
+        looked only when it did."""
         text = await self.forge.readme(client, ref)
+        read = isinstance(text, str)
         if text and readme_covers(text, "Installation"):
             return {"file": "README (installation section)",
-                    "url": f"https://{self.forge.host}/{ref}"}
-        return None
+                    "url": f"https://{self.forge.host}/{ref}"}, read
+        return None, read
 
     # ------------------------------------------------------------------ #
     # Semantic versioning (GitHub releases API)                           #
@@ -356,7 +540,7 @@ class ReproducibilityCollector:
             return await self._check_tags(client, ref, sample)
 
         tags = [r.get("tag_name", "") for r in releases]
-        return self._summarize_tags(tags)
+        return {**self._summarize_tags(tags), "source": "releases"}
 
     async def _check_tags(
         self, client: httpx.AsyncClient, ref: str, sample: int
@@ -369,7 +553,7 @@ class ReproducibilityCollector:
             }
 
         tags = [t.get("name", "") for t in tags_data or []]
-        return self._summarize_tags(tags)
+        return {**self._summarize_tags(tags), "source": "tags"}
 
     @staticmethod
     def _summarize_tags(tags: List[str]) -> Dict[str, Any]:
@@ -386,6 +570,7 @@ class ReproducibilityCollector:
             "semver_count": len(schemes),
             "scheme": schemes[0] if schemes else None,
             "example_tags": tags[:3],
+            "tags_checked": tags,
         }
 
     # ------------------------------------------------------------------ #

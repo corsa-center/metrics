@@ -14,13 +14,14 @@ handled elsewhere (ci_cd.py and the OpenSSF badge respectively).
 import asyncio
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
 from collectors.ecosystem.base import (
     _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
+from collectors.ecosystem.base import excerpt
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,52 @@ _TOOLING_SECTIONS = {
 }
 _TOOLING_CONFIG_FILES = ["pyproject.toml", "setup.cfg", "tox.ini"]
 
+# Where each indicator is looked for beyond its root candidates, in words,
+# for the report's "not found" lines. Every search named here has run by the
+# time an indicator is reported missing (see _refine_testing and
+# _refine_tooling).
+_TESTING_ELSEWHERE = {
+    "Test suite directory": "a test, tests, testing or unit_tests directory anywhere in the project's own code",
+    "Build-system test target": "fpm.toml with a test/ directory; enable_testing(), include(CTest), "
+                                "an automake TESTS or check-local target in the build and config files "
+                                "read; ctest, make check, make test or fpm test run in the CI files read",
+    "pytest": "a conftest.py anywhere in the project's own code; a [tool.pytest] section in the build "
+              "and config files read; pytest run in the CI files read",
+    "Unit-test framework": "a googletest, gtest, Catch2, doctest, cmocka or pFUnit directory anywhere; "
+                           "GoogleTest, Catch2 or doctest fetched or found by CMake in the build and "
+                           "config files read",
+}
+_TOOLING_ELSEWHERE = {
+    "Pre-commit hooks": "a committed pre-commit git hook (githooks/, .husky/ or hooks/) anywhere",
+    "Code formatter config": "a clang-format, cmake-format, gersemi, fprettify, yapf, Prettier, rustfmt, "
+                             "JuliaFormatter, Artistic Style or Uncrustify config anywhere in the project's "
+                             "own code; a black, isort, yapf or ruff format section in the Python config files read",
+    "Linter config": "a clang-tidy, flake8, Pylint, Ruff, mypy, ESLint, lintr, cpplint or Cppcheck config "
+                     "anywhere in the project's own code; a ruff, pylint, mypy or flake8 section in the "
+                     "Python config files read",
+}
+
+def _indicator_evidence(scan: Dict[str, Any], candidates: Dict[str, List[str]],
+                        elsewhere: Dict[str, str]) -> Dict[str, List]:
+    """A _scan/_refine result as report evidence: the file each indicator
+    was found in (the row names only the indicator), and for each one
+    confirmed missing, everything that would have counted. A gapped
+    indicator is neither."""
+    details = scan.get("details", {})
+    found = []
+    for label in scan.get("found", []):
+        d = details.get(label, {})
+        found.append({"text": label, "path": d.get("file"), "url": d.get("url"),
+                      "quote": d.get("quote")})
+    missing = []
+    for label in scan.get("missing", []):
+        looked = ", ".join(candidates.get(label, []))
+        if label in elsewhere:
+            looked += "; " + elsewhere[label]
+        missing.append({"text": f"{label} (looked for: {looked})"})
+    return {"found": found, "missing": missing, "searched": scan.get("searched", [])}
+
+
 # How many recently-closed PRs to sample for review coverage.
 _PR_SAMPLE_SIZE = 50
 
@@ -182,7 +229,7 @@ class DevToolingCollector:
             url = tree.match_url(paths)
             if url:
                 found.append(label)
-                details[label] = {"exists": True, "url": url}
+                details[label] = {"exists": True, "url": url, "file": tree.match(paths)}
             else:
                 missing.append(label)
                 details[label] = {"exists": False}
@@ -197,10 +244,12 @@ class DevToolingCollector:
         found, missing = list(testing["found"]), list(testing["missing"])
         not_collected, details = list(testing["not_collected"]), dict(testing["details"])
 
-        def mark(label: str, path: str):
+        def mark(label: str, path: str, quote: Optional[str] = None):
             missing.remove(label)
             found.append(label)
             details[label] = {"exists": True, "url": tree.url_for(path), "file": path}
+            if quote:
+                details[label]["quote"] = quote
 
         # Tree-only evidence first; a vendored copy of a test framework is
         # itself the signal, so that one isn't restricted to owned paths.
@@ -239,7 +288,8 @@ class DevToolingCollector:
             key=lambda p: (p.count("/"), p),
         )[:_MAX_TEST_CMAKE_FILES]
         paths = [p for p in (tree.match([c]) for c in _CONFIG_FILES) if p] + cmake_modules
-        ci_paths = tree.find(_CI_FILES)[:_MAX_CI_FILES]
+        all_ci = tree.find(_CI_FILES)
+        ci_paths = all_ci[:_MAX_CI_FILES]
 
         async def read(path: str):
             text = await self.forge.file_content(client, ref, path)
@@ -253,15 +303,26 @@ class DevToolingCollector:
                 marker = _CONTENT_MARKERS.get(label) if i < len(paths) else _CI_TEST_RUNNERS.get(label)
                 if i >= len(paths) and text and text is not COLLECTION_GAP:
                     text = re.sub(r"(?m)^\s*#.*$", "", text)  # a comment isn't a step
-                if text and text is not COLLECTION_GAP and marker and marker.search(text):
-                    mark(label, path)
+                m = marker.search(text) if text and text is not COLLECTION_GAP and marker else None
+                if m:
+                    mark(label, path, excerpt(text, m, None))
                     break
         if any(t is COLLECTION_GAP for t in texts):
             for label in [l for l in wanted if l in missing]:
                 missing.remove(label)
                 not_collected.append(label)
                 details[label] = {"not_collected": True}
-        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details}
+
+        def read_ok(group):
+            return [{"path": p, "url": tree.url_for(p)} for p, t in zip(paths + ci_paths, texts)
+                    if p in group and t is not COLLECTION_GAP]
+        ci_text = "CI files read for test runners"
+        if len(all_ci) > len(ci_paths):
+            ci_text += f", the first {len(ci_paths)} of {len(all_ci)}"
+        searched = [{"text": "Build and config files read for test setup", "paths": read_ok(paths)},
+                    {"text": ci_text, "paths": read_ok(ci_paths)}]
+        return {"found": found, "missing": missing, "not_collected": not_collected, "details": details,
+                "searched": searched}
 
     async def _refine_tooling(
         self, client: httpx.AsyncClient, ref: str, tree, tooling: Dict[str, Any],
@@ -269,11 +330,14 @@ class DevToolingCollector:
         """Formatter and linter configs outside the root list: anywhere in
         the project's own tree, then as sections of root Python config files."""
         found, missing, details = list(tooling["found"]), list(tooling["missing"]), dict(tooling["details"])
+        not_collected = list(tooling.get("not_collected", []))
 
-        def mark(label: str, path: str):
+        def mark(label: str, path: str, quote: Optional[str] = None):
             missing.remove(label)
             found.append(label)
             details[label] = {"exists": True, "url": tree.url_for(path), "file": path}
+            if quote:
+                details[label]["quote"] = quote
 
         for label, pattern in _TOOLING_TREE.items():
             if label in missing:
@@ -281,17 +345,34 @@ class DevToolingCollector:
                 if path:
                     mark(label, path)
         wanted = [l for l in _TOOLING_SECTIONS if l in missing]
+        searched = []
+        if wanted:
+            searched.append({"text": "Python config files read for tool sections", "paths": []})
+        read_gap = False
         for path in [p for p in (tree.match([c]) for c in _TOOLING_CONFIG_FILES) if p]:
             if not wanted:
                 break
             text = await self.forge.file_content(client, ref, path)
+            if text is COLLECTION_GAP:
+                read_gap = True
+                continue
             if not text:
                 continue
+            searched[0]["paths"].append({"path": path, "url": tree.url_for(path)})
             for label in list(wanted):
-                if _TOOLING_SECTIONS[label].search(text):
-                    mark(label, path)
+                m = _TOOLING_SECTIONS[label].search(text)
+                if m:
+                    mark(label, path, excerpt(text, m, None))
                     wanted.remove(label)
-        return {**tooling, "found": found, "missing": missing, "details": details}
+        if read_gap:
+            # The unread file may hold the section, so these aren't confirmed
+            # misses (same as the test-setup reads above).
+            for label in wanted:
+                missing.remove(label)
+                not_collected.append(label)
+                details[label] = {"not_collected": True}
+        return {**tooling, "found": found, "missing": missing, "not_collected": not_collected,
+                "details": details, "searched": searched}
 
     async def _analyze_review_coverage(
         self, client: httpx.AsyncClient, ref: str
@@ -348,6 +429,7 @@ class DevToolingCollector:
         # already clears the threshold from confirmed data stands regardless.
         if not test_passing and testing.get("not_collected"):
             testing_entry["not_collected"] = True
+        testing_entry["evidence"] = _indicator_evidence(testing, _TESTING_PATHS, _TESTING_ELSEWHERE)
         sub["testing_framework"] = testing_entry
 
         cov = review.get("coverage_pct")
@@ -375,6 +457,10 @@ class DevToolingCollector:
         }
         if not tool_passing and tooling.get("not_collected"):
             tooling_entry["not_collected"] = True
+        tooling_entry["evidence"] = _indicator_evidence(tooling, {
+            label: paths + self.forge.platform_paths(_PLATFORM_PATH_KINDS.get(label, ""))
+            for label, paths in _TOOLING_PATHS.items()
+        }, _TOOLING_ELSEWHERE)
         sub["dev_tool_integration"] = tooling_entry
 
         scorable = {k: v for k, v in sub.items() if not (v.get("not_collected") or v.get("unmeasured"))}

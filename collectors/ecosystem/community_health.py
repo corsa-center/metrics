@@ -211,6 +211,95 @@ class CommunityHealthCollector:
             "overall_score": self._calculate_score(
                 coc_result, governance_result, contributing_result
             ),
+            # The orchestrator builds 4.2.1's rows itself, so the evidence the
+            # per-package report shows under them is keyed by row label here.
+            "row_evidence": self._row_evidence(
+                ref, coc_result, governance_result, contributing_result,
+                keyword_analysis, effectiveness,
+            ),
+        }
+
+    def _row_evidence(
+        self, ref: str, coc: Dict, governance: Dict, contributing: Dict,
+        keyword_analysis: Dict, effectiveness: Dict,
+    ) -> Dict[str, Dict]:
+        """What each 4.2.1 row found and where it looked, for the report.
+
+        Found documents are already linked on the dashboard, so only what
+        that link doesn't say is repeated: a document from another
+        repository, or a README section. A document not found lists the
+        names tried and every other place looked, which is what a team
+        needs to see to know where to put theirs.
+        """
+        found, missing, searched = [], [], []
+        for label, result, patterns in [
+            ("Code of Conduct", coc, self.COC_PATTERNS),
+            ("Governance", governance, self.GOVERNANCE_PATTERNS),
+            ("Contributing Guidelines", contributing, self.CONTRIBUTING_PATTERNS),
+        ]:
+            if result.get("exists"):
+                if result.get("source") == "README section":
+                    found.append({"text": f"{label} as a Contributing section",
+                                  "path": "README", "url": result.get("url")})
+                elif result.get("repository") and result["repository"] != ref:
+                    found.append({"text": label, "url": result.get("url"),
+                                  "path": f"{result['repository']}/{result.get('file_path')}"})
+                continue
+            if result.get("not_collected"):
+                continue
+            missing.append({"text": label})
+            searched.append({
+                "text": f"{label} file names tried in {ref} (any capitalization)",
+                "paths": [{"path": p} for p in patterns],
+            })
+            elsewhere = [f"the {r} repository" for r in result.get("looked_in_repos", []) if r != ref]
+            if result.get("searched_doc_tree"):
+                elsewhere.append("anywhere in the documentation tree (docs/, doc/)")
+            if result.get("searched_readme"):
+                elsewhere.append("a Contributing section in the README")
+            if elsewhere:
+                searched.append({"text": f"{label} also looked for in",
+                                 "paths": [{"path": e} for e in elsewhere]})
+
+        terms_found = keyword_analysis.get("terms_found", {})
+        keywords = {
+            "found": [{"text": f"{group} (matched: {', '.join(terms)})"}
+                      for group, terms in terms_found.items()],
+            "missing": [{"text": f"{group} (looked for: {', '.join(terms)})"}
+                        for group, terms in self.GOVERNANCE_KEYWORDS.items()
+                        if group not in terms_found],
+            "searched": [{"text": "Documents read",
+                          "paths": [{"path": d["path"] if d["repository"] == ref
+                                     else f"{d['repository']}/{d['path']}", "url": d.get("url")}
+                                    for d in keyword_analysis.get("documents", [])]}],
+        }
+
+        eff_found, eff_missing, eff_searched = [], [], []
+        if effectiveness.get("codeowners"):
+            eff_found.append(dict(effectiveness["codeowners"]))
+        elif "codeowners_paths_checked" in effectiveness:
+            eff_missing.append({"text": "CODEOWNERS"})
+            eff_searched.append({"text": f"CODEOWNERS looked for in {ref}",
+                                 "paths": [{"path": p} for p in effectiveness["codeowners_paths_checked"]]})
+        freshest = effectiveness.get("freshest_document")
+        if freshest:
+            days = effectiveness.get("days_since_governance_update")
+            path = freshest["path"]
+            if freshest.get("repository", ref) != ref:
+                path = f"{freshest['repository']}/{path}"
+            eff_found.append({"text": f"most recent change {days} days ago",
+                              "path": path, "url": freshest.get("url")})
+
+        return {
+            "document_detection": {
+                "label": "Enhanced Document Detection",
+                "evidence": {"found": found, "missing": missing, "searched": searched},
+            },
+            "keyword_analysis": {"label": "Governance Keyword Analysis", "evidence": keywords},
+            "effectiveness": {
+                "label": "Governance Effectiveness Assessment",
+                "evidence": {"found": eff_found, "missing": eff_missing, "searched": eff_searched},
+            },
         }
 
     async def _check_deeper(
@@ -231,8 +320,11 @@ class CommunityHealthCollector:
             if path:
                 results[i] = {"exists": True, "file_path": path, "url": tree.url_for(path),
                               "size": 0, "content_preview": "", "repository": ref}
+            else:
+                results[i]["searched_doc_tree"] = True
         if not results[2].get("exists") and not results[2].get("not_collected"):
             text = await self.forge.readme(client, ref)
+            results[2]["searched_readme"] = True
             section = readme_contributing_section(text) if text else None
             if section:
                 results[2] = {
@@ -259,7 +351,7 @@ class CommunityHealthCollector:
         """
         present = [d for d in documents if d.get("exists") and d.get("file_path") and d.get("repository")]
         if not present:
-            return {"groups_found": [], "documents_read": 0}
+            return {"groups_found": [], "documents_read": 0, "terms_found": {}, "documents": []}
         located = [
             (d["repository"], d["file_path"])
             for d in present if not d.get("section_text")
@@ -272,14 +364,26 @@ class CommunityHealthCollector:
         corpus = " ".join(
             t.lower() for t in texts if isinstance(t, str) and t
         )
-        if not corpus:
-            return {"groups_found": [], "documents_read": 0}
-
-        found = [
-            group for group, terms in self.GOVERNANCE_KEYWORDS.items()
-            if any(term in corpus for term in terms)
+        documents_read = [
+            {"path": d["file_path"], "url": d.get("url"), "repository": d["repository"]}
+            for d in present
         ]
-        return {"groups_found": found, "documents_read": len(present)}
+        if not corpus:
+            return {"groups_found": [], "documents_read": 0, "terms_found": {},
+                    "documents": documents_read}
+
+        terms_found = {
+            group: [term for term in terms if term in corpus]
+            for group, terms in self.GOVERNANCE_KEYWORDS.items()
+        }
+        found = [group for group, terms in terms_found.items() if terms]
+        return {
+            "groups_found": found,
+            "documents_read": len(present),
+            # Per concept, the terms that matched, for the report.
+            "terms_found": {g: t for g, t in terms_found.items() if t},
+            "documents": documents_read,
+        }
 
     async def _assess_effectiveness(
         self, client: httpx.AsyncClient, ref: str, documents: List[Dict[str, Any]]
@@ -292,26 +396,32 @@ class CommunityHealthCollector:
         staleness, in contrast, reads each document from wherever it was
         actually found, same as _analyze_governance_keywords.
         """
-        located = [
-            (d["repository"], d["file_path"])
-            for d in documents if d.get("exists") and d.get("file_path") and d.get("repository")
+        located_docs = [
+            d for d in documents if d.get("exists") and d.get("file_path") and d.get("repository")
         ]
+        located = [(d["repository"], d["file_path"]) for d in located_docs]
 
-        has_codeowners = False
-        for path in self.CODEOWNERS_PATHS + self.forge.platform_paths("codeowners"):
-            if (await self._check_file_exists(client, ref, path)).get("exists"):
-                has_codeowners = True
+        codeowners_paths = self.CODEOWNERS_PATHS + self.forge.platform_paths("codeowners")
+        codeowners = None
+        for path in codeowners_paths:
+            found = await self._check_file_exists(client, ref, path)
+            if found.get("exists"):
+                codeowners = {"path": path, "url": found.get("url")}
                 break
+        has_codeowners = codeowners is not None
 
         last_updated_days = None
+        freshest = None
         if located:
             ages = await asyncio.gather(
                 *[self._days_since_last_change(client, r, p) for r, p in located],
                 return_exceptions=True,
             )
-            valid = [a for a in ages if isinstance(a, int)]
+            valid = [(a, d) for a, d in zip(ages, located_docs) if isinstance(a, int)]
             if valid:
-                last_updated_days = min(valid)
+                last_updated_days, doc = min(valid, key=lambda v: v[0])
+                freshest = {"path": doc["file_path"], "url": doc.get("url"),
+                            "repository": doc["repository"]}
 
         maintained = (
             last_updated_days is not None
@@ -321,6 +431,9 @@ class CommunityHealthCollector:
             "has_codeowners": has_codeowners,
             "days_since_governance_update": last_updated_days,
             "maintained": maintained,
+            "codeowners": codeowners,
+            "codeowners_paths_checked": codeowners_paths,
+            "freshest_document": freshest,
         }
 
     async def _get_file_text(self, client: httpx.AsyncClient, ref: str, path: str) -> str:
@@ -417,7 +530,9 @@ class CommunityHealthCollector:
         if has_gap:
             return {"exists": False, "file_path": None, "url": None, "repository": None,
                      "not_collected": True}
-        return {"exists": False, "file_path": None, "url": None, "repository": None}
+        # Where it was looked for, so a report can say (see _row_evidence).
+        return {"exists": False, "file_path": None, "url": None, "repository": None,
+                "looked_in_repos": [ref]}
 
     async def _check_fallback_repos(
         self,
@@ -453,7 +568,10 @@ class CommunityHealthCollector:
             fallback_ref = f"{owner}/{fallback_repo}"
             fb_index, fb_has_gap = await self._build_file_index(client, fallback_ref)
             if not fb_index and not fb_has_gap:
-                continue  # repo doesn't exist or genuinely has none of these files
+                # Repo doesn't exist or genuinely has none of these files.
+                for key in missing:
+                    results[key].setdefault("looked_in_repos", []).append(fallback_ref)
+                continue
             for key in list(missing):
                 patterns, _ = pending[key]
                 match = self._match_pattern(fb_index, patterns, fallback_ref, fb_has_gap)
@@ -461,7 +579,9 @@ class CommunityHealthCollector:
                     logger.info(f"{key} found in fallback repo {fallback_ref}")
                     results[key] = match
                     missing.discard(key)
-                elif match.get("not_collected"):
+                elif not match.get("not_collected"):
+                    results[key].setdefault("looked_in_repos", []).append(fallback_ref)
+                else:
                     # Still unresolved, but now know it's specifically
                     # because the fallback repo's own listing gapped --
                     # worth reporting that instead of the primary repo's

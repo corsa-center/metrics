@@ -21,6 +21,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from collectors.ecosystem.base import excerpt
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.interface import Forge
 
@@ -43,6 +44,14 @@ _SCANNERS_CHECKED = {"github": "CodeQL", "gitlab": "CodeQL or GitLab SAST"}
 _MAX_WORKFLOWS_TO_SCAN = 25
 
 
+def _row_evidence(evidence: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """The orchestrator builds 4.3.1's Enhanced Security Analysis row itself,
+    so the evidence the per-package report shows under it is keyed by row
+    label here."""
+    return {"enhanced_security_analysis": {"label": "Enhanced Security Analysis",
+                                           "evidence": evidence}}
+
+
 class StaticAnalysisCollector:
     """Detects CodeQL / static analysis security scanning (Section 4.3.1)."""
 
@@ -61,8 +70,9 @@ class StaticAnalysisCollector:
         logger.info(f"Checking CodeQL / static analysis for {ref}")
         checked = _SCANNERS_CHECKED.get(self.forge.platform, "CodeQL")
 
-        def found_result(scanner: str, file: str, url: Optional[str]) -> Dict[str, Any]:
-            return {
+        def found_result(scanner: str, file: str, url: Optional[str],
+                         evidence: Optional[Dict] = None) -> Dict[str, Any]:
+            result = {
                 "package_name": repo_name,
                 "repository": ref,
                 "timestamp": self.forge.get_timestamp(),
@@ -72,10 +82,14 @@ class StaticAnalysisCollector:
                 "workflow_file": file,
                 "workflow_url": url,
             }
+            if evidence:
+                result["row_evidence"] = _row_evidence(evidence)
+            return result
 
+        probes = self.forge.platform_paths("security_scan_workflows")
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             saw_gap = False
-            for path in self.forge.platform_paths("security_scan_workflows"):
+            for path in probes:
                 html_url = await self.forge.file_exists(client, ref, path)
                 if html_url is COLLECTION_GAP:
                     saw_gap = True
@@ -92,9 +106,13 @@ class StaticAnalysisCollector:
             # into a differently-named workflow (e.g. ADIOS2's `everything.yml`).
             # Fall back to scanning CI file contents, since filename guessing
             # alone produces false negatives. On GitLab this is the only check.
-            found, scan_gap = await self._scan_workflows_for_codeql(client, ref)
+            found, scan_gap, scanned = await self._scan_workflows_for_codeql(client, ref)
             if found:
-                return found_result(found["scanner"], found["file"], found["url"])
+                # The row links the file; the step that matched is what it
+                # doesn't show, in a file whose name didn't say so.
+                return found_result(found["scanner"], found["file"], found["url"], {"found": [
+                    {"text": f"{found['scanner']} step", "path": found["file"],
+                     "url": found["url"], "quote": found.get("quote")}]})
             saw_gap = saw_gap or scan_gap
 
         result = {
@@ -110,6 +128,17 @@ class StaticAnalysisCollector:
         # gap could be hiding the workflow file that would have matched.
         if saw_gap:
             result["not_collected"] = True
+            return result
+        searched = []
+        if probes:
+            searched.append({"text": "Workflow file names tried",
+                             "paths": [{"path": p} for p in probes]})
+        if self.forge.platform == "github":
+            searched.append({"text": "Also checked",
+                             "paths": [{"path": "CodeQL default setup in the repository's Actions workflows"}]})
+        searched.append(scanned)
+        # The row already says what wasn't found.
+        result["row_evidence"] = _row_evidence({"searched": searched})
         return result
 
     async def _find_default_setup(self, client: httpx.AsyncClient, ref: str) -> tuple:
@@ -129,32 +158,41 @@ class StaticAnalysisCollector:
     async def _scan_workflows_for_codeql(self, client: httpx.AsyncClient, ref: str) -> tuple:
         """Scan CI file contents for a code-scanning marker (_SCANNER_MARKERS).
 
-        Returns (match_or_None, saw_gap).
+        Returns (match_or_None, saw_gap, scanned): scanned is the report's
+        line naming the files read, None if the listing gapped. A match
+        carries the text that matched as "quote".
         """
         entries = await self.forge.ci_config_files(client, ref)
         if entries is COLLECTION_GAP:
-            return None, True
+            return None, True, None
 
-        yaml_files = list(entries or [])[:_MAX_WORKFLOWS_TO_SCAN]
+        entries = list(entries or [])
+        yaml_files = entries[:_MAX_WORKFLOWS_TO_SCAN]
 
         async def check_file(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # Raw read, not the REST API: no rate-limit quota spent.
             text = await self.forge.raw_text(client, ref, entry["path"])
             if text is None:
                 return COLLECTION_GAP
-            if text:
-                for scanner, pattern in _SCANNER_MARKERS:
-                    if pattern.search(text):
-                        return {"file": entry["path"], "url": entry.get("html_url", ""),
-                                "scanner": scanner}
-            return None
+            for scanner, pattern in _SCANNER_MARKERS:
+                m = pattern.search(text)
+                if m:
+                    return {"file": entry["path"], "url": entry.get("html_url", ""),
+                            "scanner": scanner, "quote": excerpt(text, m, None)}
+            return {}
 
         results = await asyncio.gather(*[check_file(e) for e in yaml_files])
         saw_gap = any(r is COLLECTION_GAP for r in results)
+        text = "CI files searched for a code-scanning step (codeql-action, codeql database, GitLab's SAST template)"
+        if len(entries) > len(yaml_files):
+            text += f", the first {len(yaml_files)} of {len(entries)}"
+        scanned = {"text": text, "paths": [
+            {"path": e["path"], "url": e.get("html_url")}
+            for e, r in zip(yaml_files, results) if r is not COLLECTION_GAP]}
         for result in results:
             if result and result is not COLLECTION_GAP:
-                return result, saw_gap
-        return None, saw_gap
+                return result, saw_gap, scanned
+        return None, saw_gap, scanned
 
     def _empty_result(self, repo_name: str) -> Dict[str, Any]:
         return {

@@ -120,19 +120,19 @@ class TestFindDefaultSetup:
 class TestScanWorkflowsForCodeqlGapHandling:
     def test_listing_gap_is_tracked(self, collector, forge):
         forge.gaps = {"ci_config_files"}
-        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
+        found, saw_gap, _ = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is None
         assert saw_gap is True
 
     def test_confirmed_no_workflows_is_not_a_gap(self, collector):
-        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
+        found, saw_gap, _ = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is None
         assert saw_gap is False
 
     def test_read_failure_on_a_candidate_is_a_gap(self, collector, forge):
         forge.files = {".github/workflows/ci.yml": "x"}
         forge.gap_paths = {".github/workflows/ci.yml"}
-        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
+        found, saw_gap, _ = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is None
         assert saw_gap is True
 
@@ -142,7 +142,7 @@ class TestScanWorkflowsForCodeqlGapHandling:
             ".github/workflows/codeql.yml": "uses: github/codeql-action/analyze@v2",
         }
         forge.gap_paths = {".github/workflows/broken.yml"}
-        found, saw_gap = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
+        found, saw_gap, _ = asyncio.run(collector._scan_workflows_for_codeql(None, "o/r"))
         assert found is not None
         assert found["file"].endswith("codeql.yml")
 
@@ -164,3 +164,71 @@ class TestGitLab:
         result = self._collect("build:\n  script: make\n")
         assert result["has_codeql"] is False
         assert result["scanners_checked"] == "CodeQL or GitLab SAST"
+
+    def test_evidence_claims_no_github_only_checks(self):
+        result = self._collect("build:\n  script: make\n")
+        searched = _evidence(result)["searched"]
+        # No CodeQL file names to try and no default setup on GitLab.
+        assert len(searched) == 1
+        assert searched[0]["paths"] == [{"path": ".gitlab-ci.yml", "url": "u"}]
+
+
+def _evidence(result):
+    row = result["row_evidence"]["enhanced_security_analysis"]
+    assert row["label"] == "Enhanced Security Analysis"
+    return row["evidence"]
+
+
+class TestEvidence:
+    """Enhanced Security Analysis says which step matched, or where it looked (#99)."""
+
+    def test_content_match_quotes_the_step(self, collector, forge):
+        forge.files = {".github/workflows/everything.yml":
+                       "steps:\n  - uses: github/codeql-action/init@v3\n"}
+        assert _evidence(_collect(collector)) == {"found": [{
+            "text": "CodeQL step", "path": ".github/workflows/everything.yml",
+            "url": "https://github.com/o/r/blob/HEAD/.github/workflows/everything.yml",
+            "quote": "uses: github/codeql-action/init@v3"}]}
+
+    def test_file_name_match_adds_nothing_the_row_link_doesnt_say(self, collector, forge):
+        forge.files = {".github/workflows/codeql.yml": "name: CodeQL"}
+        assert "row_evidence" not in _collect(collector)
+
+    def test_not_found_lists_every_place_looked(self, collector, forge):
+        forge.files = {".github/workflows/ci.yml": "run: make"}
+        names, default_setup, scanned = _evidence(_collect(collector))["searched"]
+        assert [p["path"] for p in names["paths"]] == _CODEQL_PROBES
+        assert "default setup" in default_setup["paths"][0]["path"]
+        assert scanned["paths"] == [{"path": ".github/workflows/ci.yml",
+                                     "url": "https://github.com/o/r/blob/HEAD/.github/workflows/ci.yml"}]
+
+    def test_capped_scan_says_how_many_were_read(self, collector, forge):
+        forge.files = {f".github/workflows/w{i}.yml": "run: make" for i in range(30)}
+        scanned = _evidence(_collect(collector))["searched"][-1]
+        assert scanned["text"].endswith("the first 25 of 30")
+        assert len(scanned["paths"]) == 25
+
+    def test_gap_claims_no_search(self, collector, forge):
+        forge.gaps = {"ci_config_files"}
+        result = _collect(collector)
+        assert result["not_collected"] and "row_evidence" not in result
+
+
+class TestEvidenceInReport:
+    def test_searched_lines_appear_under_the_row(self, forge):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        forge.files = {".github/workflows/ci.yml": "run: make"}
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {}},
+            "quality": {"sub_results": {"static_analysis": _collect(StaticAnalysisCollector(forge))}},
+        }}
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        row = page.split("<b>Enhanced Security Analysis:</b>")[1].split("</li>")[0]
+        assert "<b>Workflow file names tried:</b> .github/workflows/codeql.yml," in row
+        assert ("<b>CI files searched for a code-scanning step (codeql-action, codeql database, "
+                "GitLab&#x27;s SAST template):</b> <a href=") in row

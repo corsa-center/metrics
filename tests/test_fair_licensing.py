@@ -509,3 +509,232 @@ class TestReadmeBibtex:
     def test_bibtex_elsewhere_in_readme_is_not(self, collector):
         md = "# Pkg\n## Related work\n@article{x,\n  title={Other}\n}\n"
         assert self._run(collector, md) is None
+
+
+LICENSE_SRC = {"path": "LICENSE", "url": "https://x/LICENSE"}
+CFF_SRC = {"path": "CITATION.cff", "url": "https://x/CITATION.cff"}
+
+
+class TestExceptionEvidence:
+    """What License Exception Handling shows in the report (#99)."""
+
+    def _evidence(self, collector, text="", spdx="NOASSERTION", citation=None,
+                  citation_gap=False, citation_src=CFF_SRC, license_gap=False, detected=True):
+        data = {"spdx_id": spdx, "text": text}
+        if detected:
+            data.update(file_path="LICENSE", url="https://x/LICENSE")
+        exceptions = collector._analyze_license_text(
+            data, license_gap, declared=(citation or {}).get("license"))
+        return collector._exception_evidence(
+            exceptions, data, LICENSE_SRC if text else {}, citation or {}, citation_gap,
+            citation_src if citation else {})
+
+    def test_license_named_in_text_is_quoted(self, collector):
+        ev = self._evidence(collector, HDF5_LICENSE)
+        assert ev["found"][0] == {
+            "text": "BSD-3-Clause named", **LICENSE_SRC,
+            "quote": "This software library and utilities is covered by the 3-clause BSD License."}
+        assert ev["found"][1]["text"] == "Multiple copyright holders (3 copyright lines)"
+
+    def test_reproduced_clauses_quote_the_distinguishing_one(self, collector):
+        quote = self._evidence(collector, AMREX_LICENSE)["found"][0]["quote"]
+        assert quote.startswith("Neither the name of the copyright holder")
+        assert quote.endswith("may be used to endorse or promote products derived")
+
+    def test_citation_declaration_names_the_file(self, collector):
+        ev = self._evidence(collector, "", spdx=None, citation={"license": ["BSD-3-Clause", "MIT"]})
+        assert ev["found"] == [{"text": "License declaration", **CFF_SRC,
+                                "quote": "license: BSD-3-Clause, MIT"}]
+
+    def test_exception_marker_is_quoted_from_its_line(self, collector):
+        text = "Licensed under the GPL\nGPL-2.0 with the Classpath exception, see below.\n"
+        ev = self._evidence(collector, text, spdx="GPL-2.0")
+        assert ev["found"] == [
+            {"text": "License text", **LICENSE_SRC},
+            {"text": "Named exception", **LICENSE_SRC,
+             "quote": "GPL-2.0 with the Classpath exception, see below."},
+        ]
+
+    def test_unidentified_license_lists_what_each_method_looked_for(self, collector):
+        ev = self._evidence(collector, "Some custom terms.")
+        assert [m["text"] for m in ev["missing"]] == [
+            "a license name in LICENSE (looked for: BSD-3-Clause, BSD-2-Clause, Apache-2.0, "
+            "MIT, LGPL, GPL, MPL-2.0, BSD)",
+            "the standard clauses of BSD-3-Clause, BSD-2-Clause, MIT or ISC in LICENSE",
+            "an OSI-approved SPDX license id declared in CITATION.cff (there is no CITATION.cff)",
+        ]
+
+    def test_no_detected_license_and_citation_reasons(self, collector):
+        ev = self._evidence(collector, spdx=None, detected=False, citation={"title": "X"})
+        assert [m["text"] for m in ev["missing"]] == [
+            "license text from GitHub's license detection (it detected no license)",
+            "an OSI-approved SPDX license id declared in CITATION.cff "
+            "(CITATION.cff has no license field)",
+        ]
+        ev = self._evidence(collector, spdx=None, detected=False, citation={"license": "Foo-1"})
+        assert "declares “Foo-1”, which isn't one this check accepts" in ev["missing"][-1]["text"]
+
+    def test_gaps_claim_no_search(self, collector):
+        assert self._evidence(collector, spdx=None, detected=False, license_gap=True)["missing"] == []
+        ev = self._evidence(collector, spdx=None, detected=False, citation_gap=True)
+        assert [m["text"] for m in ev["missing"]] == [
+            "license text from GitHub's license detection (it detected no license)"]
+
+
+class TestFairEvidence:
+    def _evidence(self, collector, exceptions=None, metadata=None, has_codemeta=False,
+                  has_zenodo=False, releases=True, releases_gap=False, tree_gap=False):
+        exceptions = exceptions or {"identified": True, "api_classified": True, "api_spdx": "MIT"}
+        metadata = metadata or {"exists": True, "present": ["doi"]}
+        fair = collector._assess_fair(exceptions, metadata, has_codemeta, has_zenodo, releases,
+                                      releases_gap=releases_gap)
+        return collector._fair_evidence(
+            fair, exceptions, metadata, releases, releases_gap, tree_gap, CFF_SRC,
+            {"path": "codemeta.json"} if has_codemeta else {},
+            {"path": ".zenodo.json"} if has_zenodo else {}, LICENSE_SRC)
+
+    def test_satisfied_principles_name_their_sources(self, collector):
+        ev = self._evidence(collector, has_codemeta=True)
+        assert [(f["text"], f.get("path")) for f in ev["found"]] == [
+            ("DOI (Findable)", "CITATION.cff"),
+            ("MIT license (Accessible)", "LICENSE"),
+            ("Citation metadata (Interoperable)", "CITATION.cff"),
+            ("CodeMeta metadata (Interoperable)", "codemeta.json"),
+            ("A release or version tag, with the license (Reusable)", None),
+        ]
+        assert ev["missing"] == [] and ev["searched"] == []
+
+    def test_failed_principles_say_what_would_satisfy_them(self, collector):
+        ev = self._evidence(collector, exceptions={"identified": False},
+                            metadata={"exists": False, "present": []}, releases=False)
+        assert [m["text"] for m in ev["missing"]] == [
+            "Findable: a DOI in CITATION.cff, or a .zenodo.json file",
+            "Accessible: a license that can be identified (see License Exception Handling)",
+            "Interoperable: CITATION.cff or codemeta.json",
+            "Reusable: a license that can be identified and a release, or a version tag "
+            "like 1.2 among the 20 most recent tags",
+        ]
+        assert [p["path"] for p in ev["searched"][0]["paths"]] == [
+            "CITATION.cff", "codemeta.json", ".zenodo.json", "zenodo.json"]
+
+    def test_gapped_inputs_claim_no_search(self, collector):
+        ev = self._evidence(collector, exceptions={"identified": False},
+                            metadata={"exists": False, "present": [], "not_collected": True},
+                            releases=False, releases_gap=True, tree_gap=True)
+        # Findable and Interoperable are uncertain; Reusable fails on the license alone.
+        assert [m["text"] for m in ev["missing"]] == [
+            "Accessible: a license that can be identified (see License Exception Handling)",
+            "Reusable: a license that can be identified",
+        ]
+        assert ev["searched"] == []
+
+
+class TestMetadataEvidence:
+    def _evidence(self, collector, citation, citation_gap=False, citation_src=CFF_SRC,
+                  bibtex=None, bibtex_read=None):
+        metadata = collector._analyze_citation(citation, citation_gap)
+        return collector._metadata_evidence(
+            metadata, citation, citation_gap, citation_src, bibtex, bibtex_read)
+
+    def test_citation_file_and_its_missing_fields(self, collector):
+        ev = self._evidence(collector, {"title": "X", "authors": ["a"], "version": "1"})
+        assert ev["found"] == [{"text": "Citation metadata", **CFF_SRC}]
+        assert [m["text"] for m in ev["missing"]] == [
+            "license in CITATION.cff", "repository-code in CITATION.cff",
+            "doi (top level, or an identifiers entry of type doi) in CITATION.cff"]
+
+    def test_bibtex_instead_of_citation_file(self, collector):
+        bibtex = {"path": "CITATION.bib", "url": "https://x/CITATION.bib",
+                  "present": ["title"], "missing": ["authors", "doi"]}
+        ev = self._evidence(collector, {}, citation_src={}, bibtex=bibtex)
+        assert ev["found"] == [{"text": "BibTeX entry", "path": "CITATION.bib",
+                                "url": "https://x/CITATION.bib"}]
+        assert [m["text"] for m in ev["missing"]] == [
+            "CITATION.cff (looked for at the repository root, any capitalization)",
+            "authors in the BibTeX", "doi in the BibTeX"]
+
+    def test_nothing_found_lists_where_bibtex_was_looked_for(self, collector):
+        read = [{"path": "CITATION.bib", "url": "u"}, {"path": "README (under a heading)"}]
+        ev = self._evidence(collector, {}, citation_src={}, bibtex_read=read)
+        assert ev["searched"] == [{"text": "BibTeX looked for in", "paths": read}]
+
+    def test_unparseable_citation_file_is_not_called_missing(self, collector):
+        ev = self._evidence(collector, {})
+        assert ev["missing"] == [{"text": "readable citation metadata "
+                                          "(CITATION.cff could not be read or parsed)"}]
+
+    def test_gapped_citation_claims_nothing(self, collector):
+        ev = self._evidence(collector, {}, citation_gap=True, citation_src={}, bibtex_read=[])
+        assert ev == {"found": [], "missing": [], "searched": []}
+
+    def test_bibtex_search_records_what_it_read(self):
+        forge = FakeForge(files={"CITATION.bib": "no entries", "README.md": "# X\n"},
+                          readme_text="# X\n")
+        collector = FairLicensingCollector(forge)
+        tree = RepoTree(forge, "o/r", ["CITATION.bib", "README.md"], truncated=False)
+        read = []
+        assert asyncio.run(collector._get_bibtex_citation(None, "o/r", tree, read=read)) is None
+        assert [r["path"] for r in read] == [
+            "CITATION.bib", "README (under a Citation, Citing or How to cite heading)"]
+
+
+class TestCollectEvidence:
+    def _collect(self, forge):
+        collector = FairLicensingCollector(forge)
+        return asyncio.run(collector.collect({"name": "x", "repo_url": "https://github.com/o/r"}))
+
+    def test_every_row_carries_evidence(self):
+        forge = FakeForge(
+            license_data={"file_path": "LICENSE", "html_url": "https://github.com/o/r/blob/HEAD/LICENSE",
+                          "spdx_id": "NOASSERTION", "name": "Other", "text": HDF5_LICENSE},
+            files={"LICENSE": HDF5_LICENSE, "citation.cff": "title: X\nauthors: [a]\n"})
+        sub = self._collect(forge)["overall_score"]["sub_scores"]
+        assert all("evidence" in row for row in sub.values())
+        assert sub["fair_metadata"]["evidence"]["found"] == [{
+            "text": "Citation metadata", "path": "citation.cff",
+            "url": "https://github.com/o/r/blob/HEAD/citation.cff"}]
+        assert sub["license_exception_handling"]["evidence"]["found"][0]["path"] == "LICENSE"
+
+    def test_report_shows_the_evidence_under_each_row(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        from collectors.ecosystem.licensing import LicensingCollector
+
+        text = HDF5_LICENSE + "\nSubject to additional terms below.\n"
+        forge = FakeForge(
+            license_data={"file_path": "LICENSE", "html_url": "https://github.com/o/r/blob/HEAD/LICENSE",
+                          "size": 1, "download_url": "https://raw/LICENSE", "key": "other",
+                          "spdx_id": "NOASSERTION", "name": "Other", "text": text},
+            files={"LICENSE": text, "CITATION.cff": "title: X\nauthors: [a]\n"})
+        package = {"name": "x", "repo_url": "https://github.com/o/r"}
+        sub_results = {
+            "licensing": asyncio.run(LicensingCollector(forge).collect(package)),
+            "fair_licensing": asyncio.run(FairLicensingCollector(forge).collect(package)),
+        }
+        metrics = {
+            "overall_score": 27, "last_updated": "2026-09-30T02:25:04+00:00",
+            "dimensions": {
+                "impact": {"score": 0.0, "metadata": {"status": "placeholder"}},
+                "ecosystem": {"score": 80.0, "sub_results": sub_results},
+                "quality": {"score": 0.0, "sub_results": {}},
+            },
+        }
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        def row(label):
+            text = page[page.index(f"<b>{label}:</b>"):]
+            return text[:text.index("</li>")]
+
+        exceptions = row("License Exception Handling")
+        assert ("<b>Found:</b> BSD-3-Clause named in "
+                '<a href="https://github.com/o/r/blob/HEAD/LICENSE">LICENSE</a>: '
+                "“This software library and utilities is covered by the 3-clause BSD License.”"
+                ) in exceptions
+        assert "<b>Found:</b> Additional terms in" in exceptions
+        fair = row("Automated FAIR4RS Assessment")
+        assert "<b>Not found:</b> Findable: a DOI in CITATION.cff, or a .zenodo.json file" in fair
+        assert "<b>Metadata files looked for at the repository root (any capitalization):</b>" in fair
+        assert "<b>Not found:</b> version in CITATION.cff" in row("FAIR Metadata Assessment")
+        assert "reported NOASSERTION" in row("Enhanced License Detection")

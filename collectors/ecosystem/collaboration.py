@@ -60,6 +60,8 @@ _spack_index_lock = asyncio.Lock()
 # (corsa-center/dependent-audit), published per project. Registries miss
 # code consumed from source -- a git submodule, a CMake FetchContent, a
 # header include -- which is how most HPC libraries are used.
+_DEPENDENCY_AUDIT_PATH = ("corsa-center/project-dependent-tracking/"
+                          "{name}-dependency-context/dependency_graph.json")
 _DEPENDENCY_AUDIT = ("https://raw.githubusercontent.com/corsa-center/project-dependent-tracking"
                      "/main/{name}-dependency-context/dependency_graph.json")
 _AUDIT_CONFIDENCE = {"high", "medium"}
@@ -67,6 +69,21 @@ _AUDIT_CONFIDENCE = {"high", "medium"}
 # ecosyste.ms publishes a low per-second rate limit; one retry with a pause
 # covers the throttling seen when several lookups run back to back.
 _RATE_LIMIT_PAUSE_SECONDS = 2
+
+
+class _FetchFailed:
+    """_get_json's answer when a request failed rather than came back 404.
+
+    Callers that only check isinstance() treat it like None; the lookups
+    use it so the report never says a registry was searched when the
+    search didn't get an answer.
+    """
+
+    def __bool__(self) -> bool:
+        return False
+
+
+_FETCH_FAILED = _FetchFailed()
 
 
 class CollaborationCollector:
@@ -88,27 +105,33 @@ class CollaborationCollector:
         # owner may be a nested group path, so split at the last slash.
         owner, _, repo = ref.rpartition("/")
 
+        # What each lookup searched, for the report's evidence lines.
+        lookups: Dict[str, Dict[str, Any]] = {"repository": {}, "spack": {}, "conda": {}, "audit": {}}
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             by_repo, spack, conda, source = await asyncio.gather(
-                self._lookup_by_repository(client, ref),
-                self._lookup_spack(client, repo, owner),
-                self._lookup_conda_forge(client, owner, repo),
-                self._source_dependents(client, owner, repo),
+                self._lookup_by_repository(client, ref, lookups["repository"]),
+                self._lookup_spack(client, repo, owner, lookups["spack"]),
+                self._lookup_conda_forge(client, owner, repo, lookups["conda"]),
+                self._source_dependents(client, owner, repo, lookups["audit"]),
                 return_exceptions=True,
             )
         if isinstance(source, Exception):
             logger.warning(f"Dependency-audit lookup failed: {source}")
             source = None
+            lookups["audit"]["outcome"] = "failed"
 
         if isinstance(by_repo, Exception):
             logger.warning(f"ecosyste.ms repository lookup failed: {by_repo}")
             by_repo = []
+            lookups["repository"]["failed"] = True
         if isinstance(spack, Exception):
             logger.warning(f"Spack lookup failed: {spack}")
             spack = None
+            lookups["spack"]["failed"] = True
         if isinstance(conda, Exception):
             logger.warning(f"conda-forge lookup failed: {conda}")
             conda = None
+            lookups["conda"]["failed"] = True
 
         registries = self._merge(by_repo + [r for r in (spack, conda) if r])
         registries = self._drop_spurious_go_entries(registries, package.get("primary_language"))
@@ -119,7 +142,7 @@ class CollaborationCollector:
             "registries": registries,
             "ecosystems": sorted({r["ecosystem"] for r in registries}),
             "source_dependents": source,
-            "overall_score": self._calculate_score(registries, source),
+            "overall_score": self._calculate_score(registries, source, lookups),
             # Distribution evidence, not part of the weighted score above —
             # see CASS §4.1.1 Considerations: download counts measure
             # distribution rather than use and are most informative as
@@ -132,7 +155,8 @@ class CollaborationCollector:
     # ------------------------------------------------------------------ fetch
 
     async def _get_json(self, client: httpx.AsyncClient, url: str) -> Optional[Any]:
-        """GET a JSON document, retrying once if the API throttles."""
+        """GET a JSON document, retrying once if the API throttles. None
+        means 404; _FETCH_FAILED, that no answer came back."""
         for attempt in range(2):
             try:
                 resp = await client.get(url)
@@ -144,43 +168,60 @@ class CollaborationCollector:
                     logger.debug(f"HTTP {resp.status_code} from {url}, retrying…")
                     await asyncio.sleep(_RATE_LIMIT_PAUSE_SECONDS)
                     continue
-                return None
+                return _FETCH_FAILED
             except Exception as e:
                 if attempt == 0:
                     logger.debug(f"Error fetching {url}: {e}, retrying…")
                     await asyncio.sleep(1)
                     continue
-                return None
-        return None
+                return _FETCH_FAILED
+        return _FETCH_FAILED
 
     async def _lookup_by_repository(
-        self, client: httpx.AsyncClient, ref: str
+        self, client: httpx.AsyncClient, ref: str, trace: Optional[Dict] = None,
     ) -> List[Dict[str, Any]]:
-        """Every package ecosyste.ms links back to this repository."""
-        target = quote(f"https://{self.forge.host}/{ref}", safe="")
+        """Every package ecosyste.ms links back to this repository.
+
+        `trace`, if given, records the repository URL searched for and
+        whether the search failed, for the report (see _registry_evidence).
+        """
+        repository_url = f"https://{self.forge.host}/{ref}"
         data = await self._get_json(
-            client, f"{_PACKAGES_API}/packages/lookup?repository_url={target}"
+            client, f"{_PACKAGES_API}/packages/lookup?repository_url={quote(repository_url, safe='')}"
         )
+        if trace is not None:
+            trace.update(url=repository_url, failed=data is _FETCH_FAILED)
         if not isinstance(data, list):
             return []
         return [self._normalize(p) for p in data if p.get("ecosystem") and p.get("name")]
 
     async def _lookup_spack(
-        self, client: httpx.AsyncClient, repo: str, owner: Optional[str] = None
+        self, client: httpx.AsyncClient, repo: str, owner: Optional[str] = None,
+        trace: Optional[Dict] = None,
     ) -> Optional[Dict[str, Any]]:
         """Spack recipe for this project, looked up by name.
 
         Tried lower-cased as well, since Spack package names are lower-case by
         convention while repository names often are not (ADIOS2 -> adios2),
         then under any name whose recipe downloads from this repository.
+
+        `trace`, if given, records the names tried, whether recipes were
+        also matched by download URL, and whether any lookup failed.
         """
+        trace = {} if trace is None else trace
         names = [repo, repo.lower()]
         if owner:
             names += await self._main_spack_recipe(client, owner, repo)
+            # The index only knows GitHub URLs (see _spack_names_for).
+            trace["by_download_url"] = (_spack_by_repo is not None
+                                        and self.forge.host == "github.com")
+        trace.update(names=[], failed=False)
         for name in dict.fromkeys(names):
             data = await self._get_json(
                 client, f"{_PACKAGES_API}/registries/spack.io/packages/{quote(name)}"
             )
+            trace["names"].append(name)
+            trace["failed"] |= data is _FETCH_FAILED
             if isinstance(data, dict) and data.get("name"):
                 record = self._normalize(data)
                 # ecosyste.ms's Spack dependents lag Spack's own index
@@ -243,18 +284,29 @@ class CollaborationCollector:
         return index
 
     async def _lookup_conda_forge(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, owner: str, repo: str, trace: Optional[Dict] = None,
     ) -> Optional[Dict[str, Any]]:
         """conda-forge package for this repository, looked up by name and
-        accepted only if its metadata links back to the repository."""
+        accepted only if its metadata links back to the repository.
+
+        `trace`, if given, records the names tried, packages found but not
+        linked back (as {"name", "url"}), and whether any lookup failed.
+        """
+        trace = {} if trace is None else trace
+        trace.update(names=[], unlinked=[], failed=False)
         target = f"{self.forge.host}/{owner}/{repo}".lower()
         for name in dict.fromkeys([repo.lower(), repo]):
             data = await self._get_json(client, f"{_ANACONDA_API}/{quote(name)}")
+            trace["names"].append(name)
+            trace["failed"] |= data is _FETCH_FAILED
             if not isinstance(data, dict) or not data.get("name"):
                 continue
             links = [data.get(k) or "" for k in ("dev_url", "home", "source_git_url")]
             if not any(self._points_at(link, target) for link in links):
                 logger.debug(f"conda-forge '{name}' does not link to {target}; not credited")
+                # anaconda.org can answer both spellings with one package.
+                if all(u["name"] != data["name"] for u in trace["unlinked"]):
+                    trace["unlinked"].append({"name": data["name"], "url": data.get("html_url")})
                 continue
             return {
                 "ecosystem": "conda",
@@ -345,9 +397,86 @@ class CollaborationCollector:
 
     # ---------------------------------------------------------------- scoring
 
+    @staticmethod
+    def _registry_evidence(registries: List[Dict[str, Any]], lookups: Dict) -> Dict[str, Any]:
+        """Each package found, with its registry page, and for a registry
+        with none, the names tried there. A lookup that failed, or that
+        didn't run, claims nothing."""
+        found = [{"path": f"{r['name']} ({r['ecosystem']})", "url": r.get("registry_url")}
+                 for r in registries]
+        missing, searched = [], []
+        ecosystems = {r["ecosystem"] for r in registries}
+
+        by_repo = lookups.get("repository", {})
+        if by_repo.get("url") and not by_repo.get("failed"):
+            searched.append({"text": "Package registries searched (via ecosyste.ms) for packages "
+                                     "whose repository URL is",
+                             "paths": [{"path": by_repo["url"]}]})
+        spack = lookups.get("spack", {})
+        if "spack" not in ecosystems and spack.get("names") and not spack.get("failed"):
+            places = list(spack["names"])
+            if spack.get("by_download_url"):
+                places.append("any recipe whose homepage or download URL is this repository")
+            searched.append({"text": "Spack recipes looked for by name",
+                             "paths": [{"path": p} for p in places]})
+        conda = lookups.get("conda", {})
+        if "conda" not in ecosystems and conda.get("names") and not conda.get("failed"):
+            # A same-named package that doesn't point back here is the one
+            # case a project can fix itself, by linking its feedstock.
+            for pkg in conda.get("unlinked", []):
+                missing.append({"text": f"a link to this repository from conda-forge's {pkg['name']} "
+                                        "(its dev_url, home and source_git_url point elsewhere, "
+                                        "so it isn't credited)"})
+            searched.append({"text": "conda-forge packages looked for by name",
+                             "paths": [{"path": n} for n in conda["names"]]})
+        return {"found": found, "missing": missing, "searched": searched}
+
+    @classmethod
+    def _install_evidence(cls, registries: List[Dict[str, Any]], lookups: Dict) -> Dict[str, Any]:
+        """Each package a user can install, with the command; with none,
+        the packages found that give no install path and where the
+        registries were searched."""
+        found = [{"path": f"{r['name']} ({r['ecosystem']})", "url": r.get("registry_url"),
+                  "quote": r["install_command"]}
+                 for r in registries if r.get("install_command")]
+        if found:
+            return {"found": found}
+        registry = cls._registry_evidence(registries, lookups)
+        missing = [{"text": f"an install command for {r['name']} ({r['ecosystem']})"}
+                   for r in registries]
+        return {"missing": missing + registry["missing"], "searched": registry["searched"]}
+
+    @staticmethod
+    def _network_evidence(
+        registries: List[Dict[str, Any]], source: Optional[Dict[str, Any]], lookups: Dict,
+    ) -> Dict[str, Any]:
+        """Which package each dependent count came from, and the
+        dependency-audit graph used or where it was looked for."""
+        found = [
+            {"text": f"{r['name']} ({r['ecosystem']}): {r['dependent_packages']:,} dependent "
+                     f"packages, {r['dependent_repos']:,} dependent repositories"}
+            for r in registries if r["dependent_packages"] or r["dependent_repos"]
+        ]
+        missing, searched = [], []
+        audit = lookups.get("audit", {})
+        graph = audit.get("path") or "dependency-audit graph"
+        if source:
+            found.append({"text": f"{source.get('count', 0):,} source-level dependents",
+                          "path": graph, "url": source.get("url")})
+        elif audit.get("outcome") == "absent":
+            missing.append({"text": "a dependency-audit graph for this repository"})
+            searched.append({"text": "Dependency-audit graph looked for at",
+                             "paths": [{"path": graph}]})
+        elif audit.get("outcome") not in (None, "failed", "used"):
+            missing.append({"text": f"a usable dependency-audit graph: {audit['outcome']}"})
+            searched.append({"text": "Dependency-audit graph read", "paths": [{"path": graph}]})
+        return {"found": found, "missing": missing, "searched": searched}
+
     def _calculate_score(
         self, registries: List[Dict[str, Any]], source: Optional[Dict[str, Any]] = None,
+        lookups: Optional[Dict] = None,
     ) -> Dict[str, Any]:
+        lookups = lookups or {}
         ecosystems = sorted({r["ecosystem"] for r in registries})
         max_packages = max((r["dependent_packages"] for r in registries), default=0)
         # Registry and source-level dependents are found different ways and
@@ -363,6 +492,7 @@ class CollaborationCollector:
                      + ", ".join(ecosystems)
                      if ecosystems else "Not packaged in any indexed ecosystem",
             "passing": len(ecosystems) >= get_threshold("4.2.7", "Advanced Dependency Analysis"),
+            "evidence": self._registry_evidence(registries, lookups),
         }
 
         reach = (
@@ -377,6 +507,7 @@ class CollaborationCollector:
                        + ("" if source.get("complete") else " (partial search)"))
                       if source_repos else None,
             "passing": reach,
+            "evidence": self._network_evidence(registries, source, lookups),
         }
         # Registries can't see source-level use, so without a dependency-audit
         # graph a registry-only shortfall isn't a confirmed lack of dependents.
@@ -409,6 +540,10 @@ class CollaborationCollector:
                      f"{'s' if len(installable) != 1 else ''}: " + ", ".join(installable)
                      if installable else "No package-manager install path found",
             "passing": bool(installable),
+            # The row renders in 4.3.4 (Quality) though this collector is
+            # Ecosystem's, so the report matches it by section, not dimension.
+            "section": "4.3.4",
+            "evidence": self._install_evidence(registries, lookups),
         }
 
         collaboration_keys = [
@@ -428,7 +563,7 @@ class CollaborationCollector:
         }
 
     async def _source_dependents(
-        self, client: httpx.AsyncClient, owner: str, repo: str
+        self, client: httpx.AsyncClient, owner: str, repo: str, trace: Optional[Dict] = None,
     ) -> Optional[Dict[str, Any]]:
         """Direct source-level dependents from the project's dependency-audit
         graph, or None when there's no graph, it's for a different repository,
@@ -438,16 +573,28 @@ class CollaborationCollector:
         Counts DEPENDS_ON edges into the project rated high or medium
         confidence, from repositories outside its own organization; vendored
         copies and mirrors are excluded.
+
+        `trace`, if given, records the graph's path and, when None is
+        returned, why: "failed", "absent", or the reason it wasn't usable.
         """
+        trace = {} if trace is None else trace
+        trace["path"] = _DEPENDENCY_AUDIT_PATH.format(name=repo.lower())
         graph = await self._get_json(client, _DEPENDENCY_AUDIT.format(name=repo.lower()))
         if not isinstance(graph, dict):
+            trace["outcome"] = "failed" if graph is _FETCH_FAILED else "absent"
             return None
         root = f"{owner}/{repo}".lower()
         if str((graph.get("meta") or {}).get("root", "")).lower() != root:
+            trace["outcome"] = "the graph published under this name is for another repository"
             return None
         edges = [e for e in graph.get("edges", []) if str(e.get("target", "")).lower() == root]
-        if not edges or not any("confidence" in e and "relationship" in e for e in edges):
+        if not edges:
+            trace["outcome"] = "the graph records no dependents of this repository"
             return None
+        if not any("confidence" in e and "relationship" in e for e in edges):
+            trace["outcome"] = "the graph predates confidence scoring"
+            return None
+        trace["outcome"] = "used"
         dependents = {
             e["source"].lower() for e in edges
             if e.get("relationship") == "DEPENDS_ON" and e.get("confidence") in _AUDIT_CONFIDENCE

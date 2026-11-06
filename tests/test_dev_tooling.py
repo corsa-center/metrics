@@ -331,6 +331,22 @@ class TestToolingBeyondRoot:
         assert self._refine(collector, [], {"pyproject.toml": "[tool.setuptools]\npackages=['x']\n"}) == []
 
 
+class TestToolingConfigReadGap:
+    def test_unreadable_python_config_is_not_a_confirmed_miss(self, collector):
+        from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+        from collectors.quality.development_practices.dev_tooling import _TOOLING_PATHS
+        tree = RepoTree(FakeForge(), "o/r", ["pyproject.toml"], truncated=False)
+
+        async def get(client, url, params=None):
+            return COLLECTION_GAP
+        collector.forge._github_get = get
+        tooling = collector._scan(tree, _TOOLING_PATHS)
+        refined = asyncio.run(collector._refine_tooling(None, "o/r", tree, tooling))
+        assert "Linter config" in refined["not_collected"]
+        assert "Linter config" not in refined["missing"]
+        assert refined["searched"][0]["paths"] == []
+
+
 class TestTestRunnersBeyondConfig:
     def _refine(self, collector, paths, files):
         import base64
@@ -377,3 +393,88 @@ class TestMoreToolConfigs(TestToolingBeyondRoot):
     def test_astyle_config_and_committed_git_hook(self, collector):
         found = self._refine(collector, ["config/mfem.astylerc", "config/githooks/pre-commit"])
         assert {"Code formatter config", "Pre-commit hooks"} <= set(found)
+
+
+def _collect_on(forge):
+    return asyncio.run(DevToolingCollector(forge).collect(
+        {"name": "r", "repo_url": "https://github.com/o/r"}))
+
+
+class TestEvidence:
+    """Testing and tooling rows name the file behind each indicator, and for
+    each one missing, what would have counted and the files read (#99)."""
+
+    def _evidence(self, files, key):
+        return _collect_on(FakeForge(files=files))["overall_score"]["sub_scores"][key]["evidence"]
+
+    def test_found_indicators_keep_their_file_and_matched_line(self):
+        ev = self._evidence({
+            "tests/test_a.py": "",
+            "pyproject.toml": "[project]\nname = 'x'\n[tool.pytest.ini_options]\naddopts = '-q'\n",
+        }, "testing_framework")
+        assert ev["found"] == [
+            {"text": "Test suite directory", "path": "tests",
+             "url": "https://github.com/o/r/tree/HEAD/tests", "quote": None},
+            {"text": "pytest", "path": "pyproject.toml",
+             "url": "https://github.com/o/r/blob/HEAD/pyproject.toml",
+             "quote": "[tool.pytest.ini_options]"},
+        ]
+
+    def test_missing_indicators_say_what_would_count_and_what_was_read(self):
+        ev = self._evidence({"CMakeLists.txt": "project(x)", ".github/workflows/ci.yml": "run: make"},
+                            "testing_framework")
+        assert [m["text"].split(" (")[0] for m in ev["missing"]] == list(_TESTING_PATHS)
+        assert "CTestConfig.cmake" in ev["missing"][1]["text"]
+        assert "ctest, make check" in ev["missing"][1]["text"]
+        config, ci = ev["searched"]
+        assert [p["path"] for p in config["paths"]] == ["CMakeLists.txt"]
+        assert [p["path"] for p in ci["paths"]] == [".github/workflows/ci.yml"]
+
+    def test_gapped_read_claims_no_miss_for_what_it_could_have_found(self):
+        forge = FakeForge(files={"CMakeLists.txt": "project(x)"}, gap_paths={"CMakeLists.txt"})
+        ev = _collect_on(forge)["overall_score"]["sub_scores"]["testing_framework"]["evidence"]
+        # Only the tree-only indicator is a confirmed miss.
+        assert [m["text"].split(" (")[0] for m in ev["missing"]] == ["Test suite directory"]
+        assert ev["searched"][0]["paths"] == []
+
+    def test_tooling_lists_dependabot_paths_and_python_configs_read(self):
+        ev = self._evidence({".clang-format": "", "pyproject.toml": "[tool.black]\n"},
+                            "dev_tool_integration")
+        assert [(f["text"], f["path"]) for f in ev["found"]] == [
+            ("Code formatter config", ".clang-format")]
+        dependency = next(m["text"] for m in ev["missing"] if m["text"].startswith("Dependency"))
+        assert ".github/dependabot.yml" in dependency
+        assert ev["searched"] == [{"text": "Python config files read for tool sections", "paths": [
+            {"path": "pyproject.toml", "url": "https://github.com/o/r/blob/HEAD/pyproject.toml"}]}]
+
+    def test_gapped_tree_claims_nothing(self):
+        ev = _collect_on(FakeForge(gaps={"repo_tree"}))["overall_score"]["sub_scores"]
+        for key in ("testing_framework", "dev_tool_integration"):
+            assert ev[key]["evidence"] == {"found": [], "missing": [], "searched": []}
+
+
+class TestEvidenceInReport:
+    def test_evidence_lines_appear_under_the_four_three_two_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        dev_tooling = _collect_on(FakeForge(files={
+            ".github/workflows/ci.yml": "steps:\n  - run: ctest --output-on-failure\n",
+            "src/a.c": "",
+        }))
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {}},
+            "quality": {"sub_results": {"dev_tooling": dev_tooling,
+                                        "ci_cd": {"score": 1, "max_score": 6}}},
+        }}
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        testing = page.split("<b>Testing Framework Excellence:</b>")[1].split("</li>")[0]
+        assert ('<b>Found:</b> Build-system test target in <a href="https://github.com/o/r/blob/HEAD/'
+                '.github/workflows/ci.yml">.github/workflows/ci.yml</a>: “run: ctest --output-on-failure”'
+                ) in testing
+        assert "<b>Not found:</b> pytest (looked for: pytest.ini" in testing
+        tooling = page.split("<b>Development Tool Integration:</b>")[1].split("</li>")[0]
+        assert "<b>Not found:</b> Linter config (looked for: .flake8" in tooling

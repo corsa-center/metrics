@@ -294,3 +294,109 @@ class TestCollectRunnerKinds:
         r = self._collect("jobs:\n a:\n  runs-on: [self-hosted, macOS]\n b:\n  runs-on: ubuntu-latest\n")
         row = r["overall_score"]["sub_scores"]["deployment_environment_testing"]
         assert row["passing"] and "macOS" in row["value"]
+
+
+def _collect_on(forge):
+    import asyncio
+    return asyncio.run(DeploymentEnvironmentCollector(forge).collect(
+        {"name": "r", "repo_url": "https://github.com/o/r"}))
+
+
+def _blob(path):
+    return f"https://github.com/o/r/blob/HEAD/{path}"
+
+
+class TestEvidence:
+    """Each row names the file and line behind what it found, or says what
+    would have counted and which files were read (#99)."""
+
+    _CI = ".github/workflows/ci.yml"
+
+    def _sub(self, **forge):
+        return _collect_on(FakeForge(**forge))["overall_score"]["sub_scores"]
+
+    def test_found_runner_architecture_and_platform_keep_file_and_line(self):
+        sub = self._sub(files={self._CI: "jobs:\n  a:\n    runs-on: ubuntu-24.04-arm\n",
+                               "INSTALL.md": "Supported on Windows 11.\n", "README.md": ""},
+                        readme_text="Runs on Linux.\n")
+        assert sub["deployment_environment_testing"]["evidence"]["found"] == [
+            {"text": "Linux runner", "path": self._CI, "url": _blob(self._CI),
+             "quote": "runs-on: ubuntu-24.04-arm"}]
+        assert sub["architecture_compatibility"]["evidence"] == {"found": [
+            {"text": "ARM64", "path": self._CI, "url": _blob(self._CI),
+             "quote": "runs-on: ubuntu-24.04-arm"}]}
+        assert sub["platform_documentation"]["evidence"] == {"found": [
+            {"text": "Linux", "path": "README.md", "url": _blob("README.md"), "quote": "Runs on Linux."},
+            {"text": "Windows", "path": "INSTALL.md", "url": _blob("INSTALL.md"),
+             "quote": "Supported on Windows 11."},
+        ]}
+
+    def test_not_passing_says_what_would_count_and_what_was_read(self):
+        sub = self._sub(files={self._CI: "runs-on: ubuntu-latest\n"}, readme_text="A library.\n")
+        env = sub["deployment_environment_testing"]["evidence"]
+        assert [m["text"].split(" (")[0] for m in env["missing"]] == ["Windows runners", "macOS runners"]
+        assert env["searched"] == [{"text": "CI files read", "paths": [
+            {"path": self._CI, "url": _blob(self._CI)}]}]
+        arch = sub["architecture_compatibility"]["evidence"]
+        assert [m["text"].split(" (")[0] for m in arch["missing"]] == [
+            "A non-x86 CPU architecture", "A GPU build target"]
+        docs = sub["platform_documentation"]["evidence"]
+        assert docs["missing"][0]["text"] == (
+            "Linux (looked for: linux, ubuntu, debian, centos, rhel, red hat, fedora, suse)")
+        assert docs["searched"] == [{"text": "Documents read", "paths": [{"path": "README", "url": None}]}]
+
+    def test_facility_gitlab_ci_is_listed_for_architectures_only(self):
+        sub = self._sub(files={self._CI: "runs-on: ubuntu-latest\n", ".gitlab-ci.yml": "script: make\n"})
+        # Runners the GitLab CI names no OS for: the environment row is unmeasured.
+        assert "missing" not in sub["deployment_environment_testing"]["evidence"]
+        arch = sub["architecture_compatibility"]["evidence"]
+        assert arch["searched"][1] == {"text": "Other GitLab CI files read", "paths": [
+            {"path": ".gitlab-ci.yml", "url": _blob(".gitlab-ci.yml")}]}
+
+    def test_capped_ci_read_says_how_many_were_listed(self):
+        files = {f".github/workflows/w{i}.yml": "runs-on: ubuntu-latest\n" for i in range(30)}
+        env = self._sub(files=files)["deployment_environment_testing"]["evidence"]
+        assert env["searched"][0]["text"] == "CI files read, the first 25 of 30 listed"
+
+    def test_failed_ci_listing_claims_no_search(self):
+        sub = self._sub(files={self._CI: "runs-on: ubuntu-latest\n"}, gaps={"ci_config_files"})
+        for key in ("deployment_environment_testing", "architecture_compatibility"):
+            assert sub[key]["evidence"] == {"found": []}
+
+    def test_failed_ci_listing_is_not_collected_not_a_fail(self):
+        result = _collect_on(FakeForge(files={self._CI: "runs-on: ubuntu-latest\n"},
+                                       gaps={"ci_config_files"}))
+        sub = result["overall_score"]["sub_scores"]
+        for key in ("deployment_environment_testing", "architecture_compatibility"):
+            assert sub[key]["not_collected"] is True
+        # Only the platform-documentation row is left to score.
+        assert result["overall_score"]["max_score"] == 1
+
+    def test_nothing_read_claims_no_missing_platforms(self):
+        docs = self._sub()["platform_documentation"]["evidence"]
+        assert "missing" not in docs
+        assert docs["searched"] == [{"text": "Documents read", "paths": []}]
+
+
+class TestEvidenceInReport:
+    def test_evidence_lines_appear_under_the_four_three_five_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        deployment = _collect_on(FakeForge(files={".github/workflows/ci.yml": "runs-on: ubuntu-latest\n"},
+                                           readme_text="Tested on Ubuntu and macOS.\n"))
+        metrics = {"dimensions": {
+            "impact": {"metadata": {"status": "placeholder"}},
+            "ecosystem": {"sub_results": {}},
+            "quality": {"sub_results": {"deployment_environments": deployment,
+                                        "accessibility": {"categories": {}}}},
+        }}
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        env = page.split("<b>Deployment Environment Testing:</b>")[1].split("</li>")[0]
+        assert ('<b>Found:</b> Linux runner in <a href="https://github.com/o/r/blob/HEAD/.github/'
+                'workflows/ci.yml">.github/workflows/ci.yml</a>: “runs-on: ubuntu-latest”') in env
+        assert "<b>Not found:</b> Windows runners (looked for labels such as windows-2022" in env
+        docs = page.split("<b>Platform Documentation Evaluation:</b>")[1].split("</li>")[0]
+        assert "<b>Found:</b> macOS in README: “Tested on Ubuntu and macOS.”" in docs

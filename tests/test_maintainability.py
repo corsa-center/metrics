@@ -1,9 +1,14 @@
 """Unit tests for MaintainabilityCollector (CASS Section 4.3.6)."""
 
+import asyncio
+
 import pytest
 
 from collectors.ecosystem.base import get_threshold
 from collectors.quality.maintainability import MaintainabilityCollector, _REFACTOR_INTENT
+from orchestrator import MetricsOrchestrator
+from package_report import render_package_report
+from tests.fakes import FakeForge
 
 
 @pytest.fixture
@@ -184,3 +189,165 @@ class TestDepthIgnoresTestData:
     def test_deep_code_still_counts(self, collector):
         c = collector._analyze_tree([_f("a/b/c/d/e/f/g/h/i/j/k/deep.cpp")])
         assert c["max_depth"] == 12
+
+
+def _collect(**forge_kwargs):
+    forge = FakeForge(**forge_kwargs)
+    return asyncio.run(MaintainabilityCollector(forge).collect(
+        {"name": "R", "repo_url": "https://github.com/o/r"}))
+
+
+def _subs(result):
+    return result["overall_score"]["sub_scores"]
+
+
+class TestEvidence:
+    """What report.html shows under each 4.3.6 row (issue #99)."""
+
+    def test_oversized_and_deepest_source_files_are_named(self):
+        large = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
+        result = _collect(files={
+            "src/big.c": "x" * (large + 1024), "src/small.c": "x",
+            "src/a/b/deep.c": "x", "test/deeper/still/t.c": "x",
+        })
+        found = _subs(result)["complexity_analysis"]["evidence"]["found"]
+        assert found[0]["path"] == "src/big.c"
+        assert found[0]["text"].endswith(" KB source file")
+        assert found[0]["url"] == "https://github.com/o/r/blob/HEAD/src/big.c"
+        # Test fixtures don't set the depth, so they aren't named as deepest.
+        assert found[-1] == {"text": "deepest source file (depth 4)", "path": "src/a/b/deep.c",
+                             "url": "https://github.com/o/r/blob/HEAD/src/a/b/deep.c"}
+        assert len(found) == 2
+
+    def test_largest_file_is_named_when_none_is_oversized(self, collector):
+        c = collector._analyze_tree([_f("a.c", 2048), _f("b.c", 1024)])
+        found = collector._calculate_score(c, {"sampled": 0})["sub_scores"][
+            "complexity_analysis"]["evidence"]["found"]
+        assert found[0]["text"] == "largest source file (2.0 KB)"
+        assert found[0]["path"] == "a.c"
+
+    def test_test_files_are_counted_by_directory(self):
+        result = _collect(files={
+            "src/a.c": "x", "test/a.c": "x", "test/b.c": "x",
+            "src/x/unit_tests/c.cpp": "x", "thing_test.py": "x",
+        })
+        found = _subs(result)["code_quality"]["evidence"]["found"]
+        assert [(f["path"], f["text"]) for f in found] == [
+            ("test", "2 test files"), ("the repository root", "1 test file"),
+            ("src/x/unit_tests", "1 test file"),
+        ]
+        assert found[0]["url"] == "https://github.com/o/r/tree/HEAD/test"
+        assert found[1]["url"] is None
+
+    def test_no_test_files_says_what_would_count(self, collector):
+        c = collector._analyze_tree([_f("src/a.c")])
+        evidence = collector._calculate_score(c, {"sampled": 0})["sub_scores"][
+            "code_quality"]["evidence"]
+        assert evidence["found"] == []
+        assert evidence["missing"][0]["text"].startswith("test files: source files under a test")
+
+    def test_doc_generator_config_is_named(self, collector):
+        c = collector._analyze_tree([_f("src/a.c"), _f("doxygen/Doxyfile.in"), _f("README.md")])
+        evidence = collector._calculate_score(c, {"sampled": 0})["sub_scores"][
+            "documentation_quality"]["evidence"]
+        assert evidence["found"] == [
+            {"text": "Doxygen configuration", "path": "doxygen/Doxyfile.in", "url": None}]
+        assert evidence["missing"] == []
+
+    def test_missing_doc_generator_and_docs_say_what_was_looked_for(self, collector):
+        c = collector._analyze_tree([_f("src/a.c")])
+        missing = collector._calculate_score(c, {"sampled": 0})["sub_scores"][
+            "documentation_quality"]["evidence"]["missing"]
+        assert "(Doxyfile, docs/conf.py, docs/source/conf.py, mkdocs.yml" in missing[0]["text"]
+        assert missing[1]["text"].startswith("documentation files: .adoc, .dox, .md")
+
+    def test_empty_tree_claims_no_search(self, collector):
+        # An empty tree is also what a failed tree fetch leaves behind.
+        sub = collector._calculate_score(collector._analyze_tree([]), {"sampled": 0})["sub_scores"]
+        assert not any("evidence" in s for s in sub.values())
+
+    def test_refactor_words_matched_and_looked_for(self):
+        result = _collect(commit_list=[
+            {"sha": "1", "subject": "Refactor H5T"}, {"sha": "2", "subject": "refactor H5S"},
+            {"sha": "3", "subject": "Clean up tests"}, {"sha": "4", "subject": "Fix a bug"},
+        ])
+        evidence = _subs(result)["refactoring_tracking"]["evidence"]
+        assert [f["text"] for f in evidence["found"]] == [
+            "“refactor” in 2 commit subjects", "“clean up” in 1 commit subject"]
+        assert evidence["searched"][0]["text"] == (
+            "Words looked for in the 4 most recent commit subjects")
+        assert {"path": "tidy"} in evidence["searched"][0]["paths"]
+
+    def test_no_commits_read_claims_no_search(self):
+        result = _collect(files={"src/a.c": "x"}, gaps={"commits"})
+        assert "evidence" not in _subs(result)["refactoring_tracking"]
+
+
+def _row(page, label):
+    """One row of report.html, from its label to the next row."""
+    start = page.index(f"<b>{label}:</b>")
+    end = page.find("<li>", start)
+    return page[start:end if end != -1 else None]
+
+
+class TestReportEvidence:
+    def test_evidence_reaches_the_four_three_six_rows(self):
+        result = _collect(
+            files={"src/a/b/deep.c": "x", "src/b.c": "x"},
+            commit_list=[{"sha": "1", "subject": "Fix a bug"}],
+        )
+        metrics = {
+            "overall_score": 27,
+            "last_updated": "2026-09-30T02:25:04.582663+00:00",
+            "dimensions": {
+                "impact": {"score": 0.0, "metadata": {"status": "placeholder"}},
+                # 4.3.6 renders only alongside 4.2.3's bus factor.
+                "ecosystem": {"score": 80.0, "sub_results": {"maintenance": {
+                    "contributor_activity": {"bus_factor": 3, "top_contributor_pct": 40,
+                                             "total_contributors": 9}}}},
+                "quality": {"score": 0.0, "sub_results": {"maintainability": result}},
+            },
+        }
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        assert ('<b>Found:</b> deepest source file (depth 4) in <a href="'
+                'https://github.com/o/r/blob/HEAD/src/a/b/deep.c">src/a/b/deep.c</a>'
+                in _row(page, "Advanced Complexity Analysis"))
+        assert ("<b>Not found:</b> test files: source files under"
+                in _row(page, "Code Quality Assessment"))
+        assert ("<b>Not found:</b> documentation generator configuration (Doxyfile"
+                in _row(page, "Documentation Quality Evaluation"))
+        assert ("<b>Words looked for in the 1 most recent commit subjects:</b> refactor…"
+                in _row(page, "Refactoring and Evolution Tracking"))
+
+
+class TestFetchGaps:
+    """A failed fetch reads like an empty repository; it must score as not
+    collected, not as a measured fail."""
+
+    def test_tree_gap_leaves_tree_rows_not_collected(self):
+        result = _collect(files={"src/a.c": "x"}, gaps={"repo_tree"})
+        subs = _subs(result)
+        for key in ("complexity_analysis", "code_quality", "documentation_quality"):
+            assert subs[key]["not_collected"] is True
+        assert result["composition"]["gap"] is True
+        assert "not_collected" not in subs["refactoring_tracking"]
+        assert result["overall_score"]["max_score"] == 1
+
+    def test_commit_gap_leaves_refactoring_not_collected(self):
+        result = _collect(files={"src/a.c": "x"}, gaps={"commits"})
+        subs = _subs(result)
+        assert subs["refactoring_tracking"]["not_collected"] is True
+        assert result["refactoring"]["gap"] is True
+        assert result["overall_score"]["max_score"] == 3
+
+    def test_everything_gapped_has_no_percentage(self):
+        result = _collect(gaps={"repo_tree", "commits"})
+        assert result["overall_score"]["percentage"] is None
+        assert result["overall_score"]["status"] == "not_collected"
+
+    def test_empty_repository_is_still_a_measured_fail(self):
+        subs = _subs(_collect())
+        assert not any(s.get("not_collected") for s in subs.values())

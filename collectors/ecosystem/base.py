@@ -65,11 +65,22 @@ ENVIRONMENT_SPEC_PATTERN = (
 
 # Community channels a README can link to, shared by Multi-Channel
 # Communication (4.2.3) and Decision-Making Visibility (4.2.6).
+# Each term, as a report lists it, mapped to the pattern it stands for; the
+# patterns below are built from these so the two can't drift apart.
+PUBLIC_CHANNEL_WORDS = {
+    "Mailing list": {"mailing list": r"mailing[- ]list", "listserv": r"listserv",
+                     "groups.google.com": r"groups\.google\.com", "majordomo": r"majordomo",
+                     "mailman": r"\bmailman\b"},
+    "Chat (Slack/Discord/Matrix)": {"slack.com": r"slack\.com", "discord.gg": r"discord\.gg",
+                                    "discord.com": r"discord\.com", "matrix.to": r"matrix\.to",
+                                    "gitter.im": r"gitter\.im", "zulipchat": r"zulipchat"},
+    "Forum": {"forum": r"\bforum\b", "discourse.": r"discourse\.",
+              "stackoverflow.com/questions/tagged": r"stackoverflow\.com/questions/tagged"},
+    "Help desk": {"help desk": r"help ?desk", "support portal": r"support portal",
+                  "jira": r"jira", "servicedesk": r"servicedesk"},
+}
 PUBLIC_CHANNEL_PATTERNS = {
-    "Mailing list": re.compile(r"mailing[- ]list|listserv|groups\.google\.com|majordomo|\bmailman\b", re.I),
-    "Chat (Slack/Discord/Matrix)": re.compile(r"slack\.com|discord\.(?:gg|com)|matrix\.to|gitter\.im|zulipchat", re.I),
-    "Forum": re.compile(r"\bforum\b|discourse\.|stackoverflow\.com/questions/tagged", re.I),
-    "Help desk": re.compile(r"help ?desk|support portal|jira|servicedesk", re.I),
+    label: re.compile("|".join(words.values()), re.I) for label, words in PUBLIC_CHANNEL_WORDS.items()
 }
 
 
@@ -409,3 +420,40 @@ def configure_threshold_overrides(overrides: Optional[Dict[str, Dict[str, Any]]]
     """Install threshold overrides from config/orchestrator.yaml's `thresholds:`
     block. Call once at startup, before any collector runs."""
     _REGISTRY.set_overrides(overrides)
+
+
+# --------------------------------------------------------------------------- #
+# Report evidence helpers (see package_report.py)                             #
+# --------------------------------------------------------------------------- #
+
+# Context kept either side of a match in a report excerpt.
+_EXCERPT_BEFORE, _EXCERPT_AFTER = 80, 120
+
+# Where forge.readme() can have read from. GitHub also accepts a README in
+# .github/ or docs/, but the root one is by far the usual case.
+_README_FILE = r"^(?:\.github/|docs/)?readme(?:\.[a-z]+)?$"
+
+
+def readme_source(tree) -> Dict[str, Optional[str]]:
+    """The README's path and URL, from the tree; just "README" without one."""
+    if tree is None or tree is COLLECTION_GAP:
+        return {"path": "README", "url": None}
+    paths = sorted(tree.find(_README_FILE), key=lambda p: ("/" in p, p))
+    if not paths:
+        return {"path": "README", "url": None}
+    return {"path": paths[0], "url": tree.match_url([paths[0]])}
+
+
+def excerpt(window: str, match: "re.Match", heading: Optional[str]) -> str:
+    """The line of `window` holding `match`, cut to the text around it, after
+    the heading it sits under (if any)."""
+    line_start = window.rfind("\n", 0, match.start()) + 1
+    line_end = window.find("\n", match.end())
+    line_end = len(window) if line_end == -1 else line_end
+    start = max(line_start, match.start() - _EXCERPT_BEFORE)
+    end = min(line_end, match.end() + _EXCERPT_AFTER)
+    text = re.sub(r"\s+", " ", window[start:end]).strip()
+    if start == line_start:
+        text = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text)  # list marker
+    text = ("…" if start > line_start else "") + text + ("…" if end < line_end else "")
+    return f"{heading}: {text}" if heading else text

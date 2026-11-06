@@ -177,34 +177,34 @@ class TestFetchReleaseAssets:
             {"tag_name": "v1.0.0", "assets": [{"name": "sbom.json", "browser_download_url": "u2"}]},
         ]
         client = self._mock_client(200, releases)
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
+        assets, is_gap, _ = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert len(assets) == 2
         assert assets[1]["release"] == "v1.0.0"
         assert is_gap is False
 
     def test_no_assets(self, collector):
         client = self._mock_client(200, [{"tag_name": "v1.0.0", "assets": []}])
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
+        assets, is_gap, _ = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert assets == []
         assert is_gap is False
 
     def test_confirmed_404_is_a_real_empty_list_not_a_gap(self, collector):
         # A repo with no releases at all -- a real, trustworthy result.
         client = self._mock_client(404)
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
+        assets, is_gap, _ = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert assets == []
         assert is_gap is False
 
     def test_request_failure_is_a_gap_not_a_confirmed_empty_list(self, collector):
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(mock_client, "o/r"))
+        assets, is_gap, _ = asyncio.run(collector._fetch_release_assets(mock_client, "o/r"))
         assert assets == []
         assert is_gap is True
 
     def test_rate_limited_after_retries_is_a_gap(self, collector):
         client = self._mock_client(403)
-        assets, is_gap = asyncio.run(collector._fetch_release_assets(client, "o/r"))
+        assets, is_gap, _ = asyncio.run(collector._fetch_release_assets(client, "o/r"))
         assert assets == []
         assert is_gap is True
 
@@ -280,13 +280,13 @@ class TestQueryOsvBatch:
         ]})
         deps = [("PyPI", "requests", "2.6.0"), ("PyPI", "numpy", "1.24.0")]
         result = asyncio.run(collector._query_osv_batch(client, deps))
-        assert result == [("PyPI", "requests", "2.6.0")]
+        assert result == [("PyPI", "requests", "2.6.0", ["GHSA-xxxx"])]
 
     def test_multiple_ecosystems_in_one_batch(self, collector):
         client = self._client(200, {"results": [{}, {"vulns": [{"id": "GHSA-yyyy"}]}]})
         deps = [("PyPI", "numpy", "1.24.0"), ("crates.io", "serde", "1.0.0")]
         result = asyncio.run(collector._query_osv_batch(client, deps))
-        assert result == [("crates.io", "serde", "1.0.0")]
+        assert result == [("crates.io", "serde", "1.0.0", ["GHSA-yyyy"])]
 
     def test_non_200_is_a_gap(self, collector):
         client = self._client(500)
@@ -355,7 +355,7 @@ class TestCheckDependencyVulnerabilities:
             return {"content": content}
 
         async def fake_batch(client, deps):
-            return [("PyPI", "requests", "2.6.0")]
+            return [("PyPI", "requests", "2.6.0", ["GHSA-xxxx"])]
 
         with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
@@ -447,7 +447,7 @@ class TestCheckDependencyVulnerabilities:
             return COLLECTION_GAP  # Cargo.lock content fetch fails
 
         async def fake_batch(client, deps):
-            return [("PyPI", "requests", "2.6.0")]
+            return [("PyPI", "requests", "2.6.0", ["GHSA-xxxx"])]
 
         with patch.object(collector.forge, "_github_get", side_effect=fake_get), \
              patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
@@ -639,3 +639,122 @@ class TestParsePipfileLock:
 
     def test_invalid_json_returns_empty(self):
         assert _parse_pipfile_lock("not valid json {{{") == []
+
+
+def _collect(collector=None, **forge_kwargs):
+    collector = collector or SupplyChainCollector(FakeForge(**forge_kwargs))
+    return asyncio.run(collector.collect({"name": "R", "repo_url": "https://github.com/o/r"}))
+
+
+_RELEASE = {"tag_name": "v1.0", "html_url": "https://github.com/o/r/releases/tag/v1.0",
+            "assets": [{"name": "r-1.0.tar.gz", "browser_download_url": "https://x/r.tgz"}]}
+
+
+class TestEvidence:
+    """What report.html shows under each 4.3.8 row (issue #99)."""
+
+    def test_releases_checked_include_ones_without_assets(self, collector):
+        gitlab_style = {"tag_name": "v0.9", "_links": {"self": "https://gl/r/-/releases/v0.9"},
+                        "assets": []}
+        forge = FakeForge(release_list=[_RELEASE, gitlab_style])
+        _, _, releases = asyncio.run(
+            SupplyChainCollector(forge)._fetch_release_assets(None, "o/r"))
+        assert releases == [
+            {"path": "v1.0", "url": "https://github.com/o/r/releases/tag/v1.0"},
+            {"path": "v0.9", "url": "https://gl/r/-/releases/v0.9"},
+        ]
+
+    def test_committed_sbom_names_its_file(self):
+        sub = _collect(files={"docs/x.md": "x", "SBOM.spdx.json": "{}"})["sub_metrics"]
+        assert sub["sbom_detection"]["evidence"] == {"found": [{
+            "text": "SBOM", "path": "SBOM.spdx.json",
+            "url": "https://github.com/o/r/blob/HEAD/SBOM.spdx.json"}]}
+
+    def test_nothing_found_lists_names_and_releases_checked(self):
+        sub = _collect(files={"README.md": "x"}, release_list=[_RELEASE])["sub_metrics"]
+        searched = sub["sbom_detection"]["evidence"]["searched"]
+        assert searched[0]["text"] == "SBOM files looked for (any capitalization)"
+        # Matching is case-insensitive, so each name is listed once.
+        assert [p["path"] for p in searched[0]["paths"]] == [
+            "sbom.spdx.json", "sbom.json", "bom.json", "bom.xml", ".github/sbom.spdx.json"]
+        assert searched[1]["text"].startswith("Asset names containing sbom, spdx, cyclonedx")
+        assert searched[1]["paths"] == [
+            {"path": "v1.0", "url": "https://github.com/o/r/releases/tag/v1.0"}]
+        provenance = sub["build_provenance"]["evidence"]["searched"]
+        assert provenance[0]["text"].startswith("Asset names containing intoto, in-toto")
+        assert provenance[0]["paths"] == searched[1]["paths"]
+
+    def test_found_release_asset_adds_nothing_the_value_names(self):
+        release = dict(_RELEASE, assets=[{"name": "r.intoto.jsonl", "browser_download_url": "u"}])
+        sub = _collect(files={"README.md": "x"}, release_list=[release])["sub_metrics"]
+        assert sub["build_provenance"]["passing"] is True
+        assert sub["build_provenance"]["evidence"] == {}
+
+    def test_gapped_release_list_claims_no_search(self):
+        sub = _collect(files={"README.md": "x"}, gaps={"releases"})["sub_metrics"]
+        assert sub["sbom_detection"]["not_collected"] is True
+        assert sub["sbom_detection"]["evidence"] == {}
+        assert sub["build_provenance"]["evidence"] == {}
+
+    def test_no_lockfile_lists_the_lockfiles_looked_for(self):
+        sub = _collect(files={"README.md": "x"})["sub_metrics"]
+        searched = sub["dependency_vulnerability_posture"]["evidence"]["searched"][0]
+        assert [p["path"] for p in searched["paths"]] == [
+            "requirements.txt", "requirements/requirements.txt", "uv.lock", "poetry.lock",
+            "Pipfile.lock", "Cargo.lock", "go.sum"]
+
+    def test_gapped_tree_claims_no_search(self):
+        sub = _collect(gaps={"repo_tree"})["sub_metrics"]
+        assert "evidence" not in sub["dependency_vulnerability_posture"]
+
+    def test_vulnerable_dependency_names_its_lockfile_and_advisories(self):
+        collector = SupplyChainCollector(FakeForge(files={
+            "requirements.txt": "requests==2.6.0\nnumpy==1.24.0\nscipy>=1\n"}))
+        ids = [f"GHSA-{i}" for i in range(7)]
+
+        async def fake_batch(client, deps):
+            return [("PyPI", "requests", "2.6.0", ids)]
+
+        with patch.object(collector, "_query_osv_batch", side_effect=fake_batch):
+            sub = _collect(collector)["sub_metrics"]
+        url = "https://github.com/o/r/blob/HEAD/requirements.txt"
+        assert sub["dependency_vulnerability_posture"]["evidence"] == {"found": [
+            {"text": "2 pinned PyPI dependencies", "path": "requirements.txt", "url": url},
+            {"text": "requests==2.6.0 (PyPI) with known vulnerabilities "
+                     "(GHSA-0, GHSA-1, GHSA-2, GHSA-3, GHSA-4 and 2 more)",
+             "path": "requirements.txt", "url": url},
+        ]}
+
+
+class TestReportEvidence:
+    def test_evidence_reaches_the_four_three_eight_rows(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        result = _collect(files={"README.md": "x"}, release_list=[_RELEASE])
+        metrics = {
+            "overall_score": 27,
+            "last_updated": "2026-09-30T02:25:04.582663+00:00",
+            "dimensions": {
+                "impact": {"score": 0.0, "metadata": {"status": "placeholder"}},
+                "ecosystem": {"score": 80.0, "sub_results": {}},
+                "quality": {"score": 0.0, "sub_results": {"supply_chain": result}},
+            },
+        }
+        orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+
+        def row(label):
+            start = page.index(f"<b>{label}:</b>")
+            end = page.find("<li>", start)
+            return page[start:end if end != -1 else None]
+
+        releases = '<a href="https://github.com/o/r/releases/tag/v1.0">v1.0</a>'
+        assert ("<b>SBOM files looked for (any capitalization):</b> sbom.spdx.json, sbom.json"
+                in row("SBOM Detection"))
+        assert f"in the latest releases:</b> {releases}" in row("SBOM Detection")
+        assert (f"<b>Asset names containing intoto, in-toto, provenance, slsa, .sigstore, "
+                f"attestation looked for in the latest releases:</b> {releases}"
+                in row("Build Provenance"))
+        assert ("<b>Lockfiles looked for (any capitalization):</b> requirements.txt"
+                in row("Dependency Vulnerability Posture"))
