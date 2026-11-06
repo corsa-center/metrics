@@ -559,7 +559,19 @@ class TestEvidence:
         sub = _collect_on(FakeForge(gaps={"repo_tree"}))["overall_score"]["sub_scores"]
         for key in ("advanced_static_analysis", "cert_compliance"):
             assert sub[key].get("not_collected")
-            assert sub[key]["evidence"] == {"found": []}
+            assert sub[key]["evidence"] == {"found": [], "notes": [
+                {"text": "Not scored: the repository's file list couldn't be fetched."}]}
+
+    def test_workflows_past_the_cap_say_why_the_row_is_unscored(self):
+        from collectors.quality.reliability import _MAX_ANALYSIS_WORKFLOWS
+        files = {f".github/workflows/w{i:02}.yml": "on: push\n" for i in range(_MAX_ANALYSIS_WORKFLOWS + 5)}
+        sub = _collect_on(FakeForge(files=files))["overall_score"]["sub_scores"]
+        ev = sub["advanced_static_analysis"]["evidence"]
+        assert sub["advanced_static_analysis"]["not_collected"]
+        assert ev["notes"][0]["text"].startswith(
+            f"Not scored: {_MAX_ANALYSIS_WORKFLOWS} of the {_MAX_ANALYSIS_WORKFLOWS + 5} CI workflow files")
+        assert "missing" not in ev
+        assert len(ev["searched"][0]["paths"]) == _MAX_ANALYSIS_WORKFLOWS
 
     def test_not_applicable_cert_lists_nothing_missing(self):
         sub = _collect_on(FakeForge(files={"a.py": ""}), language="Python")["overall_score"]["sub_scores"]
