@@ -2391,10 +2391,13 @@ class MetricsOrchestrator:
         # 3. Documentation Quality Evaluation   4. Knowledge Distribution Analysis
         # 5. Refactoring and Evolution Tracking
         contributor_activity = maintenance.get("contributor_activity", {}) if maintenance else {}
+        maintainability = qual.get("maintainability", {})
         section_436_lines = []
         maint436_pts = 0
-        if contributor_activity:
-            maintainability = qual.get("maintainability", {})
+        # Either source alone fills rows: the section used to need 4.2.3's
+        # contributor data, so collected maintainability results vanished
+        # whenever that was missing.
+        if contributor_activity or maintainability:
             msub = maintainability.get("overall_score", {}).get("sub_scores", {})
             if maintainability:
                 for key in ["complexity_analysis", "code_quality", "documentation_quality"]:
@@ -2410,18 +2413,22 @@ class MetricsOrchestrator:
                     section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
 
             # 4. Knowledge Distribution Analysis — bus factor (reuses 4.2.3 data)
-            bus_factor = contributor_activity.get("bus_factor", 0)
-            top_pct = contributor_activity.get("top_contributor_pct", 0)
-            healthy = bus_factor >= get_threshold("4.3.6", "Knowledge Distribution Analysis")
-            maint436_pts += 1 if healthy else 0
-            mark = "✓" if healthy else "✗"
-            section_436_lines.append(
-                f'<p><strong>Knowledge Distribution Analysis:</strong> Bus factor {bus_factor} {mark}</p>'
-            )
-            section_436_lines.append(
-                f'<p class="sub-detail">Top contributor: {top_pct}% of commits '
-                f'({contributor_activity.get("total_contributors", 0)} total contributors)</p>'
-            )
+            if contributor_activity:
+                bus_factor = contributor_activity.get("bus_factor", 0)
+                top_pct = contributor_activity.get("top_contributor_pct", 0)
+                healthy = bus_factor >= get_threshold("4.3.6", "Knowledge Distribution Analysis")
+                maint436_pts += 1 if healthy else 0
+                mark = "✓" if healthy else "✗"
+                section_436_lines.append(
+                    f'<p><strong>Knowledge Distribution Analysis:</strong> Bus factor {bus_factor} {mark}</p>'
+                )
+                section_436_lines.append(
+                    f'<p class="sub-detail">Top contributor: {top_pct}% of commits '
+                    f'({contributor_activity.get("total_contributors", 0)} total contributors)</p>'
+                )
+            else:
+                section_436_lines.append(
+                    '<p><strong>Knowledge Distribution Analysis:</strong> Not yet collected</p>')
 
             if maintainability:
                 section_436_lines.append(_sub_row(msub, "refactoring_tracking"))

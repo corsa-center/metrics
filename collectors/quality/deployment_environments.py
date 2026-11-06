@@ -155,8 +155,10 @@ _PLATFORM_DOC_WORDS = {
     "macOS": ["macos", "mac os", "osx", "darwin", "apple"],
     "HPC systems": ["cray", "frontier", "summit", "perlmutter", "aurora", "slurm", "hpc cluster"],
 }
+# "Kokkos is a Linux Foundation project" names an organization, not a
+# supported platform.
 _PLATFORM_DOC_TERMS = {
-    name: re.compile(r"\b(?:" + "|".join(map(re.escape, words)) + r")\b", re.I)
+    name: re.compile(r"\b(?:" + "|".join(map(re.escape, words)) + r")\b(?!\s+foundation\b)", re.I)
     for name, words in _PLATFORM_DOC_WORDS.items()
 }
 

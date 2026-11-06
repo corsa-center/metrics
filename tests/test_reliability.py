@@ -501,7 +501,7 @@ class TestAnalysisBadges:
 
 def _collect_on(forge, language=None):
     return asyncio.run(ReliabilityCollector(forge).collect(
-        {"name": "r", "repo_url": "https://github.com/o/r", "primary_language": language}))
+        {"name": "r", "repo_url": "https://github.com/o/r", "language": language}))
 
 
 class TestEvidence:
@@ -601,3 +601,12 @@ class TestEvidenceInReport:
         analysis = page.split("<b>Advanced Static Analysis:</b>")[1].split("</li>")[0]
         assert "<b>Not found:</b> A defect-finding tool configured" in analysis
         assert "<b>CI workflows read:</b> <a href=" in analysis
+
+
+class TestCertUsesThePackagesLanguage:
+    def test_python_project_is_not_scored_on_c_hardening(self):
+        # h5py scored "No hardening settings found ✗" because the check read
+        # a key nothing sets since 2dd04d3.
+        sub = _collect_on(FakeForge(files={"setup.py": "x"}), language="Python")["overall_score"]["sub_scores"]
+        cert = next(s for s in sub.values() if s.get("label") == "CERT Guidelines Compliance")
+        assert cert["value"] == "Not applicable to a Python project"

@@ -529,3 +529,20 @@ class TestSubDetailRendering:
         data = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.1"]["data"]
         assert "Governance: Not yet collected" in data
         assert "Contributing Guidelines: Not found" in data
+
+
+class TestMaintainabilityWithoutMaintenanceData:
+    def test_collected_rows_render_without_contributor_activity(self, orchestrator):
+        metrics = _base_metrics(quality_sub={"maintainability": {"overall_score": {"sub_scores": {
+            "complexity_analysis": {"label": "Advanced Complexity Analysis", "value": "10 source files",
+                                    "passing": True},
+        }}}})
+        data = orchestrator._transform_for_dashboard(metrics, {})["quality"]["4.3.6"]["data"]
+        assert "Advanced Complexity Analysis:</strong> 10 source files ✓" in data
+        assert "Knowledge Distribution Analysis:</strong> Not yet collected" in data
+        # Rescored from the marks shown: only the one measured row counts.
+        assert "Score:</strong> 1/1" in data
+
+    def test_neither_source_leaves_the_section_empty(self, orchestrator):
+        data = orchestrator._transform_for_dashboard(_base_metrics(), {})["quality"]["4.3.6"]["data"]
+        assert "Advanced Complexity Analysis" not in (data or "")

@@ -343,3 +343,15 @@ class TestDocumentationEvidence:
                 "usage, using, quick start") in page
         assert ("<b>Documentation directories looked for (any capitalization):</b> "
                 "docs/, doc/, documentation/") in page
+
+
+class TestBuildStatusIsNotInstallation:
+    @pytest.mark.parametrize("heading", ["Build Status", "Build badges", "Build state"])
+    def test_ci_badge_heading_does_not_count(self, heading):
+        from collectors.quality.usability import readme_covers
+        assert not readme_covers(f"# Project\n\n## {heading}\n\n![ci](x.svg)\n", "Installation")
+
+    @pytest.mark.parametrize("heading", ["Build", "Building", "Build instructions", "Installation"])
+    def test_build_instructions_still_count(self, heading):
+        from collectors.quality.usability import readme_covers
+        assert readme_covers(f"# Project\n\n## {heading}\n\nRun cmake.\n", "Installation")

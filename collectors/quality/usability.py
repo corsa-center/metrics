@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 # patterns and the report's "looked for" lists are both built from this, so
 # they can't drift apart.
 _README_SECTION_WORDS = {
-    "Installation": {"install": r"install", "build, building": r"build(?:ing)?\b",
+    # "Build Status" heads a CI badge, not build instructions (HDF5's README).
+    "Installation": {"install": r"install",
+                     "build, building": r"build(?:ing)?\b(?!\s*(?:status|badges?|state)\b)",
                      "getting started": r"getting started", "setup": r"set ?up\b"},
     "Usage": {"usage": r"usage", "using": r"using", "quick start": r"quick ?start",
               "how to use": r"how to use", "basic use": r"basic use", "tutorial": r"tutorial"},
