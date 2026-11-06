@@ -31,6 +31,30 @@ logger = logging.getLogger(__name__)
 _MAX_WORKFLOWS_SAMPLED = 30
 
 
+def _duration(seconds: float) -> str:
+    """Seconds as seconds or minutes when short, else hours -- the unit
+    every threshold here is set in, so the two read side by side."""
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} min"
+    hours = seconds / 3600
+    return f"{hours:.1f} h" if hours < 10 else f"{hours:,.0f} h"
+
+
+def _checks_evidence(checks: List[tuple]) -> Dict[str, List[Dict[str, str]]]:
+    """Each check as a report line: passed ones found, failed ones missing,
+    and ones left out of the score as a note saying why."""
+    evidence: Dict[str, List[Dict[str, str]]] = {"found": [], "missing": [], "notes": []}
+    for check, measured, threshold, passed in checks:
+        if passed is None:
+            evidence["notes"].append({"text": f"{check} not scored: {measured}"})
+        else:
+            kind = "found" if passed else "missing"
+            evidence[kind].append({"text": f"{check} {threshold} (measured: {measured})"})
+    return evidence
+
+
 class CICDMetricsCollector:
     """Collects CI/CD development-practice metrics from GitHub (Section 4.3.2)."""
 
@@ -93,17 +117,24 @@ class CICDMetricsCollector:
         """
         score = 0
         max_score = 6
+        # (check, measured, threshold, passed: True/False, or None when left
+        # out of the score) for the report's evidence.
+        checks: List[tuple] = []
 
         # Workflow execution time under the cap (0 means no runs collected — skip)
         max_exec_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_execution_time_hours")
         exec_time = results.get("average_workflow_execution_time")
-        if exec_time is not None and exec_time > 0 and (exec_time / 3600) < max_exec_hours:
-            score += 1
+        exec_ok = exec_time is not None and exec_time > 0 and (exec_time / 3600) < max_exec_hours
+        score += exec_ok
+        checks.append(("Average workflow run time", _duration(exec_time) if exec_time else "no runs measured",
+                       f"under {max_exec_hours:g} h", exec_ok))
 
         # Overall workflow success above the configured rate
         min_success_pct = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_success_rate_pct")
-        if results.get("total_workflow_success_percentage", 0) > min_success_pct:
-            score += 1
+        success = results.get("total_workflow_success_percentage", 0)
+        success_ok = success > min_success_pct
+        score += success_ok
+        checks.append(("Workflow success rate", f"{success:.0f}%", f"over {min_success_pct:g}%", success_ok))
 
         # Deployment frequency: at least the configured minimum per year
         min_deployments_per_year = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_deployments_per_year")
@@ -115,14 +146,19 @@ class CICDMetricsCollector:
             if count is None:
                 # Repo does not use GitHub deployments — exclude from denominator.
                 max_score -= 1
+                checks.append(("Deployment frequency", "the repository records no deployments",
+                               None, None))
             else:
                 num_days = int(re.findall(r"\d+", num_deployments_key)[0])
                 # The max(1, ...) floor predates the threshold registry and
                 # is intentionally not overridable: a short observation
                 # window scaling min_deployments_per_year down to 0 still
                 # requires at least one deployment to pass.
-                if count >= max(1, int((num_days / 365) * min_deployments_per_year)):
-                    score += 1
+                needed = max(1, int((num_days / 365) * min_deployments_per_year))
+                deploy_ok = count >= needed
+                score += deploy_ok
+                checks.append(("Deployment frequency", f"{count} in the last {num_days} days",
+                               f"at least {needed}", deploy_ok))
 
         # Release frequency: at least the configured minimum per year
         min_releases_per_year = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_releases_per_year")
@@ -133,25 +169,34 @@ class CICDMetricsCollector:
             count = results.get(num_releases_key)
             if count is None:
                 max_score -= 1
+                checks.append(("Release frequency", "releases could not be counted", None, None))
             else:
                 num_days = int(re.findall(r"\d+", num_releases_key)[0])
                 # Same floor as deployment frequency above.
-                if count >= max(1, int((num_days / 365) * min_releases_per_year)):
-                    score += 1
+                needed = max(1, int((num_days / 365) * min_releases_per_year))
+                release_ok = count >= needed
+                score += release_ok
+                checks.append(("Release frequency", f"{count} in the last {num_days} days",
+                               f"at least {needed}", release_ok))
 
         # Average time to failure under the cap (0 means no failed runs — skip)
         max_time_to_failure_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_time_to_failure_hours")
         time_to_failure = results.get("average_time_to_failure")
-        if time_to_failure is not None and time_to_failure > 0 and (time_to_failure / 3600) < max_time_to_failure_hours:
-            score += 1
+        failure_ok = (time_to_failure is not None and time_to_failure > 0
+                      and (time_to_failure / 3600) < max_time_to_failure_hours)
+        score += failure_ok
+        checks.append(("Average time to a failed run", _duration(time_to_failure) if time_to_failure
+                       else "no failed runs measured", f"under {max_time_to_failure_hours:g} h", failure_ok))
 
         # Average cycle time under the configured cap (168h / 1 week by default --
         # see config/thresholds.yaml for why that's the default and not DORA's
         # 24h "elite" tier).
         cycle_time = results.get("average_cycle_time")
         max_cycle_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_cycle_time_hours")
-        if cycle_time is not None and cycle_time > 0 and (cycle_time / 3600) < max_cycle_hours:
-            score += 1
+        cycle_ok = cycle_time is not None and cycle_time > 0 and (cycle_time / 3600) < max_cycle_hours
+        score += cycle_ok
+        checks.append(("Average pull request cycle time", _duration(cycle_time) if cycle_time
+                       else "no merged pull requests measured", f"under {max_cycle_hours:g} h", cycle_ok))
 
         safe_max = max(max_score, 1)
         return {
@@ -159,6 +204,10 @@ class CICDMetricsCollector:
             "max_score": max_score,
             "percentage": round((score / safe_max) * 100, 2),
             "details": list(results.items()),
+            # The orchestrator builds this row from the score alone, which
+            # never said which of the six checks failed.
+            "row_evidence": {"cicd": {"label": "CI/CD Effectiveness Assessment",
+                                      "evidence": _checks_evidence(checks)}},
         }
 
     # ------------------------------------------------------------------ #

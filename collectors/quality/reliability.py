@@ -246,6 +246,7 @@ class ReliabilityCollector:
             [tool_sources[t] for t in tools if t in tool_sources],
             [readme] if badges is not None else [],
             hardening_seen, trend,
+            workflows_listed=len(tree.find(_WORKFLOW_FILES)) if isinstance(tree, RepoTree) else None,
         )
         return {
             "package_name": repo_name,
@@ -261,6 +262,7 @@ class ReliabilityCollector:
     def _add_evidence(
         sub: Dict[str, Dict], workflows_read: List[Dict], tools_found: List[Dict],
         readme_read: List[Dict], hardening_seen: Dict, trend: Dict,
+        workflows_listed: Optional[int] = 0,
     ) -> None:
         """What each 4.3.1 row found and where it looked, for the report.
 
@@ -272,6 +274,18 @@ class ReliabilityCollector:
             return not entry["passing"] and not entry.get("not_collected")
 
         workflows_searched = {"text": "CI workflows read", "paths": workflows_read}
+        # A row left unscored because not every workflow was read still
+        # says why, and what was read in full -- just not that the thing is
+        # missing, since an unread file may hold it.
+        if workflows_listed is None:
+            unscored_note = {"text": "Not scored: the repository's file list couldn't be fetched."}
+        elif workflows_listed > _MAX_ANALYSIS_WORKFLOWS:
+            unscored_note = {"text": f"Not scored: {len(workflows_read)} of the {workflows_listed} CI "
+                                     f"workflow files were read (at most {_MAX_ANALYSIS_WORKFLOWS} "
+                                     "are), and one not read may hold what this row looks for."}
+        else:
+            unscored_note = {"text": "Not scored: a CI workflow or build file couldn't be read, "
+                                     "and it may hold what this row looks for."}
 
         analysis = sub["advanced_static_analysis"]
         evidence: Dict[str, List] = {"found": tools_found}
@@ -285,6 +299,10 @@ class ReliabilityCollector:
                 workflows_searched,
             ] + ([{"text": "README read for hosted-analysis badges", "paths": readme_read}]
                  if readme_read else [])
+        elif analysis.get("not_collected") and not analysis["passing"]:
+            evidence["notes"] = [unscored_note]
+            if workflows_listed is not None:
+                evidence["searched"] = [workflows_searched]
         analysis["evidence"] = evidence
 
         cert = sub["cert_compliance"]
@@ -298,6 +316,10 @@ class ReliabilityCollector:
                 {"text": "Build and compiler-flag files read", "paths": hardening_seen["read"]},
                 workflows_searched,
             ]
+        elif cert.get("not_collected") and not cert["passing"] and not cert.get("not_applicable"):
+            evidence["notes"] = [unscored_note]
+            if workflows_listed is not None:
+                evidence["searched"] = [workflows_searched]
         cert["evidence"] = evidence
 
         # The row says which convention the count came from; this says which

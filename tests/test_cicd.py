@@ -146,3 +146,54 @@ class TestPipelineSuccessWithoutWorkflows:
         c = CICDMetricsCollector(gitlab_fake(ci_run_list=runs))
         out = asyncio.run(c.percentage_workflow_success(None, "g/p"))
         assert out["total_workflow_success_percentage"] == 75.0
+
+
+class TestChecksEvidence:
+    """Which of the six checks passed, failed or wasn't scored (#99)."""
+
+    RESULTS = {
+        "average_workflow_execution_time": 12 * 60,
+        "total_workflow_success_percentage": 55.0,
+        "num_of_deployments_last_365_days": None,
+        "num_of_releases_last_365_days": 9,
+        "average_time_to_failure": 2 * 3600,
+        "average_cycle_time": 16 * 3600,
+    }
+
+    def _evidence(self, results=None):
+        from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
+        scored = CICDMetricsCollector(None)._calculate_score(results or self.RESULTS)
+        return scored, scored["row_evidence"]["cicd"]
+
+    def test_each_check_says_what_was_measured_against_what(self):
+        scored, row = self._evidence()
+        assert row["label"] == "CI/CD Effectiveness Assessment"
+        ev = row["evidence"]
+        assert {"text": "Average workflow run time under 1 h (measured: 12 min)"} in ev["found"]
+        assert {"text": "Release frequency at least 1 (measured: 9 in the last 365 days)"} in ev["found"]
+        assert {"text": "Workflow success rate over 60% (measured: 55%)"} in ev["missing"]
+        assert {"text": "Average time to a failed run under 1 h (measured: 2.0 h)"} in ev["missing"]
+        assert ev["notes"] == [{"text": "Deployment frequency not scored: the repository records no deployments"}]
+        assert scored["score"] == len(ev["found"])
+        assert scored["max_score"] == len(ev["found"]) + len(ev["missing"])
+
+    def test_evidence_reaches_the_row(self):
+        from orchestrator import MetricsOrchestrator
+        from package_report import render_package_report
+        orch = MetricsOrchestrator(config_path="config/orchestrator.yaml")
+        scored, _ = self._evidence()
+        metrics = {"overall_score": 0, "last_updated": None, "dimensions": {
+            "impact": {"sub_results": {}}, "ecosystem": {"sub_results": {}},
+            "quality": {"sub_results": {"ci_cd": scored}}}}
+        page = render_package_report("o/r", orch._transform_for_dashboard(metrics, {}), metrics,
+                                     orch._metric_weights())
+        assert "<b>Not found:</b> Workflow success rate over 60% (measured: 55%)" in page
+        assert "Deployment frequency not scored: the repository records no deployments" in page
+
+
+class TestDuration:
+    @pytest.mark.parametrize("seconds,shown", [(25, "25 s"), (12 * 60, "12 min"),
+                                               (2 * 3600, "2.0 h"), (113 * 3600, "113 h")])
+    def test_units_match_the_thresholds(self, seconds, shown):
+        from collectors.quality.development_practices.ci_cd import _duration
+        assert _duration(seconds) == shown

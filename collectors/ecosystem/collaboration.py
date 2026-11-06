@@ -150,6 +150,13 @@ class CollaborationCollector:
             # ("total" for conda, "last-month" for PyPI) so counts are not
             # directly comparable across ecosystems.
             "package_downloads": self._downloads_summary(registries),
+            # 4.1.1 (Impact) shows the largest dependent counts from this
+            # data; these name the package each came from. Matched by
+            # section, since this is an Ecosystem collector.
+            "row_evidence": {"reverse_dependencies": {
+                "label": "Reverse-Dependency Analysis", "section": "4.1.1",
+                "evidence": self._reverse_dependency_evidence(registries),
+            }},
         }
 
     # ------------------------------------------------------------------ fetch
@@ -430,6 +437,20 @@ class CollaborationCollector:
             searched.append({"text": "conda-forge packages looked for by name",
                              "paths": [{"path": n} for n in conda["names"]]})
         return {"found": found, "missing": missing, "searched": searched}
+
+    @staticmethod
+    def _reverse_dependency_evidence(registries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The package behind each of 4.1.1's two figures: they are the
+        largest counts across packages, so can come from different ones."""
+        found = []
+        for key, what in [("dependent_packages", "dependent packages"),
+                          ("dependent_repos", "dependent repositories")]:
+            top = max(registries, key=lambda r: r[key], default=None)
+            if top and top[key]:
+                found.append({"text": f"{top[key]:,} {what}",
+                              "path": f"{top['name']} ({top['ecosystem']})",
+                              "url": top.get("registry_url")})
+        return {"found": found}
 
     @classmethod
     def _install_evidence(cls, registries: List[Dict[str, Any]], lookups: Dict) -> Dict[str, Any]:

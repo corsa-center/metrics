@@ -68,22 +68,26 @@ class OpenAlexClient(BaseAPIClient):
                         "type": data.get("type"),
                         "open_access": data.get("open_access", {}).get("is_oa", False),
                         "openalex_id": data.get("id"),
+                        "status": "found",
                     }
                 elif response.status_code == 404:
                     self.logger.debug(f"Work not found for DOI: {doi}")
-                    return {"cited_by_count": 0}
+                    return {"cited_by_count": 0, "status": "not_found"}
                 else:
                     self.logger.warning(f"OpenAlex API error: {response.status_code}")
-                    return {"cited_by_count": 0}
+                    return {"cited_by_count": 0, "status": "failed"}
 
         except httpx.TimeoutException:
             self.logger.error("OpenAlex API timeout")
-            return {"cited_by_count": 0}
+            return {"cited_by_count": 0, "status": "failed"}
         except Exception as e:
             self.logger.error(f"Error fetching OpenAlex data: {e}")
-            return {"cited_by_count": 0}
+            return {"cited_by_count": 0, "status": "failed"}
 
     async def count_citing_works(self, dois: List[str]) -> Optional[int]:
+        return (await self.citing_works(dois))["count"]
+
+    async def citing_works(self, dois: List[str]) -> Dict[str, Any]:
         """Number of distinct works citing any of the given DOIs.
 
         A project usually asks to be cited through several records (a JOSS
@@ -92,16 +96,26 @@ class OpenAlexClient(BaseAPIClient):
         double count. OpenAlex's `cites:` filter ORs work ids and counts
         each citing work once.
 
-        Returns None if no DOI resolved or a request failed, so the caller
-        can fall back rather than read a failure as zero citations.
+        Returns {"count", "work_ids", "unresolved", "failed"}: count is None
+        if no DOI resolved or a request failed, so the caller can fall back
+        rather than read a failure as zero citations; work_ids are the
+        OpenAlex ids queried (for a link to the citing works); unresolved
+        are DOIs OpenAlex has no work for; failed, whether any request
+        failed rather than came back not found.
         """
-        ids = []
+        ids, unresolved, failed = [], [], False
         for doi in dois:
             work = await self.get_work_citations(doi)
             if work.get("openalex_id"):
                 ids.append(work["openalex_id"].rsplit("/", 1)[-1])
+            elif work.get("status") == "failed":
+                failed = True
+            else:
+                unresolved.append(doi)
+        result: Dict[str, Any] = {"count": None, "work_ids": ids, "unresolved": unresolved,
+                                  "failed": failed}
         if not ids:
-            return None
+            return result
 
         await self._check_rate_limit()
         try:
@@ -112,11 +126,13 @@ class OpenAlexClient(BaseAPIClient):
                     params={"filter": f"cites:{'|'.join(ids)}", "per-page": 1},
                 )
                 if response.status_code == 200:
-                    return response.json().get("meta", {}).get("count")
+                    result["count"] = response.json().get("meta", {}).get("count")
+                    return result
                 self.logger.warning(f"OpenAlex cites: query failed: {response.status_code}")
         except Exception as e:
             self.logger.error(f"Error counting citing works: {e}")
-        return None
+        result["failed"] = True
+        return result
 
     async def search_works(self, query: str, limit: int = 10) -> list:
         """

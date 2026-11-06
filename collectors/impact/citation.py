@@ -9,6 +9,7 @@ import httpx
 import logging
 import re
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 import yaml
 
 from integrations.semantic_scholar import SemanticScholarClient
@@ -23,6 +24,84 @@ from forge.interface import Forge
 _BIBTEX_CITATION_FILES = ["CITATIONS.md", "CITATION.md", "CITATION.bib", "CITATIONS.bib", "CITATION"]
 _DOI_IN_TEXT = re.compile(r"10\.\d{4,9}/[^\s{}\"'<>()\[\],;]+")
 _MAX_DECLARED_DOIS = 10
+
+
+def _citation_evidence(declared: Dict[str, Any], trace: Dict[str, Any],
+                       name: Optional[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """Where the Formal Citations figure came from: each source's count with
+    a link to the citing works or matched paper, the DOIs looked up and
+    where each was declared, or where a DOI was looked for."""
+    found, missing, notes, searched = [], [], [], []
+    openalex = trace.get("openalex") or {}
+    if openalex.get("count") is not None and openalex.get("work_ids"):
+        ids = openalex["work_ids"]
+        found.append({
+            "text": f"{openalex['count']:,} distinct works citing "
+                    + ("this DOI" if len(ids) == 1 else f"these {len(ids)} DOIs"),
+            "path": "OpenAlex", "url": "https://openalex.org/works?filter=cites:" + "|".join(ids),
+        })
+    for doi in openalex.get("unresolved") or []:
+        missing.append({"text": f"{doi} in OpenAlex (it has no work for this DOI)"})
+
+    s2 = trace.get("semantic_scholar") or {}
+    if s2.get("status") == "found":
+        paper = f"{s2.get('title') or 'untitled'}" + (f" ({s2['year']})" if s2.get("year") else "")
+        url = (f"https://www.semanticscholar.org/paper/{s2['paper_id']}"
+               if s2.get("paper_id") else None)
+        if s2.get("via") == "title":
+            found.append({"text": f"{s2.get('citation_count', 0):,} citations of the top result "
+                                  f"for a title search on “{s2.get('query') or name}”",
+                          "path": "Semantic Scholar", "url": url, "quote": paper})
+            notes.append({"text": "A title search on the package name can match an unrelated "
+                                  "paper; a DOI in CITATION.cff makes the lookup exact."})
+        else:
+            found.append({"text": f"{s2.get('citation_count', 0):,} citations of the paper",
+                          "path": "Semantic Scholar", "url": url, "quote": paper})
+    elif s2.get("status") == "not_found":
+        missing.append({"text": "a paper for "
+                                + ("the first DOI" if declared.get("all") else f"“{name}”")
+                                + " in Semantic Scholar"})
+    if len(found) > 1:
+        notes.append({"text": "Formal Citations is the larger of these counts."})
+
+    dois = declared.get("all") or []
+    sources = declared.get("sources") or {}
+    if dois:
+        searched.append({"text": "DOIs looked up", "paths": [
+            {"path": f"{d} (from {sources.get(d, 'the catalog entry')})", "url": f"https://doi.org/{d}"}
+            for d in dois]})
+    elif declared.get("looked_in"):
+        missing.append({"text": "a DOI to look citations up by"})
+        searched.append({"text": "DOIs looked for in",
+                         "paths": [{"path": p} for p in declared["looked_in"]]})
+    return {"found": found, "missing": missing, "notes": notes, "searched": searched}
+
+
+def _mentions_evidence(mentions: Optional[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """The search behind Informal Mentions: it counts search results, at
+    most 100, so a reader should see the query to judge them."""
+    if not mentions:
+        return {}
+    return {
+        "found": [{"text": f"{mentions['count']:,} papers returned by a search for "
+                           f"{mentions['query']}",
+                   "path": "Semantic Scholar",
+                   "url": "https://www.semanticscholar.org/search?q=" + quote(mentions["query"])}],
+        "notes": [{"text": "A search result can mention the name without using the software; "
+                           "at most 100 results are counted."}],
+    }
+
+
+def _zenodo_evidence(zenodo: Optional[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """The Zenodo record DOI Resolutions came from, or that there was none."""
+    if not zenodo:
+        return {}
+    if zenodo.get("status") == "found" and zenodo.get("record_id"):
+        return {"found": [{"text": f"{zenodo.get('downloads', 0):,} downloads and "
+                                   f"{zenodo.get('views', 0):,} views",
+                           "path": f"Zenodo record {zenodo['record_id']}",
+                           "url": f"https://zenodo.org/records/{zenodo['record_id']}"}]}
+    return {"missing": [{"text": f"a Zenodo record for {zenodo['doi']}"}]}
 
 
 class CitationMetricCollector:
@@ -91,23 +170,27 @@ class CitationMetricCollector:
         declared = await self._declared_dois(package)
         package = {**package, "dois": declared["all"],
                    "doi": package.get("doi") or declared["software"]}
+        # What the formal-citation lookups found, for the report's evidence.
+        citation_trace: Dict[str, Any] = {}
 
         # Collect all metrics concurrently
         async with httpx.AsyncClient(timeout=30.0, transport=RetryingTransport()) as client:
             results = await asyncio.gather(
-                self._get_formal_citations(package),
-                self._get_informal_mentions(package),
+                self._get_formal_citations(package, citation_trace),
+                self._get_informal_mentions(package, citation_trace),
                 self._get_dependent_packages(client, package),
-                self._get_doi_resolutions(package),
+                self._get_doi_resolutions(package, citation_trace),
                 self._get_repo_stats(client, package),
                 return_exceptions=True,
             )
 
         # Unpack results (handle any exceptions)
-        formal_citations = results[0] if not isinstance(results[0], Exception) else 0
-        informal_mentions = results[1] if not isinstance(results[1], Exception) else 0
+        # None: every source failed -- not collected, rather than a
+        # confident zero.
+        formal_citations = results[0] if not isinstance(results[0], Exception) else None
+        informal_mentions = results[1] if not isinstance(results[1], Exception) else None
         dependent_packages = results[2] if not isinstance(results[2], Exception) else 0
-        doi_resolutions = results[3] if not isinstance(results[3], Exception) else 0
+        doi_resolutions = results[3] if not isinstance(results[3], Exception) else None
         repo_stats = results[4] if not isinstance(results[4], Exception) else {"stars": 0, "forks": 0}
 
         # Log any exceptions
@@ -124,17 +207,23 @@ class CitationMetricCollector:
 
         # Calculate normalized scores (0-100 scale)
         normalized_scores = {
-            "formal_citations": self._normalize_citations(formal_citations),
-            "informal_mentions": self._normalize_mentions(informal_mentions),
+            "formal_citations": (None if formal_citations is None
+                                 else self._normalize_citations(formal_citations)),
+            "informal_mentions": (None if informal_mentions is None
+                                  else self._normalize_mentions(informal_mentions)),
             "dependent_packages": self._normalize_dependents(dependent_packages),
-            "doi_resolutions": self._normalize_dois(doi_resolutions),
+            "doi_resolutions": (None if doi_resolutions is None
+                                else self._normalize_dois(doi_resolutions)),
         }
 
         # Calculate weighted total score
-        total_score = sum(
-            normalized_scores[metric] * weight
-            for metric, weight in self.sub_metric_weights.items()
-        )
+        # A sub-metric that wasn't collected is left out and the remaining
+        # weights rescaled, the convention the other dimensions follow.
+        collected = {m: w for m, w in self.sub_metric_weights.items()
+                     if normalized_scores.get(m) is not None}
+        weight_total = sum(collected.values())
+        total_score = (sum(normalized_scores[m] * w for m, w in collected.items()) / weight_total
+                       * sum(self.sub_metric_weights.values())) if weight_total else 0.0
 
         return {
             "metric_name": "citation",
@@ -144,11 +233,13 @@ class CitationMetricCollector:
                     "raw_value": formal_citations,
                     "normalized_score": normalized_scores["formal_citations"],
                     "weight": self.sub_metric_weights["formal_citations"],
+                    **({"not_collected": True} if formal_citations is None else {}),
                 },
                 "informal_mentions": {
                     "raw_value": informal_mentions,
                     "normalized_score": normalized_scores["informal_mentions"],
                     "weight": self.sub_metric_weights["informal_mentions"],
+                    **({"not_collected": True} if informal_mentions is None else {}),
                 },
                 "dependent_packages": {
                     "raw_value": dependent_packages,
@@ -159,6 +250,7 @@ class CitationMetricCollector:
                     "raw_value": doi_resolutions,
                     "normalized_score": normalized_scores["doi_resolutions"],
                     "weight": self.sub_metric_weights["doi_resolutions"],
+                    **({"not_collected": True} if doi_resolutions is None else {}),
                 },
             },
             # Unweighted evidence — stars/forks on the project's forge, shown
@@ -168,6 +260,22 @@ class CitationMetricCollector:
                 "stars": repo_stats.get("stars", 0),
                 "forks": repo_stats.get("forks", 0),
                 "platform": self.forge.display_name,
+            },
+            # The orchestrator builds 4.1.1's rows itself, so their evidence
+            # is keyed by row label here.
+            "row_evidence": {
+                "formal_citations": {
+                    "label": "Formal Citations",
+                    "evidence": _citation_evidence(declared, citation_trace, package.get("name")),
+                },
+                "informal_mentions": {
+                    "label": "Informal Mentions",
+                    "evidence": _mentions_evidence(citation_trace.get("mentions")),
+                },
+                "doi_resolutions": {
+                    "label": "DOI Resolutions",
+                    "evidence": _zenodo_evidence(citation_trace.get("zenodo")),
+                },
             },
             "metadata": {
                 "timestamp": asyncio.get_event_loop().time(),
@@ -183,9 +291,12 @@ class CitationMetricCollector:
         Returns {"software": the record's own DOI or None, "all": every
         distinct DOI -- the software DOI, preferred-citation, references}.
         """
-        result: Dict[str, Any] = {"software": None, "all": []}
+        result: Dict[str, Any] = {"software": None, "all": [], "sources": {}, "looked_in": []}
+        catalog = self._normalize_doi(package.get("doi"))
         ref = self.forge.extract_ref(package.get("repo_url") or "")
         if not ref:
+            if catalog:
+                result.update(all=[catalog], sources={catalog: "the catalog entry"})
             return result
         # Raw reads, not the REST API: no rate-limit quota spent on files
         # most repositories don't have.
@@ -196,17 +307,29 @@ class CitationMetricCollector:
             except Exception as e:
                 self.logger.debug(f"Could not parse CITATION.cff: {e}")
                 cff = None
+            # raw_text reads None for a missing file and a failed read alike;
+            # the raw host is rarely the one that fails, so "looked_in" says
+            # where the reads went, not that each file is confirmed absent.
+            looked_in = ["the catalog entry", "CITATION.cff"]
             if isinstance(cff, dict):
-                result = self._dois_from_cff(cff, package.get("doi"))
+                result = {**self._dois_from_cff(cff, package.get("doi")), "looked_in": looked_in}
+                result["sources"] = {d: "CITATION.cff" for d in result["all"]}
+                if catalog:
+                    result["sources"][catalog] = "the catalog entry"
             if result["all"]:
                 return result
 
             for name in _BIBTEX_CITATION_FILES:
+                looked_in.append(name)
                 dois = self._dois_from_text(await self.forge.raw_text(client, ref, name) or "")
                 if dois:
                     # These cite papers, not the software record itself, so
                     # none of them is taken as the software DOI.
-                    return {"software": None, "all": dois}
+                    return {"software": None, "all": dois, "sources": {d: name for d in dois},
+                            "looked_in": looked_in}
+        if catalog and not result["all"]:
+            result.update(all=[catalog], sources={catalog: "the catalog entry"})
+        result["looked_in"] = looked_in
         return result
 
     @classmethod
@@ -241,8 +364,14 @@ class CitationMetricCollector:
             cited.insert(0, catalog)
         return {"software": own[0] if own else None, "all": list(dict.fromkeys(cited))}
 
-    async def _get_formal_citations(self, package: Dict[str, Any]) -> int:
-        """Get formal academic citations from Semantic Scholar and OpenAlex"""
+    async def _get_formal_citations(
+        self, package: Dict[str, Any], trace: Optional[Dict[str, Any]] = None
+    ) -> Optional[int]:
+        """Formal academic citations: the larger of OpenAlex's distinct citing
+        works and Semantic Scholar's count, or None if every lookup failed
+        (not collected, rather than zero). `trace`, if given, records what
+        each source returned, for the report (see _citation_evidence)."""
+        trace = {} if trace is None else trace
         doi = package.get("doi")
         dois = package.get("dois") or ([doi] if doi else [])
         name = package.get("name")
@@ -251,21 +380,25 @@ class CitationMetricCollector:
             self.logger.warning("No DOI or name provided for citation lookup")
             return 0
 
-        # Query both services
-        citations = []
+        citations: List[int] = []
+        answered = False
 
         if dois:
             # OpenAlex first (often more comprehensive): distinct works
             # citing any declared DOI, or the best single DOI if the
             # combined query can't be made.
             try:
-                distinct = await self.openalex.count_citing_works(dois)
-                if distinct is not None:
-                    citations.append(distinct)
+                works = await self.openalex.citing_works(dois)
+                trace["openalex"] = works
+                if works["count"] is not None:
+                    citations.append(works["count"])
+                    answered = True
                 else:
                     for d in dois:
                         openalex_data = await self.openalex.get_work_citations(d)
-                        citations.append(openalex_data.get("cited_by_count", 0))
+                        if openalex_data.get("status") != "failed":
+                            answered = True
+                            citations.append(openalex_data.get("cited_by_count", 0))
             except Exception as e:
                 self.logger.warning(f"OpenAlex lookup failed: {e}")
 
@@ -273,15 +406,23 @@ class CitationMetricCollector:
             # Semantic Scholar: by DOI when there is one, else by title --
             # a title search on a bare package name is the weakest signal.
             ss_data = await self.semantic_scholar.get_citations(dois[0] if dois else None, name)
-            citations.append(ss_data.get("citation_count", 0))
+            trace["semantic_scholar"] = ss_data
+            if ss_data.get("status") != "failed":
+                answered = True
+                citations.append(ss_data.get("citation_count", 0))
         except Exception as e:
             self.logger.warning(f"Semantic Scholar lookup failed: {e}")
 
-        # Return the maximum count found (most authoritative source)
+        if not answered:
+            return None
+        # The maximum count found (most authoritative source)
         return max(citations) if citations else 0
 
-    async def _get_informal_mentions(self, package: Dict[str, Any]) -> int:
-        """Get informal mentions from blogs, docs, etc."""
+    async def _get_informal_mentions(
+        self, package: Dict[str, Any], trace: Optional[Dict[str, Any]] = None
+    ) -> Optional[int]:
+        """Papers a Semantic Scholar search for the software's name returns
+        (at most 100), or None if the search failed."""
         name = package.get("name")
 
         if not name:
@@ -292,10 +433,12 @@ class CitationMetricCollector:
             count = await self.semantic_scholar.get_mentions(
                 name, include_informal=True
             )
-            return count
         except Exception as e:
             self.logger.warning(f"Error fetching informal mentions: {e}")
-            return 0
+            count = None
+        if trace is not None and count is not None:
+            trace["mentions"] = {"query": f'"{name}" software', "count": count}
+        return count
 
     async def _get_dependent_packages(
         self, client: httpx.AsyncClient, package: Dict[str, Any]
@@ -329,7 +472,9 @@ class CitationMetricCollector:
             return {"stars": 0, "forks": 0}
         return {"stars": stats.get("stars", 0), "forks": stats.get("forks", 0)}
 
-    async def _get_doi_resolutions(self, package: Dict[str, Any]) -> int:
+    async def _get_doi_resolutions(
+        self, package: Dict[str, Any], trace: Optional[Dict[str, Any]] = None
+    ) -> Optional[int]:
         """Get DOI resolution statistics from Zenodo"""
         doi = package.get("doi")
 
@@ -338,11 +483,15 @@ class CitationMetricCollector:
 
         try:
             stats = await self.zenodo.get_doi_stats(doi)
-            # Combine views and downloads
-            return stats.get("downloads", 0) + stats.get("views", 0)
         except Exception as e:
             self.logger.warning(f"Error fetching DOI stats: {e}")
-            return 0
+            return None
+        if stats.get("status") == "failed":
+            return None
+        if trace is not None:
+            trace["zenodo"] = {**stats, "doi": doi}
+        # Combine views and downloads
+        return stats.get("downloads", 0) + stats.get("views", 0)
 
     # Normalization functions (0-100 scale)
 
