@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from collectors.ecosystem.base import configure_threshold_overrides
+from collectors.common import configure_threshold_overrides
 from orchestrator import MetricsOrchestrator
 from package_report import (
     build_report,

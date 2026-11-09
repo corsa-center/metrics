@@ -33,10 +33,10 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from collectors.ecosystem.base import (
+from collectors.common import (
     _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold,
 )
-from collectors.ecosystem.base import excerpt, readme_source
+from collectors.common import excerpt, readme_source
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)

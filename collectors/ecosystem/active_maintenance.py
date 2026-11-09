@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
-from collectors.ecosystem.base import PUBLIC_CHANNEL_PATTERNS, RetryingTransport, get_threshold
+from collectors.common import PUBLIC_CHANNEL_PATTERNS, RetryingTransport, get_threshold
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.development_practices.dev_tooling import (
     DevToolingCollector, _TESTING_PATHS, _TOOLING_PATHS,
 )
@@ -301,7 +301,7 @@ class TestNestedTestSuite:
 class TestToolingBeyondRoot:
     def _refine(self, collector, paths, files=None):
         import base64
-        from collectors.ecosystem.base import RepoTree
+        from collectors.common import RepoTree
         from collectors.quality.development_practices.dev_tooling import _TOOLING_PATHS
         files = files or {}
         tree = RepoTree(FakeForge(), "o/r", list(paths) + list(files), truncated=False)
@@ -333,7 +333,7 @@ class TestToolingBeyondRoot:
 
 class TestToolingConfigReadGap:
     def test_unreadable_python_config_is_not_a_confirmed_miss(self, collector):
-        from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+        from collectors.common import COLLECTION_GAP, RepoTree
         from collectors.quality.development_practices.dev_tooling import _TOOLING_PATHS
         tree = RepoTree(FakeForge(), "o/r", ["pyproject.toml"], truncated=False)
 
@@ -350,7 +350,7 @@ class TestToolingConfigReadGap:
 class TestTestRunnersBeyondConfig:
     def _refine(self, collector, paths, files):
         import base64
-        from collectors.ecosystem.base import RepoTree
+        from collectors.common import RepoTree
         from collectors.quality.development_practices.dev_tooling import _TESTING_PATHS
         tree = RepoTree(FakeForge(), "o/r", list(paths) + list(files), truncated=False)
 

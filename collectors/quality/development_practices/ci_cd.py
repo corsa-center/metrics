@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.interface import Forge
-from collectors.ecosystem.base import get_threshold
+from collectors.common import get_threshold
 
 logger = logging.getLogger(__name__)
 

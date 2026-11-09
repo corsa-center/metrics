@@ -272,7 +272,7 @@ Phases 1–5 are mechanical; phase 6 needs a product decision.
 **Removes F1 and F3 outright, and F2 wherever a candidate is genuinely
 locatable by regex.**
 
-Added `RepoTree` to [`../collectors/ecosystem/base.py`](../collectors/ecosystem/base.py):
+Added `RepoTree` to [`../collectors/common.py`](../collectors/common.py):
 one `GET /repos/{owner}/{repo}/git/trees/HEAD?recursive=1` per repository,
 indexing both files and (inferred) directories case-insensitively.
 

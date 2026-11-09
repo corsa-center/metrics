@@ -44,7 +44,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import MetricsOrchestrator  # noqa: E402
-from collectors.ecosystem.base import RepoTree, COLLECTION_GAP, RetryingTransport  # noqa: E402
+from collectors.common import RepoTree, COLLECTION_GAP, RetryingTransport  # noqa: E402
 from collectors.quality.reliability import _MAX_ANALYSIS_WORKFLOWS  # noqa: E402
 from collectors.quality.reproducibility import ReproducibilityCollector  # noqa: E402
 

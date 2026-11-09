@@ -28,7 +28,7 @@ import httpx
 
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.interface import Forge
-from collectors.ecosystem.base import _VENDORED_DIR, get_threshold
+from collectors.common import _VENDORED_DIR, get_threshold
 
 logger = logging.getLogger(__name__)
 

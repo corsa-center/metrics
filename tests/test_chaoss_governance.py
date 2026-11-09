@@ -4,7 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
 from tests.fakes import FakeForge
 from forge.github import GitHubForge

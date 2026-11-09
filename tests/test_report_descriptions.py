@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from collectors.ecosystem.base import CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN
+from collectors.common import CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN
 from collectors.ecosystem.community_health import _DEEP_DOC_PATTERNS
 from collectors.ecosystem.outreach import _GETTING_STARTED_PATTERN, _SEARCH_DESCRIPTIONS
 from collectors.ecosystem.welcomeness import _DECISION_PATTERNS, _PATTERN_DESCRIPTIONS

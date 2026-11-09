@@ -24,10 +24,10 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
+from collectors.common import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
 from forge.interface import Forge
 from collectors.ecosystem.community_health import _DEEP_DOC_PATTERNS, readme_contributing_section
-from collectors.ecosystem.base import readme_source
+from collectors.common import readme_source
 from collectors.quality.usability import readme_mentions
 
 logger = logging.getLogger(__name__)

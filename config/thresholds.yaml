@@ -19,7 +19,7 @@
 #   - a list of strings: the value must be one of these (set membership)
 #   - a mapping: several independently-named parameters for one sub-metric
 #
-# A sub-metric that can't be measured at all (see collectors/ecosystem/base.py
+# A sub-metric that can't be measured at all (see collectors/common.py
 # COLLECTION_GAP, and CASS §3.5) is excluded from scoring regardless of what's
 # configured here -- these thresholds only ever apply to data that was
 # actually collected.

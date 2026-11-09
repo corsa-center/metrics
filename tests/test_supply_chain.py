@@ -6,7 +6,7 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.supply_chain import (
     SupplyChainCollector, _parse_pinned_pypi_deps, _parse_uv_lock,
     _parse_poetry_lock, _parse_cargo_lock, _parse_go_sum, _parse_pipfile_lock,

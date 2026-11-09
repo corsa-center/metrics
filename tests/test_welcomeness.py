@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.welcomeness import (
     WelcomenessCollector, _DECISION_PATHS, _DECISION_PATTERNS,
 )

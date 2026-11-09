@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import yaml
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, excerpt, get_threshold
+from collectors.common import COLLECTION_GAP, RepoTree, RetryingTransport, excerpt, get_threshold
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)

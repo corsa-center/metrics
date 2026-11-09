@@ -21,7 +21,7 @@ import tomllib
 from typing import Any, Dict, List, Optional
 
 from collectors.quality.usability import README_SECTION_TERMS, readme_covers
-from collectors.ecosystem.base import (
+from collectors.common import (
     COLLECTION_GAP, CONTAINER_FILE_PATTERNS, ENVIRONMENT_SPEC_PATTERN, RepoTree, RetryingTransport,
 )
 from forge.interface import Forge

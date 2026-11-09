@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.accessibility import AccessibilityCollector
 from tests.fakes import FakeForge
 from forge.github import GitHubForge

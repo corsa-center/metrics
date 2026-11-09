@@ -30,7 +30,7 @@ import re
 import yaml
 
 from catalog.catalog import Catalog
-from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
+from collectors.common import configure_threshold_overrides, get_threshold
 from collectors.ecosystem.dimension import EcosystemDimensionCollector
 from collectors.impact.dimension import ImpactDimensionCollector
 from collectors.quality.dimension import QualityDimensionCollector
