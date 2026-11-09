@@ -122,3 +122,30 @@ class TestCollectAllMetrics:
         assert metrics["dimensions"]["ecosystem"] == dim
         w = o._metric_weights()
         assert metrics["overall_score"] == round(50 * w["ecosystem"] + 50 * w["quality"])
+
+
+class TestRobustness:
+    def test_a_non_dict_result_is_collected_but_not_scored(self, monkeypatch):
+        import collectors.ecosystem.engagement as engagement_mod
+        import collectors.ecosystem.licensing as licensing_mod
+
+        async def odd(self, package):
+            return None
+
+        async def lic(self, package):
+            return {"compliance_score": {"percentage": 50}}
+
+        monkeypatch.setattr(engagement_mod.EngagementCollector, "collect", odd)
+        monkeypatch.setattr(licensing_mod.LicensingCollector, "collect", lic)
+        dim = EcosystemDimensionCollector(ON)
+        monkeypatch.setattr(dim, "sub_enabled",
+                            lambda key, package=None: key in ("engagement", "licensing"))
+        result = asyncio.run(dim.collect(PACKAGE))
+        assert result["score_components"] == {"licensing": 50}
+
+    def test_config_is_read_when_collecting(self):
+        config = {"collectors": {"quality": False}}
+        dim = QualityDimensionCollector(config)
+        config["collectors"]["quality"] = True
+        config["quality_collectors"] = {"ci_cd": False}
+        assert dim.enabled and not dim.sub_enabled("ci_cd")

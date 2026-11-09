@@ -55,7 +55,7 @@ class DimensionCollector:
     """Runs a dimension's sub-collectors and averages their percentages.
 
     Subclasses set `dimension` and `SUB_COLLECTORS`, listed in the order
-    their score components are reported.
+    the sub-collectors run (also the order of score_components).
     """
 
     dimension: str = ""
@@ -63,8 +63,16 @@ class DimensionCollector:
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.enabled = bool(config.get("collectors", {}).get(self.dimension, False))
-        self.toggles: Dict[str, bool] = config.get(f"{self.dimension}_collectors", {})
+
+    @property
+    def enabled(self) -> bool:
+        """Whether config's `collectors:` block turns this dimension on."""
+        return bool(self.config.get("collectors", {}).get(self.dimension, False))
+
+    @property
+    def toggles(self) -> Dict[str, bool]:
+        """This dimension's per-sub-collector toggles from config."""
+        return self.config.get(f"{self.dimension}_collectors", {})
 
     @classmethod
     def known_keys(cls) -> set:
@@ -132,7 +140,7 @@ class DimensionCollector:
 
         A sub-collector that raises is logged and left out; one whose score
         is None (everything it measures gapped) is left out of the average
-        rather than counted as 0.
+        rather than counted as 0, and so is a result that isn't a dict.
         """
         if not self.enabled:
             return self.empty_result()
@@ -158,7 +166,7 @@ class DimensionCollector:
         components: List[Tuple[str, float]] = []
         for sub in self.SUB_COLLECTORS:
             result = sub_results.get(sub.result_key)
-            if result is None:
+            if not isinstance(result, dict):
                 continue
             pct = sub.score(result)
             if pct is not None:

@@ -66,16 +66,13 @@ class EcosystemDimensionCollector(DimensionCollector):
         # 4.2.4 Engagement -- issue/PR response times, open/close ratios
         SubCollector("engagement", "engagement", "collectors.ecosystem.engagement",
                      "EngagementCollector", "Engagement", _engagement_score),
-        # OpenSSF Scorecard
-        SubCollector("openssf_scorecard", "openssf_scorecard", "collectors.ecosystem.openssf_scorecard",
-                     "OpenSSFScorecardCollector", "OpenSSF Scorecard", _scorecard_score),
+        # 4.2.2 FAIR compliance and license exceptions
+        SubCollector("fair_licensing", "fair_licensing", "collectors.ecosystem.fair_licensing",
+                     "FairLicensingCollector", "FAIR licensing",
+                     percentage_at("overall_score", "percentage")),
         # 4.2.5 Outreach -- newcomer growth, retention, onboarding infrastructure
         SubCollector("outreach", "outreach", "collectors.ecosystem.outreach",
                      "OutreachCollector", "Outreach",
-                     percentage_at("overall_score", "percentage")),
-        # 4.2.8 + 4.2.9 Funding and institutional affiliation
-        SubCollector("funding", "funding", "collectors.ecosystem.funding",
-                     "FundingCollector", "Funding",
                      percentage_at("overall_score", "percentage")),
         # 4.2.6 Welcomeness -- decision-making visibility
         SubCollector("welcomeness", "welcomeness", "collectors.ecosystem.welcomeness",
@@ -85,8 +82,11 @@ class EcosystemDimensionCollector(DimensionCollector):
         SubCollector("collaboration", "collaboration", "collectors.ecosystem.collaboration",
                      "CollaborationCollector", "Collaboration",
                      percentage_at("overall_score", "percentage")),
-        # 4.2.2 FAIR compliance and license exceptions
-        SubCollector("fair_licensing", "fair_licensing", "collectors.ecosystem.fair_licensing",
-                     "FairLicensingCollector", "FAIR licensing",
+        # 4.2.8 + 4.2.9 Funding and institutional affiliation
+        SubCollector("funding", "funding", "collectors.ecosystem.funding",
+                     "FundingCollector", "Funding",
                      percentage_at("overall_score", "percentage")),
+        # OpenSSF Scorecard
+        SubCollector("openssf_scorecard", "openssf_scorecard", "collectors.ecosystem.openssf_scorecard",
+                     "OpenSSFScorecardCollector", "OpenSSF Scorecard", _scorecard_score),
     )

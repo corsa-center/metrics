@@ -57,30 +57,30 @@ class QualityDimensionCollector(DimensionCollector):
         # 4.3.1 Test Coverage Excellence -- via Codecov public API
         SubCollector("test_coverage", "test_coverage", "collectors.quality.test_coverage",
                      "TestCoverageCollector", "Test coverage", _coverage_score),
-        # 4.3.1 Enhanced Security Analysis -- CodeQL workflow presence
-        SubCollector("static_analysis", "static_analysis", "collectors.quality.static_analysis",
-                     "StaticAnalysisCollector", "Static analysis", _static_analysis_score),
-        # 4.3.2 Testing frameworks, code review coverage, tooling integration
-        SubCollector("dev_tooling", "dev_tooling", "collectors.quality.development_practices.dev_tooling",
-                     "DevToolingCollector", "Dev tooling",
+        # 4.3.4 Usability -- documentation completeness
+        SubCollector("usability", "usability", "collectors.quality.usability",
+                     "UsabilityCollector", "Usability",
+                     percentage_at("overall_score", "percentage")),
+        # 4.3.1 Reliability -- static analysis tools, hardening, defect trend
+        SubCollector("reliability", "reliability", "collectors.quality.reliability",
+                     "ReliabilityCollector", "Reliability",
+                     percentage_at("overall_score", "percentage")),
+        # 4.3.6 Maintainability -- tree composition, docs, refactoring activity
+        SubCollector("maintainability", "maintainability", "collectors.quality.maintainability",
+                     "MaintainabilityCollector", "Maintainability",
                      percentage_at("overall_score", "percentage")),
         # 4.3.5 Deployment Environment Testing -- CI runner OS families
         SubCollector("deployment_environments", "deployment_environments",
                      "collectors.quality.deployment_environments",
                      "DeploymentEnvironmentCollector", "Deployment environment",
                      percentage_at("overall_score", "percentage")),
-        # 4.3.4 Usability -- documentation completeness
-        SubCollector("usability", "usability", "collectors.quality.usability",
-                     "UsabilityCollector", "Usability",
+        # 4.3.2 Testing frameworks, code review coverage, tooling integration
+        SubCollector("dev_tooling", "dev_tooling", "collectors.quality.development_practices.dev_tooling",
+                     "DevToolingCollector", "Dev tooling",
                      percentage_at("overall_score", "percentage")),
-        # 4.3.6 Maintainability -- tree composition, docs, refactoring activity
-        SubCollector("maintainability", "maintainability", "collectors.quality.maintainability",
-                     "MaintainabilityCollector", "Maintainability",
-                     percentage_at("overall_score", "percentage")),
-        # 4.3.1 Reliability -- static analysis tools, hardening, defect trend
-        SubCollector("reliability", "reliability", "collectors.quality.reliability",
-                     "ReliabilityCollector", "Reliability",
-                     percentage_at("overall_score", "percentage")),
+        # 4.3.1 Enhanced Security Analysis -- CodeQL workflow presence
+        SubCollector("static_analysis", "static_analysis", "collectors.quality.static_analysis",
+                     "StaticAnalysisCollector", "Static analysis", _static_analysis_score),
         # 4.3.8 Software Supply Chain Integrity -- SBOM and build provenance
         SubCollector("supply_chain", "supply_chain", "collectors.quality.supply_chain",
                      "SupplyChainCollector", "Supply chain",
