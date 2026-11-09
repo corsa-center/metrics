@@ -287,17 +287,32 @@ the operation of the orchestrator.
 
 ### Enable/Disable Collectors
 
+`collectors:` turns whole dimensions on or off, and `ecosystem_collectors:` and
+`quality_collectors:` turn off individual sub-collectors (an omitted key is on):
+
 ```yaml
 collectors:
-  citation: true          # Academic impact (4.1.1)
-  community: true         # CoC, governance, maintenance, engagement (4.2.x)
-  licensing: true         # License analysis (4.2.2)
-  openssf_badge: true     # OpenSSF best practices badge
-  openssf_scorecard: true # OpenSSF scorecard
-  ci_cd: true             # CI/CD development practices (4.3.2)
-  reproducibility: true   # Reproducibility (4.3.3)
-  accessibility: true     # Accessible build systems (4.3.5)
+  impact: true
+  ecosystem: true
+  quality: true
+
+ecosystem_collectors:
+  licensing: true
+  funding: false          # skipped, and left out of the Ecosystem average
+  # ...
+
+quality_collectors:
+  ci_cd: true
+  # ...
 ```
+
+Each dimension's collector is in `collectors/<dimension>/dimension.py`. It
+runs the dimension's sub-collectors and averages their percentages into the
+dimension score. To add a sub-collector, add a `SubCollector` entry to that
+file's `SUB_COLLECTORS`, which gives its toggle key, where its result is
+stored, its class, and how its result becomes a percentage. Then add the
+toggle to `config/orchestrator.yaml`; `tests/test_collector_toggles.py` fails
+until the two match.
 
 ### Adjust Metric Weights
 
