@@ -12,34 +12,51 @@ Sub-categories (4.1.1 - 4.1.2):
 """
 
 import logging
-from typing import Dict, Any
 from datetime import datetime, timezone
+from typing import Any, Dict
+
+from collectors.dimension import DimensionCollector
+
+logger = logging.getLogger(__name__)
 
 
-class ImpactDimensionCollector:
-    """Collector for Impact dimension metrics (CASS Report Section 4.1)"""
+class ImpactDimensionCollector(DimensionCollector):
+    """Collector for Impact dimension metrics (CASS Report Section 4.1).
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize Impact dimension collector"""
-        self.config = config
-        self.logger = logging.getLogger(self.__class__.__name__)
+    Impact has a single sub-collector (citations) and no per-collector
+    toggles; the dimension score is the citation score.
+    """
+
+    dimension = "impact"
 
     async def collect(self, package: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Collect Impact dimension metrics for a package
+        if not self.enabled:
+            return self.empty_result()
 
-        Args:
-            package: Dictionary with package metadata
+        logger.info(f"Collecting Impact dimension for {package['name']}")
 
-        Returns:
-            Dictionary with Impact dimension metrics (placeholder)
-        """
-        self.logger.info(f"Collecting Impact dimension metrics for {package.get('name')} (placeholder)")
+        forge = self.forge_for(package)
+        if forge is not None:
+            try:
+                from collectors.impact.citation import CitationMetricCollector
 
+                result = await CitationMetricCollector(self.config, forge).collect(package)
+                return {
+                    "dimension": "impact",
+                    "score": result.get("score", 0) if result else 0,
+                    "max_score": 100.0,
+                    "sub_results": result,
+                }
+            except Exception as e:
+                logger.error(f"Citation collection failed for {package['name']}: {e}")
+
+        return self.placeholder(package)
+
+    def placeholder(self, package: Dict[str, Any]) -> Dict[str, Any]:
+        """The result when citations couldn't be collected: a zero score
+        the report marks as a placeholder."""
         return {
-            "dimension": "impact",
-            "score": 0.0,
-            "max_score": 100.0,
+            **self.empty_result(),
             "metadata": {
                 "status": "placeholder",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -48,6 +65,6 @@ class ImpactDimensionCollector:
                 "sub_categories": [
                     "Software Citation and Adoption",
                     "Field Research Impact",
-                ]
-            }
+                ],
+            },
         }
