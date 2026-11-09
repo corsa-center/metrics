@@ -7,7 +7,7 @@ named by the report, whether the framework fills them today, and where the data 
 The report defines three dimensions — **4.1 Impact**, **4.2 Sustainability**,
 **4.3 Quality** — and 19 sections beneath them. Sub-metric names below are the
 report's own; they are also the keys used by the `../package_config` override
-files and by `SECTION_SUBMETRICS` in [`orchestrator.py`](orchestrator.py).
+files and by `SECTION_SUBMETRICS` in [`formatters/dashboard/common.py`](../formatters/dashboard/common.py).
 
 > [!NOTE]
 > Throughout the metrics collection framework and sustainability dashboard, we refer to 'Ecosystem' in place of the CASS 'Sustainability' dimension.
@@ -279,7 +279,7 @@ only 9 packages); both are real evidence of ecosystem integration.
 | Institutional Policy Analysis | 🔲 | — | not visible from the repository |
 
 ### 4.2.10 Project Longevity and Community Health
-**Collector:** none of its own — derived in `_transform_for_dashboard`
+**Collector:** none of its own — derived in the dashboard formatter (`formatters/dashboard/ecosystem.py`)
 ([`../orchestrator.py`](../orchestrator.py)) from data `active_maintenance.py`
 already fetched for 4.2.3. Costs **zero additional API calls**.
 

@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from tests.fakes import FakeForge
 from unittest.mock import AsyncMock, MagicMock
@@ -185,7 +186,7 @@ class TestChecksEvidence:
         metrics = {"overall_score": 0, "last_updated": None, "dimensions": {
             "impact": {"sub_results": {}}, "ecosystem": {"sub_results": {}},
             "quality": {"sub_results": {"ci_cd": scored}}}}
-        page = render_package_report("o/r", orch._transform_for_dashboard(metrics, {}), metrics,
+        page = render_package_report("o/r", DashboardFormatter().format(metrics, {}), metrics,
                                      orch._metric_weights())
         assert "<b>Not found:</b> Workflow success rate over 60% (measured: 55%)" in page
         assert "Deployment frequency not scored: the repository records no deployments" in page

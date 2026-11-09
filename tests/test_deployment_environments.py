@@ -1,6 +1,7 @@
 """Unit tests for DeploymentEnvironmentCollector (CASS Section 4.3.5)."""
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from collectors.quality.deployment_environments import (
     DeploymentEnvironmentCollector, _RUNNER_FAMILIES,
@@ -391,7 +392,7 @@ class TestEvidenceInReport:
                                         "accessibility": {"categories": {}}}},
         }}
         orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         env = page.split("<b>Deployment Environment Testing:</b>")[1].split("</li>")[0]

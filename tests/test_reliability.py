@@ -2,6 +2,7 @@
 
 import asyncio
 import pytest
+from formatters.dashboard import DashboardFormatter
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from collectors.common import COLLECTION_GAP, RepoTree
@@ -604,7 +605,7 @@ class TestEvidenceInReport:
                                         "static_analysis": {"has_codeql": False}}},
         }}
         orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         cert = page.split("<b>CERT Guidelines Compliance:</b>")[1].split("</li>")[0]

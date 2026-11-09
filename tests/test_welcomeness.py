@@ -2,6 +2,7 @@
 
 import asyncio
 import pytest
+from formatters.dashboard import DashboardFormatter
 from unittest.mock import AsyncMock, patch
 
 from collectors.common import COLLECTION_GAP, RepoTree
@@ -246,7 +247,7 @@ class TestEvidence:
             "quality": {"sub_results": {}},
         }}
         orch = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orch._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orch._metric_weights())
 
         row = page[page.index("<b>Decision-Making Visibility:</b>"):]

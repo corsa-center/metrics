@@ -7,7 +7,7 @@ the full documentation lives.
 
 Installation Success Tracking for this section is produced by
 `collectors/ecosystem/collaboration.py`, which already queries the package
-registries; the orchestrator renders it here rather than repeating that lookup.
+registries; the dashboard formatter renders it here rather than repeating that lookup.
 
 Not collected: User Experience Assessment (the report specifies the UEQ
 instrument, which needs a survey), Accessibility Feature Detection and Usage

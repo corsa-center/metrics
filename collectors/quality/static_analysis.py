@@ -45,7 +45,7 @@ _MAX_WORKFLOWS_TO_SCAN = 25
 
 
 def _row_evidence(evidence: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """The orchestrator builds 4.3.1's Enhanced Security Analysis row itself,
+    """The dashboard formatter builds 4.3.1's Enhanced Security Analysis row itself,
     so the evidence the per-package report shows under it is keyed by row
     label here."""
     return {"enhanced_security_analysis": {"label": "Enhanced Security Analysis",

@@ -73,7 +73,7 @@ overrides:
   whether that row was actually collected or is part of a "not yet collected"
   stub. Keys are section numbers; values map the exact sub-metric label (as
   it appears in the rendered output, or the canonical label from
-  `SECTION_SUBMETRICS` in `orchestrator.py` for a fully-stubbed section) to
+  `SECTION_SUBMETRICS` in `formatters/dashboard/common.py` for a fully-stubbed section) to
   replacement text. 
 - These don't imply each other. Disabling a collector via `collectors` does not
   by itself produce a visible reason -- the section (or the rows only that

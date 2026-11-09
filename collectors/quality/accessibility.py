@@ -149,7 +149,7 @@ class AccessibilityCollector:
     def _row_evidence(result: Dict[str, Any], e4s_names: Optional[List[str]],
                       pyproject_read: Optional[str]) -> Dict[str, Dict]:
         """What the two 4.3.5 rows built from this collector found and where
-        they looked, for the report. The orchestrator builds these rows
+        they looked, for the report. The dashboard formatter builds these rows
         itself, so they are keyed by row label here.
 
         The rows name what was found (CMake, Docker) but not the file, so

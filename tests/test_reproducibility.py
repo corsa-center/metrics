@@ -2,6 +2,7 @@
 
 import asyncio
 import pytest
+from formatters.dashboard import DashboardFormatter
 from unittest.mock import AsyncMock, MagicMock
 from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.reproducibility import (
@@ -634,7 +635,7 @@ class TestReportRendering:
             "ecosystem": {"score": 0.0, "sub_results": {}},
             "quality": {"score": 50.0, "sub_results": {"reproducibility": reproducibility}},
         }}
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
         sec = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.3.3")
         rows = {r["label"]: r["evidence"] for r in sec["rows"]}

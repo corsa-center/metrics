@@ -221,7 +221,7 @@ Rows and marks are rendered from the same per-section data as
 lines come from an `evidence` entry a collector puts beside a row's `label`
 (`{"found": [{text, path, url, quote}], "missing": [{text}],
 "notes": [{text}], "searched": [{text, paths}]}`; an item with `unless_met` is
-left off a ✓ row), on a sub-score or, for rows the orchestrator
+left off a ✓ row), on a sub-score or, for rows the dashboard formatter
 builds itself, in a `row_evidence` block. An entry whose row renders in
 another dimension's section names it with a `section` key beside the label
 (Installation Success Tracking, from collaboration, in 4.3.4). The dashboard
@@ -313,6 +313,15 @@ file's `SUB_COLLECTORS`, which gives its toggle key, where its result is
 stored, its class, and how its result becomes a percentage. Then add the
 toggle to `config/orchestrator.yaml`; `tests/test_collector_toggles.py` fails
 until the two match.
+
+The dashboard's sections are built from those results by the dashboard
+formatter in `formatters/dashboard/`, which has one module per dimension and
+one function per section (`section_4_2_1` and so on). A section's rows come
+from its function. Its title, and whether an uncollected section falls back
+to "Not yet collected" rows, come from `SECTIONS` in
+`formatters/dashboard/__init__.py`. The orchestrator calls the formatter
+through the `Formatter` interface (`formatters/base.py`), so another
+presentation of the same results can be added as another `Formatter`.
 
 ### Adjust Metric Weights
 

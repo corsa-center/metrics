@@ -2,6 +2,7 @@
 
 import asyncio
 import pytest
+from formatters.dashboard import DashboardFormatter
 from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.accessibility import AccessibilityCollector
 from tests.fakes import FakeForge
@@ -282,7 +283,7 @@ class TestRowEvidenceInReport:
             "quality": {"sub_results": {"accessibility": accessibility}},
         }}
         orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         build = page.split("<b>Portable Build System Detection:</b>")[1].split("</li>")[0]
