@@ -642,6 +642,18 @@ class MetricsOrchestrator:
             repo = repo[:-4]
         return repo
 
+    def _raw_metrics(self, metrics: Dict) -> Dict:
+        """metrics.json's `metrics`: the overall score and each dimension's
+        measurements (see DimensionCollector.raw_metrics)."""
+        dims = metrics.get("dimensions", {})
+        return {
+            "overall_score": metrics.get("overall_score"),
+            **{
+                name: dim.raw_metrics(dims.get(name) or dim.empty_result())
+                for name, dim in self.dimensions.items()
+            },
+        }
+
     def write_metrics(self, output_path: Path, catalog: Dict, all_metrics: Dict):
         """Write per-package metrics.json files for the dashboard.
 
@@ -662,17 +674,21 @@ class MetricsOrchestrator:
             try:
                 overrides = catalog[package_name].get("overrides", {})
                 section_data = self.formatter.format(metrics, overrides)
-                # The dashboard (js/catalog.js) reads impact/ecosystem/quality
-                # from the top level, so keep those flat and add the catalog
-                # entry beside them.
+                formatted = {dim: section_data[dim] for dim in self.dimensions}
                 dashboard_data = {
                     "package": package_name,
                     "metadata": catalog[package_name],
                     **section_data,
+                    # The dashboard (js/catalog.js) still reads the sections
+                    # from the top level above; `formatted` is where they
+                    # will live once it reads them from there instead.
+                    "formatted": formatted,
                     # The dashboard's "last updated" (js/catalog.js).
                     "generated_at": metrics.get("last_updated"),
                     # `dependencies` and `spack`, when collected.
                     **metrics.get("dependency_info", {}),
+                    # The measurements the scores and sections came from.
+                    "metrics": self._raw_metrics(metrics),
                 }
             except Exception as e:
                 logger.error(f"Could not render dashboard output for {package_name}: {e!r}", exc_info=True)

@@ -383,6 +383,32 @@ class TestWriteMetrics:
         assert "org/pkg2" in all_packages
 
 
+    def test_metrics_json_layout(self, orchestrator, tmp_path):
+        # #105: the formatted sections under `formatted` (and, until the
+        # dashboard reads them from there, at the top level too), and the
+        # measurements under `metrics`.
+        metrics = _base_metrics(quality_sub={"ci_cd": {"percentage": 50.0, "row_evidence": {}}})
+        metrics["overall_score"] = 42
+        metrics["dimensions"]["quality"].update(score=50.0, score_components={"ci_cd": 50.0})
+        orchestrator.write_metrics(tmp_path, {"org/pkg": {}}, {"org/pkg": metrics})
+        data = json.loads((tmp_path / "pkg-metrics" / "metrics.json").read_text())
+        assert set(data["formatted"]) == {"impact", "ecosystem", "quality"}
+        for dim in data["formatted"]:
+            assert data["formatted"][dim] == data[dim]
+        assert data["metrics"]["overall_score"] == 42
+        assert data["metrics"]["quality"] == {
+            "score": 50.0, "score_components": {"ci_cd": 50.0}, "ci_cd": {"percentage": 50.0}}
+
+    def test_metrics_json_for_a_skipped_package(self, orchestrator, tmp_path):
+        # A package whose collection was skipped has each dimension's default.
+        metrics = {"overall_score": 0, "dimensions": {
+            name: dim.empty_result() for name, dim in orchestrator.dimensions.items()}}
+        orchestrator.write_metrics(tmp_path, {"org/pkg": {}}, {"org/pkg": metrics})
+        data = json.loads((tmp_path / "pkg-metrics" / "metrics.json").read_text())
+        assert data["metrics"] == {"overall_score": 0, "impact": {"score": 0.0},
+                                   "ecosystem": {"score": 0.0}, "quality": {"score": 0.0}}
+
+
 class TestPlatformLabels:
     """Stars, forks and code scanning are labelled by the package's forge,
     so a GitLab project isn't reported as having "GitHub Stars"."""

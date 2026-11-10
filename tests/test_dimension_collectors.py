@@ -149,3 +149,50 @@ class TestRobustness:
         config["collectors"]["quality"] = True
         config["quality_collectors"] = {"ci_cd": False}
         assert dim.enabled and not dim.sub_enabled("ci_cd")
+
+
+class TestRawMetrics:
+    """What each dimension writes to metrics.json's `metrics` (#105)."""
+
+    RESULT = {
+        "dimension": "quality", "score": 60.0, "max_score": 100.0,
+        "score_components": {"ci_cd": 60.0},
+        "excluded_by_config": [],
+        "sub_results": {"ci_cd": {
+            "package_name": "p", "repository": "o/r", "timestamp": "t",
+            "percentage": 60.0,
+            "details": {"has_ci": True, "checks": [{"name": "build", "evidence": {"found": []}}]},
+            "row_evidence": {"ci": {"evidence": {"found": []}}},
+        }},
+    }
+
+    def test_scores_and_measurements_kept(self):
+        metrics = QualityDimensionCollector(ON).raw_metrics(self.RESULT)
+        assert metrics == {
+            "score": 60.0,
+            "score_components": {"ci_cd": 60.0},
+            "ci_cd": {"percentage": 60.0,
+                      "details": {"has_ci": True, "checks": [{"name": "build"}]}},
+        }
+
+    def test_the_collected_result_is_not_modified(self):
+        QualityDimensionCollector(ON).raw_metrics(self.RESULT)
+        assert "row_evidence" in self.RESULT["sub_results"]["ci_cd"]
+        assert "evidence" in self.RESULT["sub_results"]["ci_cd"]["details"]["checks"][0]
+
+    def test_a_dimension_that_did_not_run_has_only_its_score(self):
+        collector = EcosystemDimensionCollector({})
+        assert collector.raw_metrics(collector.empty_result()) == {"score": 0.0}
+
+    def test_impact_nests_its_result_under_citation(self):
+        result = {"dimension": "impact", "score": 75.0, "max_score": 100.0, "sub_results": {
+            "score": 75.0, "sub_metrics": {"formal_citations": {"raw_value": 3}},
+            "row_evidence": {"formal_citations": {"evidence": {}}}}}
+        assert ImpactDimensionCollector(ON).raw_metrics(result) == {
+            "score": 75.0,
+            "citation": {"score": 75.0, "sub_metrics": {"formal_citations": {"raw_value": 3}}},
+        }
+
+    def test_impact_placeholder_has_only_its_score(self):
+        collector = ImpactDimensionCollector(ON)
+        assert collector.raw_metrics(collector.placeholder(PACKAGE)) == {"score": 0.0}

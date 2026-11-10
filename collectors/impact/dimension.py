@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from collectors.dimension import DimensionCollector
+from collectors.dimension import DimensionCollector, sub_result_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,14 @@ class ImpactDimensionCollector(DimensionCollector):
                 logger.error(f"Citation collection failed for {package['name']}: {e}")
 
         return self.placeholder(package)
+
+    def raw_metrics(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Impact's sub_results is the citation result itself, so it goes
+        under `citation`, matching the other dimensions' layout."""
+        metrics: Dict[str, Any] = {"score": result.get("score")}
+        if result.get("sub_results"):
+            metrics["citation"] = sub_result_metrics(result["sub_results"])
+        return metrics
 
     def placeholder(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """The result when citations couldn't be collected: a zero score

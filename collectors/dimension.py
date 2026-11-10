@@ -17,6 +17,30 @@ from forge.interface import Forge
 
 logger = logging.getLogger(__name__)
 
+# Keys every sub-collector result repeats; metrics.json has them once,
+# as `package` and `generated_at`.
+_BOOKKEEPING_KEYS = frozenset({"package_name", "repository", "timestamp"})
+# What a row was judged on, for report.html (see package_report.py);
+# not a measurement.
+_EVIDENCE_KEYS = frozenset({"evidence", "row_evidence"})
+
+
+def without_evidence(value: Any) -> Any:
+    """`value` with every evidence entry removed, at any depth."""
+    if isinstance(value, dict):
+        return {k: without_evidence(v) for k, v in value.items() if k not in _EVIDENCE_KEYS}
+    if isinstance(value, list):
+        return [without_evidence(v) for v in value]
+    return value
+
+
+def sub_result_metrics(result: Any) -> Any:
+    """A sub-collector's result as written to metrics.json: without
+    evidence or the per-result bookkeeping keys."""
+    if not isinstance(result, dict):
+        return result
+    return without_evidence({k: v for k, v in result.items() if k not in _BOOKKEEPING_KEYS})
+
 
 def percentage_at(*keys: str) -> Callable[[Dict], Optional[float]]:
     """A score function reading the number at `keys` in a sub-collector's
@@ -81,6 +105,18 @@ class DimensionCollector:
 
     def empty_result(self) -> Dict[str, Any]:
         return {"dimension": self.dimension, "score": 0.0, "max_score": 100.0}
+
+    def raw_metrics(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """This dimension's entry in metrics.json's `metrics`: its score,
+        each sub-collector's percentage (`score_components`), and each
+        sub-collector's measurements keyed as in `sub_results`. A dimension
+        that was off or skipped has only its score."""
+        metrics: Dict[str, Any] = {"score": result.get("score")}
+        if "score_components" in result:
+            metrics["score_components"] = result["score_components"]
+        for key, sub_result in (result.get("sub_results") or {}).items():
+            metrics[key] = sub_result_metrics(sub_result)
+        return metrics
 
     def forge_for(self, package: Dict) -> Optional[Forge]:
         """The Forge for a package, chosen by its repo_type (see Forge.for_repo)."""
