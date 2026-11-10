@@ -167,6 +167,10 @@ def repo_entry(package: Dict) -> Optional[Dict]:
     }
     if metadata.get("cdash"):
         entry["cdash"] = metadata["cdash"]
+    if "spack" in package:
+        # The Spack package built from this repository, which the dashboard
+        # links to; often not the repository's name (SCOREC/core -> pumi).
+        entry["spackPackage"] = (package["spack"] or {}).get("name")
     return entry
 
 

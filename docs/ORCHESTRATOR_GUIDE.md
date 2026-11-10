@@ -267,10 +267,19 @@ the repository: description, homepage, language, license, dates, `topics`,
   has none), with `repositories`: the primary language and owner of each
   repository a dependency points at
 - `spack` -- the package's Spack dependencies and dependents (`{name,
-  dependencies, dependents}`; `null` when Spack has no package named after
-  the repository). Collected only when `spack` is on `PATH`: one `spack
-  python tools/spack_dependencies.py` run per batch covers every package in
-  it.
+  dependencies, dependents}`; `null` when Spack has no package for the
+  repository). The Spack package is the recipe whose homepage, url or git
+  (or any version's) points at the repository -- often not the repository's
+  name (SCOREC/core -> `pumi`) -- else a recipe named after it. Collected
+  only when `spack` is on `PATH`: one `spack python
+  tools/spack_dependencies.py` run per batch covers every package in it,
+  searching Spack's builtin recipes and then the package repositories
+  catalog entries name as `spack_repo` (a git URL, or a list) for recipes
+  builtin lacks -- SCOREC's pumi-pic and pcms. Those repositories are
+  searched for every package, since their recipes depend on other catalog
+  packages (pcms on hdf5 and adios2) and so are among their dependents. The
+  run log lists each repository's Spack package and, under "Not in Spack",
+  those without one -- where to look for a recipe that needs `spack_repo`.
 
 A key is left out when its lookup failed, rather than written empty.
 
@@ -287,7 +296,9 @@ python tools/dashboard_data.py --data-dir data --output data/20261026
 ```
 
 Unpublished packages are kept, with `"published": false` on their
-`intReposInfo.json` entry.
+`intReposInfo.json` entry. Each entry's `spackPackage` names the Spack
+package built from the repository (`null` when there is none; left out when
+Spack data was never collected for it).
 
 ## Automation via GitHub Actions
 
