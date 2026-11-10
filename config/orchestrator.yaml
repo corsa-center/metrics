@@ -17,7 +17,7 @@ collectors:
 # Fine-grained toggles for individual sub-collectors.
 # Omitted keys default to true, so removing a block runs everything.
 # Turning one off skips its API calls and drops it from the dimension average
-# (it does not score zero); the sections it feeds then render "Not yet collected".
+# (it does not score zero); the sections it feeds then render "Unavailable this run".
 
 ecosystem_collectors:
   community_health: true    # 4.2.1 governance docs (CoC, GOVERNANCE, CONTRIBUTING)

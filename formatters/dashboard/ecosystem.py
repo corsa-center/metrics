@@ -35,7 +35,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
                     doc_found += 1
                 elif info.get("not_collected"):
                     # The lookup failed; the score already leaves it out.
-                    doc_sub_lines.append(f'<p class="sub-detail">{label}: Not yet collected</p>')
+                    doc_sub_lines.append(f'<p class="sub-detail">{label}: Unavailable this run</p>')
                 else:
                     doc_sub_lines.append(f'<p class="sub-detail">{label}: Not found</p>')
             gov_score = governance.get("overall_score", {})
@@ -48,7 +48,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
             )
             gov_lines.extend(doc_sub_lines)
         else:
-            gov_lines.append('<p><strong>Enhanced Document Detection:</strong> Not yet collected</p>')
+            gov_lines.append('<p><strong>Enhanced Document Detection:</strong> Unavailable this run</p>')
 
         # 2. Governance Keyword Analysis — not yet collected
         # 2. Governance Keyword Analysis — do the documents describe a
@@ -94,7 +94,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
                     f'{" — " + reason if reason else ""}</p>'
                 )
         else:
-            gov_lines.append('<p><strong>OpenSSF Badge Integration:</strong> Not yet collected</p>')
+            gov_lines.append('<p><strong>OpenSSF Badge Integration:</strong> Unavailable this run</p>')
 
         # 4. CHAOSS Governance Metrics — weighted CHAOSS health score.
         # CHAOSSGovernanceCollector was already being run for the dimension
@@ -105,7 +105,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
             status = chaoss_score.get("status", "unknown")
             if score_val is None:
                 # Every category unmeasured or gapped: no score to judge.
-                gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+                gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Unavailable this run</p>')
             else:
                 chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
                 gov_pts += 1 if chaoss_ok else 0
@@ -128,10 +128,10 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
                 )
             for name in gapped_cats:
                 gov_lines.append(
-                    f'<p class="sub-detail">{name.replace("_", " ").title()}: Not collected</p>'
+                    f'<p class="sub-detail">{name.replace("_", " ").title()}: Unavailable this run</p>'
                 )
         else:
-            gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>')
+            gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Unavailable this run</p>')
 
         # 5. Governance Effectiveness Assessment — is governance live?
         #    Owners assigned, and the documents still being maintained.
@@ -205,7 +205,7 @@ def section_4_2_2(ctx: Context) -> Optional[str]:
             if flsub.get("fair4rs_assessment", {}).get("passing"):
                 lic_pts += 1
         else:
-            lic_lines.append('<p><strong>Automated FAIR4RS Assessment:</strong> Not yet collected</p>')
+            lic_lines.append('<p><strong>Automated FAIR4RS Assessment:</strong> Unavailable this run</p>')
 
         # 3. OSI License Validation — passes if osi_approved is True
         osi = analysis.get("osi_approved")
@@ -230,8 +230,8 @@ def section_4_2_2(ctx: Context) -> Optional[str]:
                 if flsub.get(key, {}).get("passing"):
                     lic_pts += 1
         else:
-            lic_lines.append('<p><strong>License Exception Handling:</strong> Not yet collected</p>')
-            lic_lines.append('<p><strong>FAIR Metadata Assessment:</strong> Not yet collected</p>')
+            lic_lines.append('<p><strong>License Exception Handling:</strong> Unavailable this run</p>')
+            lic_lines.append('<p><strong>FAIR Metadata Assessment:</strong> Unavailable this run</p>')
 
         lic_lines.append(f'<p><strong>Score:</strong> {lic_pts}/5</p>')
         section_422_data = "\n".join(lic_lines)
@@ -354,7 +354,7 @@ def section_4_2_4(ctx: Context) -> Optional[str]:
             s = sub.get(key, {})
             label = s.get("label", key)
             if s.get("not_collected"):
-                return f'<p><strong>{label}:</strong> Not yet collected</p>'
+                return f'<p><strong>{label}:</strong> Unavailable this run</p>'
             val = s.get("value", "N/A")
             if s.get("insufficient_sample"):
                 # Reported but unscored; carries no mark so the row
@@ -634,10 +634,10 @@ def section_4_2_9(ctx: Context) -> Optional[str]:
         1 if inst_info.get("passing") else 0
     )
     return "\n".join([
-        '<p><strong>RSE Position Detection:</strong> Not yet collected</p>',
+        '<p><strong>RSE Position Detection:</strong> Not yet implemented</p>',
         inst_row,
-        '<p><strong>Career Development Indicators:</strong> Not yet collected</p>',
-        '<p><strong>NIH R50 Award Integration:</strong> Not yet collected</p>',
-        '<p><strong>Institutional Policy Analysis:</strong> Not yet collected</p>',
+        '<p><strong>Career Development Indicators:</strong> Not yet implemented</p>',
+        '<p><strong>NIH R50 Award Integration:</strong> Not yet implemented</p>',
+        '<p><strong>Institutional Policy Analysis:</strong> Not yet implemented</p>',
         f'<p><strong>Score:</strong> {inst_pts}/5</p>',
     ])

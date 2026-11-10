@@ -120,6 +120,17 @@ class TestBuildReport:
         assert flagged == {"NIH R50 Award Tracking"}
 
 
+    def test_empty_sections_say_why(self, orchestrator):
+        # 4.1.2 has no collector; 4.2.9 is implemented but had no data.
+        metrics = _metrics()
+        dashboard = DashboardFormatter().format(metrics, {})
+        dashboard["impact"]["4.1.2"] = {"title": "Field Research Impact", "data": None}
+        dashboard["ecosystem"]["4.2.9"] = {"title": "Funding", "data": None}
+        page = render_package_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
+        assert page.count("Not yet implemented.") == 2  # 4.1.2 and 4.3.7
+        assert "Unavailable this run." in page
+
+
 class TestHtmlOutput:
     def test_metrics_json_layout_the_dashboard_reads(self, orchestrator, tmp_path):
         # js/catalog.js reads the sections from `formatted`.

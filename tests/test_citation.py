@@ -204,8 +204,8 @@ class TestFormalCitationsRow:
     def test_zero_is_shown(self):
         assert "Formal Citations:</strong> 0</p>" in self._data({"raw_value": 0})
 
-    def test_failed_lookup_is_not_yet_collected(self):
-        assert "Formal Citations:</strong> Not yet collected" in self._data(
+    def test_failed_lookup_is_unavailable_this_run(self):
+        assert "Formal Citations:</strong> Unavailable this run" in self._data(
             {"raw_value": None, "not_collected": True})
 
     def test_downloads_detail_names_each_package(self):

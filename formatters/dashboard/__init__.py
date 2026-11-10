@@ -23,7 +23,7 @@ class Section:
 
     build: its builder, or None for a section nothing collects yet.
     stub: whether a section with no collected data shows its sub-metrics
-        as "Not yet collected" (with any per-package overrides filled in)
+        as "Not yet implemented" (with any per-package overrides filled in)
         when the package config overrides any of them.
     """
     number: str

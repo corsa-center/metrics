@@ -26,7 +26,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
                 rel_pts += 1
         else:
             section_431_lines.append(
-                '<p><strong>Advanced Static Analysis:</strong> Not yet collected</p>')
+                '<p><strong>Advanced Static Analysis:</strong> Unavailable this run</p>')
 
         # 2. Enhanced Security Analysis — CodeQL workflow presence
         if static_analysis:
@@ -43,7 +43,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
                 # A gap here isn't a confirmed "no CodeQL" -- don't
                 # report it as a failure alongside real ✗ results.
                 section_431_lines.append(
-                    '<p><strong>Enhanced Security Analysis:</strong> Not yet collected</p>'
+                    '<p><strong>Enhanced Security Analysis:</strong> Unavailable this run</p>'
                 )
             else:
                 section_431_lines.append(
@@ -51,7 +51,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
                     f'{static_analysis.get("scanners_checked") or "CodeQL"} workflow found ✗</p>'
                 )
         else:
-            section_431_lines.append('<p><strong>Enhanced Security Analysis:</strong> Not yet collected</p>')
+            section_431_lines.append('<p><strong>Enhanced Security Analysis:</strong> Unavailable this run</p>')
 
         # 3. CERT Guidelines Compliance — secure-coding practice indicators
         if reliability:
@@ -60,7 +60,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
                 rel_pts += 1
         else:
             section_431_lines.append(
-                '<p><strong>CERT Guidelines Compliance:</strong> Not yet collected</p>')
+                '<p><strong>CERT Guidelines Compliance:</strong> Unavailable this run</p>')
 
         # 4. Test Coverage Excellence — via Codecov public API
         if test_coverage.get("coverage_exists"):
@@ -81,7 +81,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
         elif test_coverage.get("coverage_in_ci"):
             # Measured, just not somewhere this can read -- not a fail.
             section_431_lines.append(
-                '<p><strong>Test Coverage Excellence:</strong> Not yet collected</p>'
+                '<p><strong>Test Coverage Excellence:</strong> Unavailable</p>'
                 f'<p class="sub-detail">Coverage is measured in CI '
                 f'({test_coverage["coverage_in_ci"]}) but not published to Codecov</p>'
             )
@@ -96,7 +96,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
                 rel_pts += 1
         else:
             section_431_lines.append(
-                '<p><strong>Reliability Trend Analysis:</strong> Not yet collected</p>')
+                '<p><strong>Reliability Trend Analysis:</strong> Unavailable this run</p>')
         section_431_lines.append(f'<p><strong>Score:</strong> {rel_pts}/5</p>')
     section_431_data = "\n".join(section_431_lines) if section_431_lines else None
     return section_431_data
@@ -120,7 +120,7 @@ def section_4_3_3(ctx: Context) -> Optional[str]:
             # isn't a confirmed miss -- don't count it against repr_pts
             # or show it as a confident ✗ alongside real fails.
             if not passing and not_collected:
-                return f'<p><strong>{label}:</strong> Not yet collected</p>'
+                return f'<p><strong>{label}:</strong> Unavailable this run</p>'
             repr_pts += 1 if passing else 0
             mark = "✓" if passing else "✗"
             row = f'<p><strong>{label}:</strong> {mark}</p>'
@@ -191,7 +191,7 @@ def section_4_3_2(ctx: Context) -> Optional[str]:
             )
         else:
             section_432_lines.append(
-                '<p><strong>CI/CD Effectiveness Assessment:</strong> Not yet collected</p>'
+                '<p><strong>CI/CD Effectiveness Assessment:</strong> Unavailable this run</p>'
             )
         # 2–4. Testing, review coverage and tooling integration
         dev_tooling = qual.get("dev_tooling", {})
@@ -207,7 +207,7 @@ def section_4_3_2(ctx: Context) -> Optional[str]:
                 "Code Review Quality Analysis",
                 "Development Tool Integration",
             ]:
-                section_432_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
+                section_432_lines.append(f'<p><strong>{label}:</strong> Unavailable this run</p>')
         # 5. Community Contribution Facilitation — OpenSSF badge as proxy
         if openssf_badge:
             badge_status = openssf_badge.get("badge_status", {})
@@ -242,7 +242,7 @@ def section_4_3_2(ctx: Context) -> Optional[str]:
                     )
         else:
             section_432_lines.append(
-                '<p><strong>Community Contribution Facilitation:</strong> Not yet collected</p>'
+                '<p><strong>Community Contribution Facilitation:</strong> Unavailable this run</p>'
             )
         section_432_lines.append(f'<p><strong>Score:</strong> {dp_pts}/5</p>')
     section_432_data = "\n".join(section_432_lines) if section_432_lines else None
@@ -276,7 +276,7 @@ def section_4_3_4(ctx: Context) -> Optional[str]:
                 use_pts += 1
         else:
             use_lines.append(
-                '<p><strong>Installation Success Tracking:</strong> Not yet collected</p>')
+                '<p><strong>Installation Success Tracking:</strong> Unavailable this run</p>')
         use_lines.append(sub_row(usub, "usage_analytics"))
         use_lines.append(f'<p><strong>Score:</strong> {use_pts}/5</p>')
         section_434_data = "\n".join(use_lines)
@@ -300,7 +300,7 @@ def section_4_3_5(ctx: Context) -> Optional[str]:
             nonlocal acc_pts
             # Same "gap isn't a confirmed miss" rule as _repr_row above.
             if not passing and not_collected:
-                return f'<p><strong>{label}:</strong> Not yet collected</p>'
+                return f'<p><strong>{label}:</strong> Unavailable this run</p>'
             acc_pts += 1 if passing else 0
             mark = "✓" if passing else "✗"
             row = f'<p><strong>{label}:</strong> {mark}</p>'
@@ -332,11 +332,11 @@ def section_4_3_5(ctx: Context) -> Optional[str]:
                      ", ".join(container_found) if container_found else None,
                      bool(cats.get("containers", {}).get("not_collected"))),
             (sub_row(dep_sub, "architecture_compatibility") if deployment_envs
-             else "<p><strong>Architecture Compatibility Analysis:</strong> Not yet collected</p>"),
+             else "<p><strong>Architecture Compatibility Analysis:</strong> Unavailable this run</p>"),
             (sub_row(dep_sub, "platform_documentation") if deployment_envs
-             else "<p><strong>Platform Documentation Evaluation:</strong> Not yet collected</p>"),
+             else "<p><strong>Platform Documentation Evaluation:</strong> Unavailable this run</p>"),
             (sub_row(dep_sub, "deployment_environment_testing") if deployment_envs
-             else "<p><strong>Deployment Environment Testing:</strong> Not yet collected</p>"),
+             else "<p><strong>Deployment Environment Testing:</strong> Unavailable this run</p>"),
         ]
         for key in ["deployment_environment_testing", "architecture_compatibility",
                     "platform_documentation"]:
@@ -377,7 +377,7 @@ def section_4_3_6(ctx: Context) -> Optional[str]:
                 "Code Quality Assessment",
                 "Documentation Quality Evaluation",
             ]:
-                section_436_lines.append(f'<p><strong>{label}:</strong> Not yet collected</p>')
+                section_436_lines.append(f'<p><strong>{label}:</strong> Unavailable this run</p>')
 
         # 4. Knowledge Distribution Analysis — bus factor (reuses 4.2.3 data)
         if contributor_activity:
@@ -395,7 +395,7 @@ def section_4_3_6(ctx: Context) -> Optional[str]:
             )
         else:
             section_436_lines.append(
-                '<p><strong>Knowledge Distribution Analysis:</strong> Not yet collected</p>')
+                '<p><strong>Knowledge Distribution Analysis:</strong> Unavailable this run</p>')
 
         if maintainability:
             section_436_lines.append(sub_row(msub, "refactoring_tracking"))
@@ -403,7 +403,7 @@ def section_4_3_6(ctx: Context) -> Optional[str]:
                 maint436_pts += 1
         else:
             section_436_lines.append(
-                '<p><strong>Refactoring and Evolution Tracking:</strong> Not yet collected</p>')
+                '<p><strong>Refactoring and Evolution Tracking:</strong> Unavailable this run</p>')
         section_436_lines.append(f'<p><strong>Score:</strong> {maint436_pts}/5</p>')
     section_436_data = "\n".join(section_436_lines) if section_436_lines else None
     return section_436_data

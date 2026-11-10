@@ -356,7 +356,7 @@ The dashboard's sections are built from those results by the dashboard
 formatter in `formatters/dashboard/`, which has one module per dimension and
 one function per section (`section_4_2_1` and so on). A section's rows come
 from its function. Its title, and whether an uncollected section falls back
-to "Not yet collected" rows, come from `SECTIONS` in
+to "Not yet implemented" rows, come from `SECTIONS` in
 `formatters/dashboard/__init__.py`. The orchestrator calls the formatter
 through the `Formatter` interface (`formatters/base.py`), so another
 presentation of the same results can be added as another `Formatter`.
