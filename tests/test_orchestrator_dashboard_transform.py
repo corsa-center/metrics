@@ -580,6 +580,16 @@ class TestSpackDependencies:
                          [f"file://{tmp_path}/missing"]) is None
         assert not log.exists()
 
+    def test_matches_and_misses_are_logged(self, orchestrator, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="orchestrator"):
+            orchestrator._log_spack_matches({
+                "https://github.com/SCOREC/core": {"name": "pumi"},
+                "https://github.com/SCOREC/pcms.git": None,
+            })
+        assert "found for 1 of 2 repositories: SCOREC/core -> pumi" in caplog.text
+        assert "Not in Spack: SCOREC/pcms" in caplog.text
+
     def test_spack_repos_come_from_the_catalog(self, orchestrator):
         scorec = "https://github.com/SCOREC/scorec-spack-packages.git"
         catalog = [

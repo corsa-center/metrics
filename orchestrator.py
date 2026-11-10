@@ -360,6 +360,19 @@ class MetricsOrchestrator:
                     urls.add(url.strip())
         return sorted(urls)
 
+    @staticmethod
+    def _log_spack_matches(result: Dict[str, Optional[Dict]]) -> None:
+        """Which repositories got a Spack package, and which didn't: one of
+        the latter that does have a recipe outside Spack's builtin
+        repository needs `spack_repo` in its catalog entry."""
+        def short(url):
+            return urlparse(url).path.strip("/").removesuffix(".git") or url
+        found = [f"{short(u)} -> {e['name']}" for u, e in sorted(result.items()) if e]
+        missing = [short(u) for u, e in sorted(result.items()) if not e]
+        logger.info(f"Spack packages found for {len(found)} of {len(result)} repositories: {', '.join(found)}")
+        if missing:
+            logger.info(f"Not in Spack: {', '.join(missing)}")
+
     async def collect_spack_dependencies(
         self, packages: List[Dict], spack_repos: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Optional[Dict]]]:
@@ -413,7 +426,9 @@ class MetricsOrchestrator:
                         f"{stderr.decode(errors='replace')[-2000:]}"
                     )
                     return None
-                return json.loads(output.read_text())
+                result = json.loads(output.read_text())
+                self._log_spack_matches(result)
+                return result
             except (OSError, ValueError) as e:
                 logger.warning(f"Spack dependency analysis failed: {e!r}")
                 return None

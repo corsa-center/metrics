@@ -277,7 +277,9 @@ the repository: description, homepage, language, license, dates, `topics`,
   catalog entries name as `spack_repo` (a git URL, or a list) for recipes
   builtin lacks -- SCOREC's pumi-pic and pcms. Those repositories are
   searched for every package, since their recipes depend on other catalog
-  packages (pcms on hdf5 and adios2) and so are among their dependents.
+  packages (pcms on hdf5 and adios2) and so are among their dependents. The
+  run log lists each repository's Spack package and, under "Not in Spack",
+  those without one -- where to look for a recipe that needs `spack_repo`.
 
 A key is left out when its lookup failed, rather than written empty.
 
