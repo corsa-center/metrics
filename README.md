@@ -101,6 +101,10 @@ metrics/
 │   │   └── dimension.py           # Quality dimension: runs and averages its sub-collectors
 │   └── dimension.py               # Base class for the dimension collectors
 │
+├── formatters/              # Present the collected results
+│   ├── base.py                    # Formatter interface
+│   └── dashboard/                 # Dashboard sections: one module per dimension
+│
 ├── integrations/            # API integrations
 │   ├── base.py             # Base API client
 │   ├── github_api.py       # GitHub API

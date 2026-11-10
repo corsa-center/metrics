@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from collectors.impact.citation import CitationMetricCollector
 from tests.fakes import FakeForge
@@ -198,7 +199,7 @@ class TestFormalCitationsRow:
             "ecosystem": {"sub_results": {"collaboration": {
                 "registries": registries or [], "package_downloads": downloads or {}}}},
             "quality": {"sub_results": {}}}}
-        return orch._transform_for_dashboard(metrics, {})["impact"]["4.1.1"]["data"]
+        return DashboardFormatter().format(metrics, {})["impact"]["4.1.1"]["data"]
 
     def test_zero_is_shown(self):
         assert "Formal Citations:</strong> 0</p>" in self._data({"raw_value": 0})

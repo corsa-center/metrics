@@ -564,7 +564,7 @@ class FundingCollector:
             support_entry["not_collected"] = True
         sub["institutional_support"] = support_entry
 
-        # Score only the 4.2.8 rows here; the orchestrator scores 4.2.9 separately.
+        # Score only the 4.2.8 rows here; the dashboard formatter scores 4.2.9 separately.
         financial_keys = [
             "funding_documentation", "institutional_affiliation",
             "corporate_sponsorship", "funding_portfolio", "nih_r50",

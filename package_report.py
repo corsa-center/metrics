@@ -200,7 +200,7 @@ def evidence_index(sub_results: Any) -> Dict[str, Dict]:
 
     Collectors put an "evidence" dict beside a row's "label": on a
     sub-score (collectors/ecosystem/funding.py), or for rows the
-    orchestrator builds itself, in a "row_evidence" block
+    dashboard formatter builds itself, in a "row_evidence" block
     (collectors/ecosystem/community_health.py). These sit at different
     depths in different collectors, so every dict is searched. Labels are
     unique within a dimension, which is the scope this is called on.
@@ -597,7 +597,7 @@ def render_package_report(
 
     Args:
         package: the name of the package
-        dashboard: the package's _transform_for_dashboard output
+        dashboard: the package's DashboardFormatter output
         metrics: the package's collect_all_metrics output
         weights: dimension -> weight used for the overall score
         overrides: section -> {label: text} rows whose text came from config

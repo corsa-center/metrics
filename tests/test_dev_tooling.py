@@ -2,6 +2,7 @@
 
 import asyncio
 import pytest
+from formatters.dashboard import DashboardFormatter
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from collectors.common import COLLECTION_GAP, RepoTree
@@ -468,7 +469,7 @@ class TestEvidenceInReport:
                                         "ci_cd": {"score": 1, "max_score": 6}}},
         }}
         orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         testing = page.split("<b>Testing Framework Excellence:</b>")[1].split("</li>")[0]

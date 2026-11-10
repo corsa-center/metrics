@@ -1,9 +1,9 @@
-"""Regression tests for _transform_for_dashboard against not_collected shapes.
+"""Regression tests for the dashboard formatter against not_collected shapes.
 
 2026-09-17: the first scheduled run after the COLLECTION_GAP rollout crashed
 with `TypeError: '<' not supported between instances of 'dict' and 'float'`.
 chaoss_governance.py's category_scores can now hold {"not_collected": True}
-dicts alongside plain numeric scores, and _transform_for_dashboard tried to
+dicts alongside plain numeric scores, and the dashboard transform tried to
 sort/round all of them as if they were always numbers. These tests build the
 exact not_collected shapes each collector in the COLLECTION_GAP rollout can
 now produce and feed them straight into the dashboard transform, so a
@@ -14,6 +14,7 @@ import asyncio
 import json
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from orchestrator import MetricsOrchestrator
 from tests.fakes import FakeForge
@@ -50,7 +51,7 @@ class TestChaossCategoryScoresGapHandling:
                 }
             }
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         assert result is not None
 
     def test_all_categories_gapped_does_not_crash(self, orchestrator):
@@ -66,7 +67,7 @@ class TestChaossCategoryScoresGapHandling:
                 }
             }
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         assert result is not None
 
     def test_gapped_category_is_labeled_not_collected_in_output(self, orchestrator):
@@ -86,7 +87,7 @@ class TestChaossCategoryScoresGapHandling:
                 }
             }
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         section_data = result["ecosystem"]["4.2.1"]["data"]
         assert "Not collected" in section_data
         assert "Documentation Usability" in section_data
@@ -116,7 +117,7 @@ class TestScoreLineUsesDynamicMaxScore:
                 ["contribution_type_diversity", "external_event_participation", "training_material_integration"],
             )}}
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         assert "Score:</strong> 2/5" in result["ecosystem"]["4.2.5"]["data"]
 
     def test_outreach_fully_gapped_score_renders_as_text_not_none(self, orchestrator):
@@ -126,7 +127,7 @@ class TestScoreLineUsesDynamicMaxScore:
                 "status": "not_collected", "sub_scores": {},
             }}
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         assert "None/0" not in result["ecosystem"]["4.2.5"]["data"]
         assert "Score:</strong> Not collected" in result["ecosystem"]["4.2.5"]["data"]
 
@@ -135,7 +136,7 @@ class TestScoreLineUsesDynamicMaxScore:
             "welcomeness": {"overall_score": {"score": 1, "max_score": 1,
                                               "sub_scores": _rows(["decision_making_visibility"])}}
         })
-        data = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.6"]["data"]
+        data = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.6"]["data"]
         assert "✗" not in data
         assert "Score:</strong> 1/1" in data
 
@@ -147,7 +148,7 @@ class TestScoreLineUsesDynamicMaxScore:
                 ["funding_portfolio"], ["nih_r50"],
             )}}
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         assert "Score:</strong> 3/4" in result["ecosystem"]["4.2.8"]["data"]
         assert "Score:</strong> 1/1" in result["ecosystem"]["4.2.9"]["data"]
 
@@ -161,7 +162,7 @@ class TestScoreLineUsesDynamicMaxScore:
             ecosystem_sub={"collaboration": {"overall_score": {"score": 1, "sub_scores": collab}}},
             quality_sub={"usability": {"overall_score": {"score": 1, "sub_scores": usab}}},
         )
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         assert "Score:</strong> 1/2" in result["ecosystem"]["4.2.7"]["data"]
         assert "Score:</strong> 2/2" in result["quality"]["4.3.4"]["data"]
 
@@ -170,14 +171,14 @@ class TestScoreLineUsesDynamicMaxScore:
             "funding": {"overall_score": {"score": 2, "max_score": 3, "sub_scores": _rows(
                 [], [], ["institutional_support"])}}
         })
-        section_429 = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.9"]["data"]
+        section_429 = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.9"]["data"]
         assert "0/5" not in section_429
         assert "Score:</strong> Not collected" in section_429
 
 
 class TestRescoreSection:
     def test_counts_marked_rows_only(self):
-        from orchestrator import _rescore_section
+        from formatters.dashboard.common import rescore_section as _rescore_section
         html = "\n".join([
             "<p><strong>A:</strong> x ✓</p>",
             '<p class="sub-detail">detail ✓</p>',
@@ -189,7 +190,7 @@ class TestRescoreSection:
         assert "<p><strong>Score:</strong> 1/2</p>" in _rescore_section(html)
 
     def test_sections_without_a_score_line_are_untouched(self):
-        from orchestrator import _rescore_section
+        from formatters.dashboard.common import rescore_section as _rescore_section
         html = "<p><strong>Citation Score:</strong> 70.0/100</p>"
         assert _rescore_section(html) == html
         assert _rescore_section(None) is None
@@ -201,7 +202,7 @@ class TestStaticAnalysisGapNotShownAsConfirmedFail:
             "reliability": {},
             "static_analysis": {"has_codeql": False, "not_collected": True},
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         section_431 = result["quality"]["4.3.1"]["data"]
         assert "No CodeQL workflow found" not in section_431
         assert "Not yet collected" in section_431
@@ -211,7 +212,7 @@ class TestStaticAnalysisGapNotShownAsConfirmedFail:
             "reliability": {},
             "static_analysis": {"has_codeql": False},
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         assert "No CodeQL workflow found" in result["quality"]["4.3.1"]["data"]
 
 
@@ -229,7 +230,7 @@ class TestReproducibilityAndAccessibilityGapRows:
                 },
             },
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         section = result["quality"]["4.3.3"]["data"]
         assert "FAIR4RS Compliance Assessment:</strong> ✗" not in section
         assert "FAIR4RS Compliance Assessment:</strong> Not yet collected" in section
@@ -244,7 +245,7 @@ class TestReproducibilityAndAccessibilityGapRows:
                 },
             },
         })
-        result = orchestrator._transform_for_dashboard(metrics, {})
+        result = DashboardFormatter().format(metrics, {})
         section = result["quality"]["4.3.5"]["data"]
         assert "Portable Build System Detection:</strong> ✗" not in section
         assert "Portable Build System Detection:</strong> Not yet collected" in section
@@ -310,7 +311,7 @@ class TestUnmeasuredRowsCarryNoMark:
                 "semantic_versioning": {},
             },
         }})
-        section = orchestrator._transform_for_dashboard(metrics, {})["quality"]["4.3.3"]["data"]
+        section = DashboardFormatter().format(metrics, {})["quality"]["4.3.3"]["data"]
         assert "<p><strong>Environment Management:</strong> ✓</p>" in section
         assert "spack.yaml" in section
 
@@ -320,7 +321,7 @@ class TestUnmeasuredRowsCarryNoMark:
             "contributor_activity": {}, "score": {}, "channels": {"found": []},
             "abandonment": {"measurable": False},
         }})
-        section = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.3"]["data"]
+        section = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.3"]["data"]
         row = [l for l in section.split("\n") if "Contributor Abandonment" in l][0]
         assert "✗" not in row and "needs two years" in row
 
@@ -328,7 +329,7 @@ class TestUnmeasuredRowsCarryNoMark:
         from collectors.ecosystem.collaboration import CollaborationCollector
         score = CollaborationCollector(FakeForge())._calculate_score([])
         metrics = _base_metrics(ecosystem_sub={"collaboration": {"overall_score": score, "registries": []}})
-        section = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.7"]["data"]
+        section = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.7"]["data"]
         row = [l for l in section.split("\n") if "Collaboration Network" in l][0]
         assert "✗" not in row and "not audited" in row
 
@@ -339,17 +340,17 @@ class TestChaossScoreNone:
             "governance": {"effectiveness": {}},
             "chaoss_activity": {"overall_score": {
                 "score": None, "max_score": 100, "status": "not_collected", "category_scores": {}}}})
-        section = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.1"]["data"]
+        section = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.1"]["data"]
         assert "<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>" in section
 
     def test_one_failing_package_does_not_drop_the_others(self, orchestrator, tmp_path, monkeypatch):
-        real = orchestrator._transform_for_dashboard
+        real = orchestrator.formatter.format
 
         def transform(metrics, overrides):
             if "bad" in overrides.keys():
                 raise TypeError("boom")
             return real(metrics, overrides)
-        monkeypatch.setattr(orchestrator, "_transform_for_dashboard", transform)
+        monkeypatch.setattr(orchestrator.formatter, "format", transform)
         with pytest.raises(RuntimeError, match="bad/pkg"):
             orchestrator.write_metrics(tmp_path, {"bad/pkg": {"overrides":{"bad": True}}, "good/pkg": {}}, {"bad/pkg": _base_metrics(), "good/pkg": _base_metrics()})
         assert (tmp_path / "pkg-metrics" / "metrics.json").exists()
@@ -390,7 +391,7 @@ class TestPlatformLabels:
         metrics = _base_metrics()
         metrics["dimensions"]["impact"]["sub_results"] = {
             "sub_metrics": {"formal_citations": {"raw_value": 0}}, **impact_sub}
-        return orchestrator._transform_for_dashboard(metrics, {})
+        return DashboardFormatter().format(metrics, {})
 
     def test_gitlab_stars_and_forks(self, orchestrator):
         result = self._impact(orchestrator, {"repo_stats": {"stars": 12, "forks": 3, "platform": "GitLab"}})
@@ -406,11 +407,11 @@ class TestPlatformLabels:
         found = _base_metrics(quality_sub={"reliability": {}, "static_analysis": {
             "has_codeql": True, "scanner": "GitLab SAST", "workflow_file": ".gitlab-ci.yml",
             "workflow_url": "https://gitlab.example.com/g/p/-/blob/HEAD/.gitlab-ci.yml"}})
-        assert "GitLab SAST enabled" in orchestrator._transform_for_dashboard(found, {})["quality"]["4.3.1"]["data"]
+        assert "GitLab SAST enabled" in DashboardFormatter().format(found, {})["quality"]["4.3.1"]["data"]
         missing = _base_metrics(quality_sub={"reliability": {}, "static_analysis": {
             "has_codeql": False, "scanners_checked": "CodeQL or GitLab SAST"}})
         assert ("No CodeQL or GitLab SAST workflow found"
-                in orchestrator._transform_for_dashboard(missing, {})["quality"]["4.3.1"]["data"])
+                in DashboardFormatter().format(missing, {})["quality"]["4.3.1"]["data"])
 
 
 class TestDependencyInfo:
@@ -514,7 +515,7 @@ class TestSubDetailRendering:
                 "passing": False, "detail": ["a==1 (PyPI)", "b==2 (PyPI)"],
             },
         }}})
-        data = orchestrator._transform_for_dashboard(metrics, {})["quality"]["4.3.8"]["data"]
+        data = DashboardFormatter().format(metrics, {})["quality"]["4.3.8"]["data"]
         assert '<p class="sub-detail">a==1 (PyPI), b==2 (PyPI)</p>' in data
         assert "['" not in data
 
@@ -526,7 +527,7 @@ class TestSubDetailRendering:
             "contributing_guidelines": {"exists": False},
             "overall_score": {"max_score": 2},
         }})
-        data = orchestrator._transform_for_dashboard(metrics, {})["ecosystem"]["4.2.1"]["data"]
+        data = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.1"]["data"]
         assert "Governance: Not yet collected" in data
         assert "Contributing Guidelines: Not found" in data
 
@@ -537,12 +538,12 @@ class TestMaintainabilityWithoutMaintenanceData:
             "complexity_analysis": {"label": "Advanced Complexity Analysis", "value": "10 source files",
                                     "passing": True},
         }}}})
-        data = orchestrator._transform_for_dashboard(metrics, {})["quality"]["4.3.6"]["data"]
+        data = DashboardFormatter().format(metrics, {})["quality"]["4.3.6"]["data"]
         assert "Advanced Complexity Analysis:</strong> 10 source files ✓" in data
         assert "Knowledge Distribution Analysis:</strong> Not yet collected" in data
         # Rescored from the marks shown: only the one measured row counts.
         assert "Score:</strong> 1/1" in data
 
     def test_neither_source_leaves_the_section_empty(self, orchestrator):
-        data = orchestrator._transform_for_dashboard(_base_metrics(), {})["quality"]["4.3.6"]["data"]
+        data = DashboardFormatter().format(_base_metrics(), {})["quality"]["4.3.6"]["data"]
         assert "Advanced Complexity Analysis" not in (data or "")

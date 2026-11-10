@@ -204,7 +204,7 @@ class CICDMetricsCollector:
             "max_score": max_score,
             "percentage": round((score / safe_max) * 100, 2),
             "details": list(results.items()),
-            # The orchestrator builds this row from the score alone, which
+            # The dashboard formatter builds this row from the score alone, which
             # never said which of the six checks failed.
             "row_evidence": {"cicd": {"label": "CI/CD Effectiveness Assessment",
                                       "evidence": _checks_evidence(checks)}},

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import httpx
 import pytest
+from formatters.dashboard import DashboardFormatter
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from collectors.common import COLLECTION_GAP, RepoTree
@@ -741,7 +742,7 @@ class TestReportEvidence:
             },
         }
         orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         def row(label):

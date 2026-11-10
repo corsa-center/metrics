@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from collectors.common import get_threshold
 from collectors.quality.maintainability import MaintainabilityCollector, _REFACTOR_INTENT
@@ -309,7 +310,7 @@ class TestReportEvidence:
             },
         }
         orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         assert ('<b>Found:</b> deepest source file (depth 4) in <a href="'

@@ -42,7 +42,7 @@ No significant post-processing required.
 - All data is a single API call or file-existence check — no ML, no scraping, no
   domain expertise required.
 - **4.2.10** has no collector of its own. All five of its sub-metrics are
-  re-derived in `_transform_for_dashboard` from data `ActiveMaintenanceCollector`
+  re-derived in the dashboard formatter from data `ActiveMaintenanceCollector`
   already fetches for 4.2.3, so the section costs zero additional API calls.
   Note that `community_health.py`, despite its name, is the **4.2.1** collector
   (Code of Conduct / GOVERNANCE / CONTRIBUTING file detection) and is not

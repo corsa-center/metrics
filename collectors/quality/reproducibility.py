@@ -372,7 +372,7 @@ class ReproducibilityCollector:
             "uses_semantic_versioning": semver["uses_semver"],
             "categories": categories,
             "overall_score": overall,
-            # The orchestrator builds 4.3.3's rows itself, so the evidence the
+            # The dashboard formatter builds 4.3.3's rows itself, so the evidence the
             # per-package report shows under them is keyed by row label here.
             "row_evidence": self._row_evidence(categories, managed_read, readme_read),
         }

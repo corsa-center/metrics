@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from forge.base import COLLECTION_GAP
 from collectors.quality.static_analysis import StaticAnalysisCollector
@@ -225,7 +226,7 @@ class TestEvidenceInReport:
             "quality": {"sub_results": {"static_analysis": _collect(StaticAnalysisCollector(forge))}},
         }}
         orchestrator = MetricsOrchestrator(config_path="config/orchestrator.yaml")
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         row = page.split("<b>Enhanced Security Analysis:</b>")[1].split("</li>")[0]

@@ -1,6 +1,7 @@
 """Unit tests for UsabilityCollector (CASS Section 4.3.4)."""
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
@@ -331,7 +332,7 @@ class TestDocumentationEvidence:
             "ecosystem": {"score": 0.0, "sub_results": {}},
             "quality": {"score": 0.0, "sub_results": {"usability": usability}},
         }}
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
         sec = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.3.4")
         row = next(r for r in sec["rows"] if r["label"] == "Documentation Completeness Analysis")

@@ -211,7 +211,7 @@ class CommunityHealthCollector:
             "overall_score": self._calculate_score(
                 coc_result, governance_result, contributing_result
             ),
-            # The orchestrator builds 4.2.1's rows itself, so the evidence the
+            # The dashboard formatter builds 4.2.1's rows itself, so the evidence the
             # per-package report shows under them is keyed by row label here.
             "row_evidence": self._row_evidence(
                 ref, coc_result, governance_result, contributing_result,

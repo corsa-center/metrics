@@ -188,7 +188,7 @@ class LicensingCollector:
             "compliance_score": self._calculate_compliance_score(
                 license_file_result, license_analysis
             ),
-            # The orchestrator builds these 4.2.2 rows itself, so the
+            # The dashboard formatter builds these 4.2.2 rows itself, so the
             # evidence the per-package report shows under them is keyed by
             # row label here.
             "row_evidence": self._row_evidence(

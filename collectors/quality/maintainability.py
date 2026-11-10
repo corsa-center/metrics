@@ -9,7 +9,7 @@ the recursive git tree, the language breakdown, and recent commit messages.
   - Documentation Quality Evaluation : doc coverage and API doc generation
   - Refactoring and Evolution Tracking : refactor intent in recent commits
 
-Knowledge Distribution Analysis (bus factor) is rendered by the orchestrator
+Knowledge Distribution Analysis (bus factor) is rendered by the dashboard formatter
 from ActiveMaintenanceCollector's data and is not repeated here.
 
 On complexity: the report asks for static analysis of computational complexity.

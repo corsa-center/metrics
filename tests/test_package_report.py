@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 
 from collectors.common import configure_threshold_overrides
 from orchestrator import MetricsOrchestrator
@@ -98,7 +99,7 @@ class TestThresholds:
 class TestBuildReport:
     def test_thresholds_attach_to_their_rows(self, orchestrator):
         metrics = _metrics(sub_results={"governance": {"overall_score": {"max_score": 3}}})
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         sec = report["dimensions"][1]["sections"][0]
         assert sec["number"] == "4.2.1"
@@ -112,7 +113,7 @@ class TestBuildReport:
     def test_config_overridden_rows_are_flagged(self, orchestrator):
         metrics = _metrics()
         overrides = {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}
-        dashboard = orchestrator._transform_for_dashboard(metrics, overrides)
+        dashboard = DashboardFormatter().format(metrics, overrides)
         report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights(), overrides)
         rows = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")["rows"]
         flagged = {r["label"] for r in rows if r["overridden"]}
@@ -154,7 +155,7 @@ class TestHtmlOutput:
             "overall_score": {"max_score": 3},
             "keyword_analysis": {"groups_found": ["<script>alert(1)</script>"]},
         }})
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         # The dashboard HTML carries it raw; the report reduces it to text.
         assert "<script>" not in page
@@ -189,7 +190,7 @@ class TestMethodologyLinks:
     def test_every_section_links_to_its_catalog_heading(self, orchestrator):
         from package_report import METRICS_CATALOG_URL
         metrics = _metrics()
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         links = {s["number"]: s["methodology"] for d in report["dimensions"] for s in d["sections"]}
         assert all(links.values()), [n for n, url in links.items() if not url]
@@ -230,7 +231,7 @@ def _funding_metrics(**doc_entry):
 
 class TestEvidence:
     def _row(self, orchestrator, metrics, overrides=None):
-        dashboard = orchestrator._transform_for_dashboard(metrics, overrides or {})
+        dashboard = DashboardFormatter().format(metrics, overrides or {})
         report = build_report("owner/repo", dashboard, metrics,
                               orchestrator._metric_weights(), overrides)
         sec = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")
@@ -243,7 +244,7 @@ class TestEvidence:
 
     def test_rendered_escaped_with_links_and_where_it_looked(self, orchestrator):
         metrics = _funding_metrics()
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         assert ('<b>Found:</b> &lt;b&gt;DOE&lt;/b&gt; named as a funder in '
                 '<a href="https://github.com/o/r/blob/HEAD/NOTICE">NOTICE</a>: '
@@ -286,7 +287,7 @@ class TestGovernanceEvidence:
             "row_evidence": c._row_evidence("o/r", found, missing, found, keywords, {}),
         }
         metrics = _metrics(sub_results={"governance": governance})
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
 
         assert "<b>Not found:</b> Governance</div>" in page
@@ -316,7 +317,7 @@ class TestCrossSectionEvidence:
                  "passing": True, "section": "4.3.4",
                  "evidence": CollaborationCollector._install_evidence(registries, {})}
         metrics = self._metrics(entry)
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
         rows = {(s["number"], r["label"]): r for d in report["dimensions"]
                 for s in d["sections"] for r in s["rows"]}
@@ -385,7 +386,7 @@ class TestRepeatedDetailLines:
                                          "path": "README.md", "url": None}]}}
         metrics = _metrics(sub_results={"funding": {"overall_score": {
             "score": 1, "max_score": 1, "sub_scores": {"funding_documentation": entry}}}})
-        dashboard = orchestrator._transform_for_dashboard(metrics, {})
+        dashboard = DashboardFormatter().format(metrics, {})
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
         assert page.count("DE-AC05-00OR22725") == 1
         # The dashboard keeps its own detail line.

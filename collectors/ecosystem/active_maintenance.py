@@ -32,7 +32,7 @@ _COMMUNITY_ISSUE_PAGES = 5
 
 # The pass/fail thresholds for this collector's data (departure rate,
 # channel count, release cadence, etc.) live in config/thresholds.yaml under
-# section "4.2.3" and are applied in orchestrator.py's dashboard rendering,
+# section "4.2.3" and are applied in the dashboard formatter (formatters/dashboard/),
 # not here -- this collector only gathers the underlying numbers.
 
 

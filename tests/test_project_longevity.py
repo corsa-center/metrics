@@ -6,7 +6,9 @@ These tests exercise that transform directly.
 """
 
 import pytest
+from formatters.dashboard import DashboardFormatter
 from orchestrator import MetricsOrchestrator
+from formatters.dashboard.common import apply_section_overrides
 
 
 def _maint(**overrides):
@@ -44,7 +46,7 @@ def _render(maintenance):
     metrics = {
         "dimensions": {"ecosystem": {"sub_results": {"maintenance": maintenance}}}
     }
-    out = orch._transform_for_dashboard(metrics, {})
+    out = DashboardFormatter().format(metrics, {})
     return out["ecosystem"]["4.2.10"]["data"]
 
 
@@ -211,7 +213,7 @@ class TestOverrides:
         }))
         assert "<strong>Score:</strong> 4/5" in html
 
-        overridden = MetricsOrchestrator._apply_section_overrides(
+        overridden = apply_section_overrides(
             html, {"Community Health Trends": "N/A"}
         )
         assert "<strong>Community Health Trends:</strong> N/A</p>" in overridden

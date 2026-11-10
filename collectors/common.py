@@ -252,7 +252,7 @@ class RepoTree:
 # See config/thresholds.yaml for the values themselves and the full design
 # rationale. In short: every configurable pass/fail threshold used to be a
 # magic number duplicated (or, in three cases, defined but never actually
-# read) across collectors and orchestrator.py's rendering code. This module
+# read) across collectors and the dashboard formatter (formatters/dashboard/). This module
 # is now the one place that resolves a threshold value, whether the call
 # site is a collector deciding its own sub_scores or orchestrator.py
 # deciding what to render.

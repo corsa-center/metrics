@@ -261,7 +261,7 @@ class CitationMetricCollector:
                 "forks": repo_stats.get("forks", 0),
                 "platform": self.forge.display_name,
             },
-            # The orchestrator builds 4.1.1's rows itself, so their evidence
+            # The dashboard formatter builds 4.1.1's rows itself, so their evidence
             # is keyed by row label here.
             "row_evidence": {
                 "formal_citations": {
