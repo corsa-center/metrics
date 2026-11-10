@@ -113,7 +113,7 @@ class TestCoverageInCi:
     def test_first_ci_file_measuring_coverage_is_reported(self, collector):
         import asyncio
         from unittest.mock import AsyncMock, MagicMock, patch
-        from collectors.ecosystem.base import RepoTree
+        from collectors.common import RepoTree
         collector.forge.files = {".github/workflows/ci.yml": "run: make",
                                  ".github/workflows/nightly.yml": "run: gcovr -r ."}
         found = asyncio.run(collector._coverage_in_ci(None, "o/r"))

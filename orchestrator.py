@@ -30,7 +30,10 @@ import re
 import yaml
 
 from catalog.catalog import Catalog
-from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
+from collectors.common import configure_threshold_overrides, get_threshold
+from collectors.ecosystem.dimension import EcosystemDimensionCollector
+from collectors.impact.dimension import ImpactDimensionCollector
+from collectors.quality.dimension import QualityDimensionCollector
 from forge.base import (
     COLLECTION_GAP,
     DEFINITE_METADATA_KEYS,
@@ -71,24 +74,6 @@ SECTION_SUBMETRICS: Dict[str, List[str]] = {
     "4.3.8": ["SBOM Detection", "Build Provenance", "Dependency Vulnerability Posture", "Dependency Freshness"],
 }
 
-# Canonical sub-collector names per group -- the authoritative set of what
-# `_sub_enabled` actually wires up (kept in sync by
-# tests/test_collector_toggles.py's TestConfigMatchesCode). Used to keep an
-# unrecognized key from a hand-edited config (typo, or a group/key swap)
-# out of `_package_excluded_keys`'s report -- such a key has zero real
-# effect on collection, so reporting it as an exclusion would be misleading.
-KNOWN_COLLECTOR_KEYS = {
-    "ecosystem": {
-        "community_health", "licensing", "active_maintenance", "chaoss_activity",
-        "openssf_badge", "engagement", "fair_licensing", "outreach",
-        "welcomeness", "collaboration", "funding", "openssf_scorecard",
-    },
-    "quality": {
-        "ci_cd", "reproducibility", "accessibility", "test_coverage",
-        "usability", "reliability", "maintainability", "deployment_environments",
-        "dev_tooling", "static_analysis", "supply_chain",
-    },
-}
 
 _MAIN_ROW = re.compile(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>')
 _SCORE_LINE = re.compile(r'<p[^>]*><strong>Score:</strong>[^<]*</p>')
@@ -139,10 +124,13 @@ class MetricsOrchestrator:
         # silently ignored.
         configure_threshold_overrides(self.config.get("thresholds"))
         self.catalog = Catalog(self.config.get("catalog_url", ""), self.config.get("api_credentials", {}))
-        self.collectors_enabled = self.config.get("collectors", {})
-        # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
-        self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
-        self.quality_collectors = self.config.get("quality_collectors", {})
+        # One collector per dimension (collectors/<dimension>/dimension.py),
+        # each reading its own on/off and per-sub-collector toggles.
+        self.dimensions = {
+            "impact": ImpactDimensionCollector(self.config),
+            "ecosystem": EcosystemDimensionCollector(self.config),
+            "quality": QualityDimensionCollector(self.config),
+        }
         # Spack package name -> collect_spack_dependencies() entry, or None
         # until a batch has been analyzed (or when Spack isn't available).
         self.spack_data: Optional[Dict[str, Optional[Dict]]] = None
@@ -326,92 +314,6 @@ class MetricsOrchestrator:
         logger.info(f"Prepared {len(software_list)} software packages for processing")
         return catalog, software_list
 
-    async def collect_impact_dimension(self, package: Dict) -> Dict:
-        """Collect Impact dimension metrics (CASS Report Section 4.1)
-
-        Args:
-            package: Package metadata dictionary
-
-        Returns:
-            Impact dimension metrics dictionary
-        """
-        if not self.collectors_enabled.get("impact", False):
-            return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
-
-        logger.info(f"Collecting Impact dimension for {package['name']}")
-
-        forge = self._forge_for_package(package)
-        if forge is not None:
-            try:
-                from collectors.impact.citation import CitationMetricCollector
-
-                collector = CitationMetricCollector(self.config, forge)
-                result = await collector.collect(package)
-                score = result.get("score", 0) if result else 0
-                return {
-                    "dimension": "impact",
-                    "score": score,
-                    "max_score": 100.0,
-                    "sub_results": result,
-                }
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.error(f"Citation collection failed for {package['name']}: {e}")
-
-        # Fall back to dimension placeholder
-        try:
-            from collectors.impact.dimension import ImpactDimensionCollector
-
-            collector = ImpactDimensionCollector(self.config)
-            return await collector.collect(package)
-        except Exception as e:
-            logger.error(f"Impact dimension collection failed for {package['name']}: {e}")
-            return {"dimension": "impact", "score": 0.0, "max_score": 100.0}
-
-    def _sub_enabled(self, group: str, key: str, package: Optional[Dict] = None) -> bool:
-        """Whether an individual sub-collector is enabled for this package.
-
-        Defaults to True when a toggle is absent at every layer. Two layers,
-        each only able to narrow the one before it -- none can re-enable a
-        collector a higher layer turned off:
-          1. Global config/orchestrator.yaml -- applies to every package.
-          2. The maintainer's central package_config/<package>.yaml.
-        `package` carries (2) once collect_all_metrics has attached
-        them; omit it (as the config-matching tests do) to check only (1).
-        """
-        toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
-        if not toggles.get(key, True):
-            return False
-        if package is not None:
-            narrowed = package.get("collectors", {}).get(group, {}).get(key)
-            if narrowed is False:
-                return False
-        return True
-
-    def _package_excluded_keys(self, group: str, package: Dict) -> List[str]:
-        """Toggle keys this package's configs turned off that the global
-        config would otherwise run -- i.e. exclusions attributable to
-        package_config, not to the operator.
-        Recorded on the dimension result so a deliberate exclusion is
-        distinguishable from a collector that simply crashed.
-        """
-        toggles = self.ecosystem_collectors if group == "ecosystem" else self.quality_collectors
-        known_keys = KNOWN_COLLECTOR_KEYS[group]
-        candidate_keys = set(toggles) & known_keys
-        mentioned = set(package.get("collectors", {}).get(group, {}))
-        unrecognized = mentioned - known_keys
-        if unrecognized:
-            logger.warning(
-                f"{package.get('repository')}: ignoring unrecognized "
-                f"{group} collector key(s) in package_config: {sorted(unrecognized)}"
-            )
-        candidate_keys |= mentioned & known_keys
-        return sorted(
-            key
-            for key in candidate_keys
-            if toggles.get(key, True) and not self._sub_enabled(group, key, package)
-        )
 
     def _forge_for_package(self, package: Dict) -> Optional[Forge]:
         """The Forge for a package, chosen by its repo_type (see Forge.for_repo)."""
@@ -587,362 +489,6 @@ class MetricsOrchestrator:
                 info["dependencies"] = dependencies
         return info
 
-    async def collect_ecosystem_dimension(self, package: Dict) -> Dict:
-        """Collect Ecosystem dimension metrics (CASS Report Section 4.2)
-
-        Runs all implemented ecosystem sub-collectors and combines scores.
-        """
-        if not self.collectors_enabled.get("ecosystem", False):
-            return {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
-
-        logger.info(f"Collecting Ecosystem dimension for {package['name']}")
-
-        forge = self._forge_for_package(package)
-        if forge is None:
-            return {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
-        sub_results = {}
-
-        # 4.2.1 CoC, Governance, and Contributor Guidelines
-        if self._sub_enabled("ecosystem", "community_health", package):
-            try:
-                from collectors.ecosystem.community_health import CommunityHealthCollector
-                collector = CommunityHealthCollector(forge)
-                sub_results["governance"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Governance collection failed for {package['name']}: {e}")
-
-        # 4.2.2 Licensing and FAIR Compliance
-        if self._sub_enabled("ecosystem", "licensing", package):
-            try:
-                from collectors.ecosystem.licensing import LicensingCollector
-                collector = LicensingCollector(forge)
-                sub_results["licensing"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Licensing collection failed for {package['name']}: {e}")
-
-        # 4.2.3 Active Maintenance
-        if self._sub_enabled("ecosystem", "active_maintenance", package):
-            try:
-                from collectors.ecosystem.active_maintenance import ActiveMaintenanceCollector
-                collector = ActiveMaintenanceCollector(forge)
-                sub_results["maintenance"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Active maintenance collection failed for {package['name']}: {e}")
-
-        # 4.2.4 CHAOSS Activity Metrics
-        if self._sub_enabled("ecosystem", "chaoss_activity", package):
-            try:
-                from collectors.ecosystem.chaoss_governance import CHAOSSGovernanceCollector
-                collector = CHAOSSGovernanceCollector(forge)
-                sub_results["chaoss_activity"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"CHAOSS activity collection failed for {package['name']}: {e}")
-
-        # 4.2.5 OpenSSF Best Practices Badge
-        if self._sub_enabled("ecosystem", "openssf_badge", package):
-            try:
-                from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
-                collector = OpenSSFBadgeCollector(forge)
-                sub_results["openssf_badge"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"OpenSSF badge collection failed for {package['name']}: {e}")
-
-        # 4.2.4 Engagement — issue/PR response times, open/close ratios
-        if self._sub_enabled("ecosystem", "engagement", package):
-            try:
-                from collectors.ecosystem.engagement import EngagementCollector
-                collector = EngagementCollector(forge)
-                sub_results["engagement"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Engagement collection failed for {package['name']}: {e}")
-
-        # 4.2.2 FAIR compliance and license exceptions
-        if self._sub_enabled("ecosystem", "fair_licensing", package):
-            try:
-                from collectors.ecosystem.fair_licensing import FairLicensingCollector
-                collector = FairLicensingCollector(forge)
-                sub_results["fair_licensing"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"FAIR licensing collection failed for {package['name']}: {e}")
-
-        # 4.2.5 Outreach — newcomer growth, retention, onboarding infrastructure
-        if self._sub_enabled("ecosystem", "outreach", package):
-            try:
-                from collectors.ecosystem.outreach import OutreachCollector
-                collector = OutreachCollector(forge)
-                sub_results["outreach"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Outreach collection failed for {package['name']}: {e}")
-
-        # 4.2.6 Welcomeness — decision-making visibility
-        if self._sub_enabled("ecosystem", "welcomeness", package):
-            try:
-                from collectors.ecosystem.welcomeness import WelcomenessCollector
-                collector = WelcomenessCollector(forge)
-                sub_results["welcomeness"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Welcomeness collection failed for {package['name']}: {e}")
-
-        # 4.2.7 Collaboration — ecosystem reach via ecosyste.ms
-        if self._sub_enabled("ecosystem", "collaboration", package):
-            try:
-                from collectors.ecosystem.collaboration import CollaborationCollector
-                collector = CollaborationCollector(forge)
-                sub_results["collaboration"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Collaboration collection failed for {package['name']}: {e}")
-
-        # 4.2.8 + 4.2.9 Funding and institutional affiliation
-        if self._sub_enabled("ecosystem", "funding", package):
-            try:
-                from collectors.ecosystem.funding import FundingCollector
-                collector = FundingCollector(forge)
-                sub_results["funding"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Funding collection failed for {package['name']}: {e}")
-
-        # OpenSSF Scorecard
-        if self._sub_enabled("ecosystem", "openssf_scorecard", package):
-            try:
-                from collectors.ecosystem.openssf_scorecard import OpenSSFScorecardCollector
-                collector = OpenSSFScorecardCollector(forge)
-                sub_results["openssf_scorecard"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"OpenSSF Scorecard collection failed for {package['name']}: {e}")
-
-        # Calculate combined ecosystem score from available sub-collectors.
-        # A collector's percentage/score can be None when everything it
-        # measures gapped (see the not_collected work across
-        # collectors/ecosystem/ and collectors/quality/) -- dict.get(key, 0)
-        # only substitutes the default when the key is *missing*, not when
-        # its value is None, so appending it unguarded either crashes
-        # sum()/len() on a NoneType or (with an `or 0` guard) silently
-        # scores a gap as a confident 0. Excluded from the average entirely
-        # instead, same as each collector already excludes it from its own
-        # internal score.
-        # (sub-collector key, percentage) -- kept by name so the per-project
-        # report can show which collectors this average was taken over.
-        components: List[tuple] = []
-
-        def _append_pct(name: str, *keys):
-            value = sub_results[name]
-            for key in keys:
-                value = value.get(key, {}) if isinstance(value, dict) else {}
-            if isinstance(value, (int, float)):
-                components.append((name, value))
-
-        if "governance" in sub_results:
-            _append_pct("governance", "overall_score", "percentage")
-        if "licensing" in sub_results:
-            _append_pct("licensing", "compliance_score", "percentage")
-        if "maintenance" in sub_results:
-            _append_pct("maintenance", "score", "percentage")
-        if "chaoss_activity" in sub_results:
-            _append_pct("chaoss_activity", "overall_score", "score")
-        if "openssf_badge" in sub_results:
-            _append_pct("openssf_badge", "overall_score", "score")
-        if "engagement" in sub_results:
-            eng_s = sub_results["engagement"].get("overall_score", {})
-            mx = eng_s.get("max_score", 7)
-            eng_score = eng_s.get("score")
-            if mx and isinstance(eng_score, (int, float)):
-                components.append(("engagement", round(eng_score / mx * 100)))
-        if "openssf_scorecard" in sub_results:
-            pct = sub_results["openssf_scorecard"].get("percentage")
-            if pct is not None:
-                components.append(("openssf_scorecard", pct))
-        if "outreach" in sub_results:
-            _append_pct("outreach", "overall_score", "percentage")
-        if "funding" in sub_results:
-            _append_pct("funding", "overall_score", "percentage")
-        if "welcomeness" in sub_results:
-            _append_pct("welcomeness", "overall_score", "percentage")
-        if "collaboration" in sub_results:
-            _append_pct("collaboration", "overall_score", "percentage")
-        if "fair_licensing" in sub_results:
-            _append_pct("fair_licensing", "overall_score", "percentage")
-
-        scores = [value for _, value in components]
-        avg_score = sum(scores) / len(scores) if scores else 0.0
-
-        return {
-            "dimension": "ecosystem",
-            "score": round(avg_score, 2),
-            "max_score": 100.0,
-            "sub_results": sub_results,
-            "score_components": dict(components),
-            "excluded_by_config": self._package_excluded_keys("ecosystem", package),
-        }
-
-    async def collect_quality_dimension(self, package: Dict) -> Dict:
-        """Collect Quality dimension metrics (CASS Report Section 4.3)
-
-        Includes: reliability, development practices, reproducibility,
-        usability, accessibility, maintainability, performance.
-        """
-        if not self.collectors_enabled.get("quality", False):
-            return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
-
-        logger.info(f"Collecting Quality dimension for {package['name']}")
-
-        forge = self._forge_for_package(package)
-        if forge is None:
-            return {"dimension": "quality", "score": 0.0, "max_score": 100.0}
-        sub_results = {}
-
-        # 4.3.2 Development Practices — CI/CD metrics
-        if self._sub_enabled("quality", "ci_cd", package):
-            try:
-                from collectors.quality.development_practices.ci_cd import CICDMetricsCollector
-                collector = CICDMetricsCollector(forge)
-                sub_results["ci_cd"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"CI/CD collection failed for {package['name']}: {e}")
-
-        # 4.3.3 Reproducibility — containers, lock files, FAIR4RS metadata, semver
-        if self._sub_enabled("quality", "reproducibility", package):
-            try:
-                from collectors.quality.reproducibility import ReproducibilityCollector
-                collector = ReproducibilityCollector(forge)
-                sub_results["reproducibility"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Reproducibility collection failed for {package['name']}: {e}")
-
-        # 4.3.5 Accessibility — portable build systems and containers
-        if self._sub_enabled("quality", "accessibility", package):
-            try:
-                from collectors.quality.accessibility import AccessibilityCollector
-                collector = AccessibilityCollector(forge)
-                sub_results["accessibility"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Accessibility collection failed for {package['name']}: {e}")
-
-        # 4.3.1 Test Coverage Excellence — via Codecov public API
-        if self._sub_enabled("quality", "test_coverage", package):
-            try:
-                from collectors.quality.test_coverage import TestCoverageCollector
-                collector = TestCoverageCollector(forge)
-                sub_results["test_coverage"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Test coverage collection failed for {package['name']}: {e}")
-
-        # 4.3.4 Usability — documentation completeness
-        if self._sub_enabled("quality", "usability", package):
-            try:
-                from collectors.quality.usability import UsabilityCollector
-                collector = UsabilityCollector(forge)
-                sub_results["usability"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Usability collection failed for {package['name']}: {e}")
-
-        # 4.3.1 Reliability — static analysis tools, hardening, defect trend
-        if self._sub_enabled("quality", "reliability", package):
-            try:
-                from collectors.quality.reliability import ReliabilityCollector
-                collector = ReliabilityCollector(forge)
-                sub_results["reliability"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Reliability collection failed for {package['name']}: {e}")
-
-        # 4.3.6 Maintainability — tree composition, docs, refactoring activity
-        if self._sub_enabled("quality", "maintainability", package):
-            try:
-                from collectors.quality.maintainability import MaintainabilityCollector
-                collector = MaintainabilityCollector(forge)
-                sub_results["maintainability"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Maintainability collection failed for {package['name']}: {e}")
-
-        # 4.3.5 Deployment Environment Testing — CI runner OS families
-        if self._sub_enabled("quality", "deployment_environments", package):
-            try:
-                from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
-                collector = DeploymentEnvironmentCollector(forge)
-                sub_results["deployment_environments"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Deployment environment collection failed for {package['name']}: {e}")
-
-        # 4.3.2 Testing frameworks, code review coverage, tooling integration
-        if self._sub_enabled("quality", "dev_tooling", package):
-            try:
-                from collectors.quality.development_practices.dev_tooling import DevToolingCollector
-                collector = DevToolingCollector(forge)
-                sub_results["dev_tooling"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Dev tooling collection failed for {package['name']}: {e}")
-
-        # 4.3.1 Enhanced Security Analysis — CodeQL workflow presence
-        if self._sub_enabled("quality", "static_analysis", package):
-            try:
-                from collectors.quality.static_analysis import StaticAnalysisCollector
-                collector = StaticAnalysisCollector(forge)
-                sub_results["static_analysis"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Static analysis collection failed for {package['name']}: {e}")
-
-        # 4.3.8 Software Supply Chain Integrity — SBOM and build provenance
-        if self._sub_enabled("quality", "supply_chain", package):
-            try:
-                from collectors.quality.supply_chain import SupplyChainCollector
-                collector = SupplyChainCollector(forge)
-                sub_results["supply_chain"] = await collector.collect(package)
-            except Exception as e:
-                logger.warning(f"Supply chain collection failed for {package['name']}: {e}")
-
-        # Same None-guard as the ecosystem dimension's score list below:
-        # dict.get(key, 0) only substitutes the default when the key is
-        # missing, not when a collector's own percentage is None because
-        # everything it measures gapped. Excluded from the average rather
-        # than crashing sum()/len() or silently scoring a gap as 0.
-        # (sub-collector key, percentage), as in the ecosystem dimension.
-        components: List[tuple] = []
-
-        def _append_quality_pct(name: str, *keys):
-            value = sub_results[name]
-            for key in keys:
-                value = value.get(key, {}) if isinstance(value, dict) else {}
-            if isinstance(value, (int, float)):
-                components.append((name, value))
-
-        if "ci_cd" in sub_results:
-            _append_quality_pct("ci_cd", "percentage")
-        if "reproducibility" in sub_results:
-            _append_quality_pct("reproducibility", "overall_score", "percentage")
-        if "accessibility" in sub_results:
-            _append_quality_pct("accessibility", "overall_score", "percentage")
-        if sub_results.get("test_coverage", {}).get("coverage_exists"):
-            _append_quality_pct("test_coverage", "coverage_percentage")
-        if "static_analysis" in sub_results:
-            sa = sub_results["static_analysis"]
-            if sa.get("has_codeql"):
-                components.append(("static_analysis", 100))
-            elif not sa.get("not_collected"):
-                components.append(("static_analysis", 0))
-        if "dev_tooling" in sub_results:
-            _append_quality_pct("dev_tooling", "overall_score", "percentage")
-        if "deployment_environments" in sub_results:
-            _append_quality_pct("deployment_environments", "overall_score", "percentage")
-        if "usability" in sub_results:
-            _append_quality_pct("usability", "overall_score", "percentage")
-        if "maintainability" in sub_results:
-            _append_quality_pct("maintainability", "overall_score", "percentage")
-        if "reliability" in sub_results:
-            _append_quality_pct("reliability", "overall_score", "percentage")
-        if "supply_chain" in sub_results:
-            _append_quality_pct("supply_chain", "overall_score", "percentage")
-
-        scores = [value for _, value in components]
-        avg_score = sum(scores) / len(scores) if scores else 0.0
-
-        return {
-            "dimension": "quality",
-            "score": round(avg_score, 2),
-            "max_score": 100.0,
-            "sub_results": sub_results,
-            "score_components": dict(components),
-            "excluded_by_config": self._package_excluded_keys("quality", package),
-        }
-
     async def collect_all_metrics(self, package: Dict) -> Dict:
         """Collect all metrics for a package across the 3 dimensions.
 
@@ -956,10 +502,9 @@ class MetricsOrchestrator:
             f"Starting metrics collection for {package['name']} ({package['repo_url']})"
         )
 
-        # Initialize with default information in case we don't collect or there is an error
-        impact_metrics = {"dimension": "impact", "score": 0.0, "max_score": 100.0}
-        ecosystem_metrics = {"dimension": "ecosystem", "score": 0.0, "max_score": 100.0}
-        quality_metrics = {"dimension": "quality", "score": 0.0, "max_score": 100.0}
+        # Each dimension's default, kept when collection is skipped or the
+        # dimension raises.
+        results = {name: dim.empty_result() for name, dim in self.dimensions.items()}
 
         # Try to update repository metadata. This can fail if there is a network error, the URL is
         # invalid, or the repo type is not supported, in which case we do not continue with collection.
@@ -969,15 +514,8 @@ class MetricsOrchestrator:
 
         if collect:
             # Collect all 3 dimensions in parallel
-            (
-                impact_metrics,
-                ecosystem_metrics,
-                quality_metrics,
-                dependency_info,
-            ) = await asyncio.gather(
-                self.collect_impact_dimension(package),
-                self.collect_ecosystem_dimension(package),
-                self.collect_quality_dimension(package),
+            *collected, dependency_info = await asyncio.gather(
+                *(dim.collect(package) for dim in self.dimensions.values()),
                 self.collect_dependency_info(package),
                 return_exceptions=True,
             )
@@ -986,15 +524,11 @@ class MetricsOrchestrator:
                 logger.error(f"Dependency info error: {dependency_info}")
                 dependency_info = {}
 
-            # Use defaults if any exceptions
-            if isinstance(impact_metrics, Exception):
-                logger.error(f"Impact dimension error: {impact_metrics}")
-
-            if isinstance(ecosystem_metrics, Exception):
-                logger.error(f"Ecosystem dimension error: {ecosystem_metrics}")
-
-            if isinstance(quality_metrics, Exception):
-                logger.error(f"Quality dimension error: {quality_metrics}")
+            for name, result in zip(self.dimensions, collected):
+                if isinstance(result, Exception):
+                    logger.error(f"{name.capitalize()} dimension error: {result!r}")
+                else:
+                    results[name] = result
         else:
             # Loud on purpose: a repository that has been renamed or deleted
             # out from under the catalog is the F13 symptom this preflight
@@ -1003,18 +537,14 @@ class MetricsOrchestrator:
 
         # Calculate overall score (weighted average of 3 dimensions)
         overall_score = self._calculate_overall_score(
-            impact_metrics,
-            ecosystem_metrics,
-            quality_metrics,
+            results["impact"],
+            results["ecosystem"],
+            results["quality"],
         )
 
         return {
             "overall_score": overall_score,
-            "dimensions": {
-                "impact": impact_metrics,
-                "ecosystem": ecosystem_metrics,
-                "quality": quality_metrics,
-            },
+            "dimensions": results,
             "dependency_info": dependency_info,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }

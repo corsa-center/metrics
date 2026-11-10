@@ -21,7 +21,7 @@ import statistics
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import RetryingTransport, get_threshold
+from collectors.common import RetryingTransport, get_threshold
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)

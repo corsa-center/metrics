@@ -251,7 +251,7 @@ class TestReproducibilityAndAccessibilityGapRows:
 
 
 class TestScoreAggregationDoesNotCrashOnNonePercentage:
-    """The scores lists in collect_ecosystem_dimension/collect_quality_dimension
+    """The scores lists in the ecosystem and quality dimension collectors
     use dict.get(key, 0), which only substitutes the default when the key is
     *missing* -- not when a collector legitimately returns percentage: None
     for a fully-gapped result. sum()/len() over a list containing None
@@ -272,11 +272,11 @@ class TestScoreAggregationDoesNotCrashOnNonePercentage:
         # Only let "governance" (community_health.py) through, so no other
         # sub-collector makes a real network call.
         monkeypatch.setattr(
-            orchestrator, "_sub_enabled",
-            lambda group, key, package=None: key == "governance",
+            orchestrator.dimensions["ecosystem"], "sub_enabled",
+            lambda key, package=None: key == "community_health",
         )
 
-        result = asyncio.run(orchestrator.collect_ecosystem_dimension(
+        result = asyncio.run(orchestrator.dimensions["ecosystem"].collect(
             {"name": "x", "repo_url": "https://github.com/o/r", "repository": "o/r"}
         ))
         assert result["score"] == 0.0
@@ -289,11 +289,11 @@ class TestScoreAggregationDoesNotCrashOnNonePercentage:
 
         monkeypatch.setattr(reliability_mod.ReliabilityCollector, "collect", fake_collect)
         monkeypatch.setattr(
-            orchestrator, "_sub_enabled",
-            lambda group, key, package=None: key == "reliability",
+            orchestrator.dimensions["quality"], "sub_enabled",
+            lambda key, package=None: key == "reliability",
         )
 
-        result = asyncio.run(orchestrator.collect_quality_dimension(
+        result = asyncio.run(orchestrator.dimensions["quality"].collect(
             {"name": "x", "repo_url": "https://github.com/o/r", "repository": "o/r"}
         ))
         assert result["score"] == 0.0

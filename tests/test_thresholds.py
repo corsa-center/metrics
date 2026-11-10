@@ -1,4 +1,4 @@
-"""Unit tests for the threshold registry (collectors/ecosystem/base.py) and
+"""Unit tests for the threshold registry (collectors/common.py) and
 for config/thresholds.yaml staying in sync with the code that reads it.
 
 The whole point of this registry is that a threshold declared in
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from collectors.ecosystem.base import ThresholdRegistry, get_threshold
+from collectors.common import ThresholdRegistry, get_threshold
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 THRESHOLDS_YAML = REPO_ROOT / "config" / "thresholds.yaml"

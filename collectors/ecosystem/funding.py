@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yaml
 
-from collectors.ecosystem.base import (
+from collectors.common import (
     _VENDORED_DIR, COLLECTION_GAP, RepoTree, RetryingTransport, excerpt, get_threshold,
     readme_source,
 )

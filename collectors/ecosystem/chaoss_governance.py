@@ -22,7 +22,7 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, median
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import (
+from collectors.common import (
     COLLECTION_GAP, RepoTree, RetryingTransport,
 )
 from forge.interface import Forge

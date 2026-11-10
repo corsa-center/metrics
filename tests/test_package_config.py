@@ -1,5 +1,5 @@
-"""Unit tests for per-package metric config: precedence in _sub_enabled,
-_package_excluded_keys provenance, and fetching/validating a packages own
+"""Unit tests for per-package metric config: precedence in sub_enabled,
+package_excluded_keys provenance, and fetching/validating a packages own
 package configuration file.
 """
 
@@ -9,66 +9,73 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestrator import MetricsOrchestrator
 from catalog.catalog import _sanitize_package_config, Catalog
+from collectors.ecosystem.dimension import EcosystemDimensionCollector
+from collectors.quality.dimension import QualityDimensionCollector
+from orchestrator import MetricsOrchestrator
 
 
 def _orch(config=None):
     o = MetricsOrchestrator.__new__(MetricsOrchestrator)
     o.config = config or {}
-    o.ecosystem_collectors = (config or {}).get("ecosystem_collectors", {})
-    o.quality_collectors = (config or {}).get("quality_collectors", {})
     return o
+
+
+def _dims(config=None):
+    return {
+        "ecosystem": EcosystemDimensionCollector(config or {}),
+        "quality": QualityDimensionCollector(config or {}),
+    }
 
 
 class TestSubEnabledPrecedence:
     def test_package_config_narrows_global_default(self):
-        o = _orch()
+        d = _dims()
         package = {"collectors": {"ecosystem": {"funding": False}}}
-        assert o._sub_enabled("ecosystem", "funding", package) is False
-        assert o._sub_enabled("ecosystem", "licensing", package) is True
+        assert d["ecosystem"].sub_enabled("funding", package) is False
+        assert d["ecosystem"].sub_enabled("licensing", package) is True
 
     def test_global_off_wins_over_package_attempting_to_enable(self):
-        o = _orch({"ecosystem_collectors": {"licensing": False}})
+        d = _dims({"ecosystem_collectors": {"licensing": False}})
         package = {"collectors": {"ecosystem": {"licensing": True}}}
-        assert o._sub_enabled("ecosystem", "licensing", package) is False
+        assert d["ecosystem"].sub_enabled("licensing", package) is False
 
     def test_no_package_context_behaves_like_global_only(self):
-        o = _orch({"ecosystem_collectors": {"licensing": False}})
-        assert o._sub_enabled("ecosystem", "licensing") is False
-        assert o._sub_enabled("ecosystem", "engagement") is True
+        d = _dims({"ecosystem_collectors": {"licensing": False}})
+        assert d["ecosystem"].sub_enabled("licensing") is False
+        assert d["ecosystem"].sub_enabled("engagement") is True
 
     def test_groups_are_independent_under_package_config(self):
-        o = _orch()
+        d = _dims()
         package = {"collectors": {"ecosystem": {"licensing": False}}}
-        assert o._sub_enabled("ecosystem", "licensing", package) is False
-        assert o._sub_enabled("quality", "licensing", package) is True
+        assert d["ecosystem"].sub_enabled("licensing", package) is False
+        assert d["quality"].sub_enabled("licensing", package) is True
 
     def test_absent_package_config_defaults_to_enabled(self):
-        o = _orch()
-        assert o._sub_enabled("ecosystem", "funding", {}) is True
+        d = _dims()
+        assert d["ecosystem"].sub_enabled("funding", {}) is True
 
 
 class TestPackageExcludedKeys:
     def test_reports_only_package_level_exclusions(self):
-        o = _orch({"ecosystem_collectors": {"engagement": False}})
+        d = _dims({"ecosystem_collectors": {"engagement": False}})
         package = {"collectors": {"ecosystem": {"funding": False}}}
-        excluded = o._package_excluded_keys("ecosystem", package)
+        excluded = d["ecosystem"].package_excluded_keys(package)
         assert excluded == ["funding"]
         assert "engagement" not in excluded  # globally off, not a package exclusion
 
     def test_no_exclusions_returns_empty_list(self):
-        o = _orch()
-        assert o._package_excluded_keys("quality", {}) == []
+        d = _dims()
+        assert d["quality"].package_excluded_keys({}) == []
 
     def test_typo_d_key_has_no_effect_and_is_not_reported(self):
-        # "supplly_chain" isn't a real collector -- _sub_enabled would never
+        # "supplly_chain" isn't a real collector -- sub_enabled would never
         # look it up, so it must not show up as a deliberate exclusion.
-        o = _orch()
+        d = _dims()
         package = {"collectors": {"quality": {"supplly_chain": False}}}
-        assert o._package_excluded_keys("quality", package) == []
+        assert d["quality"].package_excluded_keys(package) == []
         # And the real collector it was probably meant to name is unaffected.
-        assert o._sub_enabled("quality", "supply_chain", package) is True
+        assert d["quality"].sub_enabled("supply_chain", package) is True
 
 
 class TestSanitizePackageConfig:

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from collectors.ecosystem.base import get_threshold
+from collectors.common import get_threshold
 from tests.fakes import FakeForge
 from forge.github import GitHubForge
 from collectors.ecosystem.community_health import CommunityHealthCollector
@@ -242,7 +242,7 @@ class TestCalculateScore:
 class TestDeeperLookup:
     def _run(self, collector, paths, readme=None):
         import base64
-        from collectors.ecosystem.base import RepoTree
+        from collectors.common import RepoTree
         forge = FakeForge(readme_text=readme)
         collector.forge = forge
         tree = RepoTree(forge, "o/r", paths, False)

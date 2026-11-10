@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.funding import FundingCollector
 from tests.fakes import FakeForge
 from forge.github import GitHubForge
@@ -334,7 +334,7 @@ class TestAcknowledgmentFiles:
     def test_notice_file_is_read_alongside_the_readme(self, collector):
         import base64
         from unittest.mock import MagicMock
-        from collectors.ecosystem.base import RepoTree
+        from collectors.common import RepoTree
 
         def enc(t):
             return {"content": base64.b64encode(t.encode()).decode()}
@@ -359,7 +359,7 @@ class TestAcknowledgmentFiles:
     def test_docs_landing_and_acknowledgment_pages_are_read(self, collector):
         import base64
         from unittest.mock import MagicMock
-        from collectors.ecosystem.base import RepoTree
+        from collectors.common import RepoTree
 
         def enc(t):
             return {"content": base64.b64encode(t.encode()).decode()}
@@ -385,7 +385,7 @@ class TestAcknowledgmentFiles:
 
     def test_gapped_tree_is_a_gap(self, collector):
         from unittest.mock import MagicMock
-        from collectors.ecosystem.base import COLLECTION_GAP
+        from collectors.common import COLLECTION_GAP
 
         async def fake_get(client, url, params=None):
             return None

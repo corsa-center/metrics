@@ -2,7 +2,7 @@
 
 import pytest
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.usability import UsabilityCollector, _README_SECTIONS
 from tests.fakes import FakeForge
 from forge.github import GitHubForge

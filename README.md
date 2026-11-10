@@ -83,7 +83,7 @@ metrics/
 ├── collectors/              # CASS dimension collectors
 │   ├── impact/
 │   │   ├── citation.py     # Citation metrics (✅ implemented)
-│   │   └── dimension.py    # Impact dimension
+│   │   └── dimension.py    # Impact dimension collector
 │   ├── ecosystem/
 │   │   ├── chaoss_governance.py   # 4.2.1 CoC, governance & contributor guidelines
 │   │   ├── licensing.py           # 4.2.2 Open-source licensing & FAIR compliance
@@ -92,14 +92,14 @@ metrics/
 │   │   ├── community_health.py    # 4.2.10 Project longevity & community health
 │   │   ├── openssf_badge.py       # OpenSSF best practices badge
 │   │   ├── openssf_scorecard.py   # OpenSSF scorecard
-│   │   └── dimension.py           # Ecosystem dimension aggregator
+│   │   └── dimension.py           # Ecosystem dimension: runs and averages its sub-collectors
 │   ├── quality/
 │   │   ├── development_practices/
 │   │   │   └── ci_cd.py           # 4.3.2 CI/CD development practices
 │   │   ├── reproducibility.py     # 4.3.3 Reproducibility
 │   │   ├── accessibility.py       # 4.3.5 Accessibility (portable build systems)
-│   │   └── dimension.py           # Quality dimension aggregator
-│   └── catalog_sync.py            # Catalog synchronization
+│   │   └── dimension.py           # Quality dimension: runs and averages its sub-collectors
+│   └── dimension.py               # Base class for the dimension collectors
 │
 ├── integrations/            # API integrations
 │   ├── base.py             # Base API client

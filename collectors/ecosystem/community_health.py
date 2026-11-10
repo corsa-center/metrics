@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
+from collectors.common import COLLECTION_GAP, RepoTree, RetryingTransport, get_threshold
 from forge.interface import Forge
 
 # The same documents kept deeper in the project's own documentation tree

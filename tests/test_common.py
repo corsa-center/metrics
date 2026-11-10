@@ -1,5 +1,5 @@
 """Unit tests for RepoTree, the case-insensitive whole-tree path index
-shared by collectors (collectors/ecosystem/base.py). URLs and the tree
+shared by collectors (collectors/common.py). URLs and the tree
 fetch come from the forge, so these run against GitHubForge with a mocked
 client, plus one GitLab URL check."""
 
@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from forge.github import GitHubForge
 from forge.gitlab import GitLabForge
 

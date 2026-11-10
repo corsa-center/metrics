@@ -44,7 +44,7 @@ def _no_real_network(monkeypatch):
 @pytest.fixture(autouse=True)
 def _fresh_tree_cache():
     """RepoTree.fetch caches per (platform, host, ref); tests reuse "o/r"."""
-    from collectors.ecosystem.base import _clear_tree_cache
+    from collectors.common import _clear_tree_cache
     _clear_tree_cache()
     yield
     _clear_tree_cache()

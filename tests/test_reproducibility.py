@@ -3,7 +3,7 @@
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.quality.reproducibility import (
     ReproducibilityCollector, _FILE_CHECKS, _versioning_scheme,
 )

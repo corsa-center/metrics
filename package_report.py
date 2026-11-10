@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import _THRESHOLDS_PATH, get_section_thresholds
+from collectors.common import _THRESHOLDS_PATH, get_section_thresholds
 
 DIMENSIONS = [
     ("impact", "Impact"),

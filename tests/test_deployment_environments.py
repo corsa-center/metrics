@@ -271,7 +271,7 @@ class TestCollectRunnerKinds:
     def _collect(self, workflow_text, tree_paths=()):
         import asyncio
         from unittest.mock import AsyncMock, patch
-        from collectors.ecosystem.base import RepoTree
+        from collectors.common import RepoTree
         from collectors.quality.deployment_environments import DeploymentEnvironmentCollector
         c = DeploymentEnvironmentCollector(FakeForge())
         tree = RepoTree(FakeForge(), "o/r", [".github/workflows/ci.yml", *tree_paths], truncated=False)

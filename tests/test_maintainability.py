@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from collectors.ecosystem.base import get_threshold
+from collectors.common import get_threshold
 from collectors.quality.maintainability import MaintainabilityCollector, _REFACTOR_INTENT
 from orchestrator import MetricsOrchestrator
 from package_report import render_package_report

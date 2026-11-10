@@ -259,7 +259,7 @@ class RepoTree:
 
 _ThresholdValue = Union[int, float, List[str]]
 
-_THRESHOLDS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "thresholds.yaml"
+_THRESHOLDS_PATH = Path(__file__).resolve().parent.parent / "config" / "thresholds.yaml"
 
 
 class ThresholdRegistry:

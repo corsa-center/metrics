@@ -21,7 +21,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from collectors.ecosystem.base import excerpt
+from collectors.common import excerpt
 from forge.base import COLLECTION_GAP, RetryingTransport
 from forge.interface import Forge
 

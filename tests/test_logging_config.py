@@ -50,7 +50,7 @@ class TestConfigureLogging:
         orch.config = {"logging": {"file": str(log_file), "level": "INFO"}}
         orch._configure_logging()
 
-        logging.getLogger("collectors.ecosystem.base").warning(
+        logging.getLogger("collectors.common").warning(
             "COLLECTION-GAP url=https://api.github.com/repos/o/r status=403 reason=test"
         )
         for h in logging.getLogger().handlers:

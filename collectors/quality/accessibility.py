@@ -19,7 +19,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from collectors.ecosystem.base import (
+from collectors.common import (
     _VENDORED_DIR, COLLECTION_GAP, CONTAINER_FILE_PATTERNS, RepoTree, RetryingTransport,
 )
 from forge.interface import Forge

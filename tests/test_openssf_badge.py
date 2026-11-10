@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree
+from collectors.common import COLLECTION_GAP, RepoTree
 from collectors.ecosystem.openssf_badge import OpenSSFBadgeCollector
 from tests.fakes import FakeForge
 

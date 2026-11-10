@@ -22,7 +22,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from collectors.ecosystem.base import COLLECTION_GAP, RepoTree, RetryingTransport
+from collectors.common import COLLECTION_GAP, RepoTree, RetryingTransport
 from forge.interface import Forge
 
 logger = logging.getLogger(__name__)

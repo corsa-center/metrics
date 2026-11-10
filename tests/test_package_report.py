@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from collectors.ecosystem.base import configure_threshold_overrides
+from collectors.common import configure_threshold_overrides
 from orchestrator import MetricsOrchestrator
 from package_report import (
     build_report,
@@ -175,10 +175,10 @@ class TestDimensionScoreComponents:
         monkeypatch.setattr(community_health_mod.CommunityHealthCollector, "collect", gov)
         monkeypatch.setattr(licensing_mod.LicensingCollector, "collect", lic)
         monkeypatch.setattr(
-            orchestrator, "_sub_enabled",
-            lambda group, key, package=None: key in ("community_health", "licensing"),
+            orchestrator.dimensions["ecosystem"], "sub_enabled",
+            lambda key, package=None: key in ("community_health", "licensing"),
         )
-        result = asyncio.run(orchestrator.collect_ecosystem_dimension(
+        result = asyncio.run(orchestrator.dimensions["ecosystem"].collect(
             {"name": "x", "repo_url": "https://github.com/o/r", "repository": "o/r"}
         ))
         assert result["score_components"] == {"governance": 50, "licensing": 100}
