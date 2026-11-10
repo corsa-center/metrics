@@ -80,7 +80,7 @@ class MetricsOrchestrator:
         # Turns the dimensions' raw results into the dashboard's sections
         # (formatters/); another Formatter can present them differently.
         self.formatter = DashboardFormatter()
-        # Spack package name -> collect_spack_dependencies() entry, or None
+        # Catalog repo_url -> collect_spack_dependencies() entry, or None
         # until a batch has been analyzed (or when Spack isn't available).
         self.spack_data: Optional[Dict[str, Optional[Dict]]] = None
 
@@ -321,38 +321,66 @@ class MetricsOrchestrator:
         return activity
 
     @staticmethod
-    def _spack_name(package: Dict) -> Optional[str]:
-        """The Spack package a catalog entry is matched to: its repository
-        name, lowercased."""
-        name = urlparse(package.get("repo_url") or "").path.rstrip("/").rsplit("/", 1)[-1]
-        if name.endswith(".git"):
-            name = name[:-4]
-        return name.lower() or None
+    async def _clone_spack_repos(urls: List[str], into: Path, timeout: float) -> Optional[List[str]]:
+        """Shallow clones of the package repositories at `urls`, as the
+        directories holding their repo.yaml, or None if any clone failed."""
+        paths = []
+        for i, url in enumerate(urls):
+            dest = into / f"repo{i}"
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "clone", "--quiet", "--depth", "1", url, str(dest),
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+            except (OSError, asyncio.TimeoutError) as e:
+                logger.warning(f"Cloning Spack repository {url} failed: {e!r}")
+                return None
+            if proc.returncode != 0:
+                logger.warning(f"Cloning Spack repository {url} failed: {stderr.decode(errors='replace')[-500:]}")
+                return None
+            # repo.yaml sits at the root, or under spack_repo/<namespace>/.
+            found = sorted(dest.glob("repo.yaml")) or sorted(dest.glob("spack_repo/*/repo.yaml"))
+            if not found:
+                logger.warning(f"Spack repository {url} has no repo.yaml")
+                return None
+            paths += [str(f.parent) for f in found]
+        return paths
 
     async def collect_spack_dependencies(self, packages: List[Dict]) -> Optional[Dict[str, Optional[Dict]]]:
-        """Spack's dependency data for the packages, keyed by Spack package
-        name: {name, dependencies, dependents} (see
-        tools/spack_dependencies.py), or None when Spack has no package by
-        that name. None overall when Spack isn't on PATH or the analysis
-        failed -- a gap, so the metrics files leave the `spack` key out.
+        """Spack's dependency data for the packages, keyed by repo_url:
+        {name, dependencies, dependents} for the Spack package built from
+        that repository (see tools/spack_dependencies.py), or None when
+        Spack has none. None overall when Spack isn't on PATH or the
+        analysis failed -- a gap, so the metrics files leave the `spack` key
+        out.
 
         One `spack python` run covers the whole batch, since finding a
-        package's dependents means loading every package Spack has.
+        package's dependents means loading every package Spack has. The
+        package repositories in the config's `spack.extra_repos` are
+        searched after Spack's own.
         """
         spack = shutil.which("spack")
         if spack is None:
             logger.info("spack is not on PATH; skipping Spack dependency data")
             return None
-        names = sorted({n for n in map(self._spack_name, packages) if n})
-        if not names:
+        repo_urls = sorted({p["repo_url"] for p in packages if p.get("repo_url")})
+        if not repo_urls:
             return {}
         script = Path(__file__).resolve().parent / "tools" / "spack_dependencies.py"
-        timeout = float(self.config.get("spack", {}).get("timeout", 1800))
+        spack_config = self.config.get("spack") or {}
+        timeout = float(spack_config.get("timeout", 1800))
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "spack.json"
+            # Without a repository, its packages would be recorded as not in
+            # Spack; better a gap, so the last good day's data is kept.
+            extra = await self._clone_spack_repos(spack_config.get("extra_repos") or [], Path(tmp), 300)
+            if extra is None:
+                return None
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    spack, "python", str(script), "--output", str(output), *names,
+                    spack, "python", str(script), "--output", str(output),
+                    *(arg for path in extra for arg in ("--repo", path)), *repo_urls,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
                 )
                 try:
@@ -381,9 +409,8 @@ class MetricsOrchestrator:
         entry instead of publishing a blank one.
         """
         info: Dict = {}
-        spack_name = self._spack_name(package)
-        if self.spack_data is not None and spack_name in self.spack_data:
-            info["spack"] = self.spack_data[spack_name]
+        if self.spack_data is not None and package.get("repo_url") in self.spack_data:
+            info["spack"] = self.spack_data[package["repo_url"]]
 
         forge = self._forge_for_package(package)
         ref = forge.extract_ref(package["repo_url"]) if forge else None

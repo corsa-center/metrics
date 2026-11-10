@@ -12,6 +12,8 @@ regression here fails locally instead of on the next scheduled run.
 
 import asyncio
 import json
+import re
+import subprocess
 
 import pytest
 from formatters.dashboard import DashboardFormatter
@@ -483,13 +485,13 @@ class TestDependencyInfo:
     def test_a_gap_leaves_the_key_out(self, orchestrator):
         assert self._collect(orchestrator, FakeForge(gaps={"dependency_graph"})) == {}
 
-    def test_spack_entry_matched_by_lowercased_repo_name(self, orchestrator):
+    def test_spack_entry_matched_by_repo_url(self, orchestrator):
         entry = {"name": "hdf5", "dependencies": {"zlib": {}}, "dependents": {}}
-        orchestrator.spack_data = {"hdf5": entry}
+        orchestrator.spack_data = {"https://github.com/o/HDF5": entry}
         assert self._collect(orchestrator, FakeForge())["spack"] == entry
 
     def test_not_in_spack_is_recorded_as_none(self, orchestrator):
-        orchestrator.spack_data = {"hdf5": None}
+        orchestrator.spack_data = {"https://github.com/o/HDF5": None}
         assert self._collect(orchestrator, FakeForge())["spack"] is None
 
     def test_spack_unavailable_leaves_the_key_out(self, orchestrator):
@@ -534,24 +536,51 @@ class TestSpackDependencies:
         monkeypatch.setattr("orchestrator.shutil.which", lambda _: None)
         assert self._run(orchestrator, [{"repo_url": "https://github.com/o/r"}]) is None
 
-    def test_runs_the_helper_once_for_the_batch(self, orchestrator, monkeypatch, tmp_path):
+    def _fake_spack(self, monkeypatch, tmp_path):
         # A stand-in `spack` whose `python` subcommand runs the helper's
-        # contract: write {name: entry} to --output.
+        # contract: write {repo_url: entry} to --output.
         fake = tmp_path / "spack"
         fake.write_text(
             "#!/usr/bin/env python3\n"
             "import json, sys\n"
             "args = sys.argv[3:]\n"
             "out = args[args.index('--output') + 1]\n"
-            "names = [a for a in args if a not in ('--output', out)]\n"
-            "open(out, 'w').write(json.dumps({n: None for n in names}))\n"
-            "open(sys.argv[0] + '.log', 'a').write(' '.join(names) + '\\n')\n"
+            "urls = [a for a in args if a.startswith('https://')]\n"
+            "open(out, 'w').write(json.dumps({u: None for u in urls}))\n"
+            "open(sys.argv[0] + '.log', 'a').write(' '.join(args) + '\\n')\n"
         )
         fake.chmod(0o755)
         monkeypatch.setattr("orchestrator.shutil.which", lambda _: str(fake))
-        packages = [{"repo_url": "https://github.com/HDFGroup/HDF5"}, {"repo_url": "https://gitlab.com/g/adios2.git"}]
-        assert self._run(orchestrator, packages) == {"adios2": None, "hdf5": None}
-        assert (tmp_path / "spack.log").read_text() == "adios2 hdf5\n"
+        return tmp_path / "spack.log"
+
+    def test_runs_the_helper_once_for_the_batch(self, orchestrator, monkeypatch, tmp_path):
+        log = self._fake_spack(monkeypatch, tmp_path)
+        orchestrator.config["spack"] = {}
+        packages = [{"repo_url": "https://gitlab.com/g/adios2.git"}, {"repo_url": "https://github.com/HDFGroup/HDF5"}]
+        assert self._run(orchestrator, packages) == {
+            "https://github.com/HDFGroup/HDF5": None, "https://gitlab.com/g/adios2.git": None}
+        assert log.read_text().count("\n") == 1
+        assert "--repo" not in log.read_text()
+
+    def test_extra_repos_are_cloned_and_passed(self, orchestrator, monkeypatch, tmp_path):
+        log = self._fake_spack(monkeypatch, tmp_path)
+        source = tmp_path / "scorec"
+        (source / "spack_repo" / "scorec").mkdir(parents=True)
+        (source / "spack_repo" / "scorec" / "repo.yaml").write_text("repo:\n  namespace: scorec\n")
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(source), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-q", "-m", "x"], check=True)
+        orchestrator.config["spack"] = {"extra_repos": [f"file://{source}"]}
+        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}]) == {
+            "https://github.com/SCOREC/pcms": None}
+        assert re.search(r"--repo \S+/repo0/spack_repo/scorec https://github.com/SCOREC/pcms", log.read_text())
+
+    def test_a_failed_clone_is_a_gap(self, orchestrator, monkeypatch, tmp_path):
+        log = self._fake_spack(monkeypatch, tmp_path)
+        orchestrator.config["spack"] = {"extra_repos": [f"file://{tmp_path}/missing"]}
+        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}]) is None
+        assert not log.exists()
 
     def test_failure_is_a_gap(self, orchestrator, monkeypatch, tmp_path):
         fake = tmp_path / "spack"

@@ -180,6 +180,17 @@ class TestBuildRepos:
                        "owner": {"login": "x", "isVerified": None}},
         }
 
+    def test_repo_entry_names_its_spack_package(self):
+        packages = {
+            "core": {**_package("https://github.com/SCOREC/core"), "spack": {"name": "pumi"}},
+            "absent": {**_package("https://github.com/SCOREC/absent"), "spack": None},
+            "gap": _package("https://github.com/SCOREC/gap"),
+        }
+        data = build_repos_info(packages)["data"]
+        assert data["SCOREC/core"]["spackPackage"] == "pumi"
+        assert data["SCOREC/absent"]["spackPackage"] is None
+        assert "spackPackage" not in data["SCOREC/gap"]
+
     def test_spack_keyed_by_spack_name(self):
         packages = {
             "hdf5": {**_package(), "spack": {"name": "hdf5", "dependencies": {"zlib": {}}, "dependents": {"netcdf-c": {}}}},

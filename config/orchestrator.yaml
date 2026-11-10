@@ -112,6 +112,14 @@ logging:
   file: "orchestrator.log"
   console: true
 
+# Spack dependency data (collected only when spack is on PATH)
+spack:
+  timeout: 1800             # seconds for the one `spack python` run per batch
+  # Package repositories searched after Spack's builtin one, for recipes
+  # it lacks; a builtin recipe of the same name still wins.
+  extra_repos:
+    - https://github.com/SCOREC/scorec-spack-packages.git   # pumi-pic, pcms
+
 # Threshold overrides. Open config/thresholds.yaml for the full, current
 # list of every changeable threshold and its default -- this block only
 # needs an entry for a value you want to change from what's there. Same
