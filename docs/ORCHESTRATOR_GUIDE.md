@@ -273,8 +273,11 @@ the repository: description, homepage, language, license, dates, `topics`,
   name (SCOREC/core -> `pumi`) -- else a recipe named after it. Collected
   only when `spack` is on `PATH`: one `spack python
   tools/spack_dependencies.py` run per batch covers every package in it,
-  searching Spack's builtin recipes and then any package repositories
-  listed under `spack.extra_repos` in `config/orchestrator.yaml`.
+  searching Spack's builtin recipes and then the package repositories
+  catalog entries name as `spack_repo` (a git URL, or a list) for recipes
+  builtin lacks -- SCOREC's pumi-pic and pcms. Those repositories are
+  searched for every package, since their recipes depend on other catalog
+  packages (pcms on hdf5 and adios2) and so are among their dependents.
 
 A key is left out when its lookup failed, rather than written empty.
 

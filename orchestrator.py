@@ -347,7 +347,22 @@ class MetricsOrchestrator:
             paths += [str(f.parent) for f in found]
         return paths
 
-    async def collect_spack_dependencies(self, packages: List[Dict]) -> Optional[Dict[str, Optional[Dict]]]:
+    @staticmethod
+    def _spack_repos(catalog_packages) -> List[str]:
+        """The package repositories catalog entries name in `spack_repo`
+        (a git URL, or a list of them) for recipes Spack's builtin
+        repository lacks."""
+        urls = set()
+        for package in catalog_packages:
+            value = package.get("spack_repo")
+            for url in [value] if isinstance(value, str) else value if isinstance(value, list) else []:
+                if isinstance(url, str) and url.strip():
+                    urls.add(url.strip())
+        return sorted(urls)
+
+    async def collect_spack_dependencies(
+        self, packages: List[Dict], spack_repos: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Optional[Dict]]]:
         """Spack's dependency data for the packages, keyed by repo_url:
         {name, dependencies, dependents} for the Spack package built from
         that repository (see tools/spack_dependencies.py), or None when
@@ -357,8 +372,10 @@ class MetricsOrchestrator:
 
         One `spack python` run covers the whole batch, since finding a
         package's dependents means loading every package Spack has. The
-        package repositories in the config's `spack.extra_repos` are
-        searched after Spack's own.
+        package repositories in `spack_repos` are searched after Spack's
+        own, for every package: a recipe there can depend on any package
+        (SCOREC's pcms on hdf5 and adios2), so it is one of their dependents
+        too.
         """
         spack = shutil.which("spack")
         if spack is None:
@@ -374,7 +391,7 @@ class MetricsOrchestrator:
             output = Path(tmp) / "spack.json"
             # Without a repository, its packages would be recorded as not in
             # Spack; better a gap, so the last good day's data is kept.
-            extra = await self._clone_spack_repos(spack_config.get("extra_repos") or [], Path(tmp), 300)
+            extra = await self._clone_spack_repos(spack_repos or [], Path(tmp), 300)
             if extra is None:
                 return None
             try:
@@ -547,7 +564,10 @@ class MetricsOrchestrator:
             return {}
 
         all_metrics = {}
-        self.spack_data = await self.collect_spack_dependencies([catalog[p] for p in software_list])
+        # Repositories named anywhere in the catalog, not just this batch,
+        # so a package's dependents don't depend on which batch it is in.
+        self.spack_data = await self.collect_spack_dependencies(
+            [catalog[p] for p in software_list], self._spack_repos(catalog.values()))
 
         # Packages are independent, and each one spends nearly all its time
         # waiting on the GitHub API, so they are processed in a small pool

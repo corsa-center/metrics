@@ -529,8 +529,8 @@ class TestRepoActivity:
 
 
 class TestSpackDependencies:
-    def _run(self, orchestrator, packages):
-        return asyncio.run(orchestrator.collect_spack_dependencies(packages))
+    def _run(self, orchestrator, packages, spack_repos=None):
+        return asyncio.run(orchestrator.collect_spack_dependencies(packages, spack_repos))
 
     def test_no_spack_is_a_gap(self, orchestrator, monkeypatch):
         monkeypatch.setattr("orchestrator.shutil.which", lambda _: None)
@@ -555,14 +555,13 @@ class TestSpackDependencies:
 
     def test_runs_the_helper_once_for_the_batch(self, orchestrator, monkeypatch, tmp_path):
         log = self._fake_spack(monkeypatch, tmp_path)
-        orchestrator.config["spack"] = {}
         packages = [{"repo_url": "https://gitlab.com/g/adios2.git"}, {"repo_url": "https://github.com/HDFGroup/HDF5"}]
         assert self._run(orchestrator, packages) == {
             "https://github.com/HDFGroup/HDF5": None, "https://gitlab.com/g/adios2.git": None}
         assert log.read_text().count("\n") == 1
         assert "--repo" not in log.read_text()
 
-    def test_extra_repos_are_cloned_and_passed(self, orchestrator, monkeypatch, tmp_path):
+    def test_spack_repos_are_cloned_and_passed(self, orchestrator, monkeypatch, tmp_path):
         log = self._fake_spack(monkeypatch, tmp_path)
         source = tmp_path / "scorec"
         (source / "spack_repo" / "scorec").mkdir(parents=True)
@@ -571,16 +570,26 @@ class TestSpackDependencies:
         subprocess.run(["git", "-C", str(source), "add", "."], check=True)
         subprocess.run(["git", "-C", str(source), "-c", "user.name=t", "-c", "user.email=t@t",
                         "commit", "-q", "-m", "x"], check=True)
-        orchestrator.config["spack"] = {"extra_repos": [f"file://{source}"]}
-        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}]) == {
+        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}], [f"file://{source}"]) == {
             "https://github.com/SCOREC/pcms": None}
         assert re.search(r"--repo \S+/repo0/spack_repo/scorec https://github.com/SCOREC/pcms", log.read_text())
 
     def test_a_failed_clone_is_a_gap(self, orchestrator, monkeypatch, tmp_path):
         log = self._fake_spack(monkeypatch, tmp_path)
-        orchestrator.config["spack"] = {"extra_repos": [f"file://{tmp_path}/missing"]}
-        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}]) is None
+        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}],
+                         [f"file://{tmp_path}/missing"]) is None
         assert not log.exists()
+
+    def test_spack_repos_come_from_the_catalog(self, orchestrator):
+        scorec = "https://github.com/SCOREC/scorec-spack-packages.git"
+        catalog = [
+            {"repo_url": "https://github.com/SCOREC/pcms", "spack_repo": scorec},
+            {"repo_url": "https://github.com/SCOREC/pumi-pic", "spack_repo": [scorec, " https://x/y.git "]},
+            {"repo_url": "https://github.com/HDFGroup/hdf5"},
+            {"repo_url": "https://github.com/o/bad", "spack_repo": None},
+            {"repo_url": "https://github.com/o/bad2", "spack_repo": {"git": "u"}},
+        ]
+        assert orchestrator._spack_repos(catalog) == [scorec, "https://x/y.git"]
 
     def test_failure_is_a_gap(self, orchestrator, monkeypatch, tmp_path):
         fake = tmp_path / "spack"

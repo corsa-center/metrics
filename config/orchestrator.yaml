@@ -115,10 +115,9 @@ logging:
 # Spack dependency data (collected only when spack is on PATH)
 spack:
   timeout: 1800             # seconds for the one `spack python` run per batch
-  # Package repositories searched after Spack's builtin one, for recipes
-  # it lacks; a builtin recipe of the same name still wins.
-  extra_repos:
-    - https://github.com/SCOREC/scorec-spack-packages.git   # pumi-pic, pcms
+  # A package whose recipe isn't in Spack's builtin repository names the
+  # package repository holding it as `spack_repo` in its metrics_packages
+  # config.
 
 # Threshold overrides. Open config/thresholds.yaml for the full, current
 # list of every changeable threshold and its default -- this block only
