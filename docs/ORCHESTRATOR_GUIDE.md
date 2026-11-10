@@ -171,13 +171,13 @@ The orchestrator creates several files:
 **Location:** `{output_path}/{repo}-metrics/metrics.json` (`./output` by default)
 
 The package's catalog entry (`metadata`), `stars`, `forks`, `generated_at`,
-each CASS section keyed by number under `impact`, `ecosystem` and `quality`
-(a `title` and an HTML `data` string), and the dashboard data described in
-[Dashboard Data Files](#5-dashboard-data-files).
+`config_exclusions`, the dashboard data described in
+[Dashboard Data Files](#5-dashboard-data-files), and:
 
-`formatted` holds the same `impact`, `ecosystem` and `quality` sections.
-The dashboard still reads them from the top level; once it reads
-`formatted`, the top-level copies will be dropped.
+`formatted` holds what the dashboard renders: each CASS section keyed by
+number under `impact`, `ecosystem` and `quality` (a `title` and an HTML
+`data` string). Files written before corsa-center/metrics#110 have these
+sections at the top level instead, and the dashboard falls back to them.
 
 `metrics` holds the measurements the scores and sections were computed
 from:

@@ -384,8 +384,7 @@ class TestWriteMetrics:
 
 
     def test_metrics_json_layout(self, orchestrator, tmp_path):
-        # #105: the formatted sections under `formatted` (and, until the
-        # dashboard reads them from there, at the top level too), and the
+        # #105: the formatted sections under `formatted` only, and the
         # measurements under `metrics`.
         metrics = _base_metrics(quality_sub={"ci_cd": {"percentage": 50.0, "row_evidence": {}}})
         metrics["overall_score"] = 42
@@ -393,8 +392,9 @@ class TestWriteMetrics:
         orchestrator.write_metrics(tmp_path, {"org/pkg": {}}, {"org/pkg": metrics})
         data = json.loads((tmp_path / "pkg-metrics" / "metrics.json").read_text())
         assert set(data["formatted"]) == {"impact", "ecosystem", "quality"}
-        for dim in data["formatted"]:
-            assert data["formatted"][dim] == data[dim]
+        assert data["formatted"]["quality"]["4.3.2"]["title"] == "Development Practices"
+        assert not {"impact", "ecosystem", "quality"} & set(data)
+        assert set(data["config_exclusions"]) == {"ecosystem", "quality"}
         assert data["metrics"]["overall_score"] == 42
         assert data["metrics"]["quality"] == {
             "score": 50.0, "score_components": {"ci_cd": 50.0}, "ci_cd": {"percentage": 50.0}}

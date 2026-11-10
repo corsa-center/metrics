@@ -674,15 +674,12 @@ class MetricsOrchestrator:
             try:
                 overrides = catalog[package_name].get("overrides", {})
                 section_data = self.formatter.format(metrics, overrides)
-                formatted = {dim: section_data[dim] for dim in self.dimensions}
                 dashboard_data = {
                     "package": package_name,
                     "metadata": catalog[package_name],
-                    **section_data,
-                    # The dashboard (js/catalog.js) still reads the sections
-                    # from the top level above; `formatted` is where they
-                    # will live once it reads them from there instead.
-                    "formatted": formatted,
+                    "config_exclusions": section_data["config_exclusions"],
+                    # The sections the dashboard renders (js/catalog.js).
+                    "formatted": {dim: section_data[dim] for dim in self.dimensions},
                     # The dashboard's "last updated" (js/catalog.js).
                     "generated_at": metrics.get("last_updated"),
                     # `dependencies` and `spack`, when collected.
