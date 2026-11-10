@@ -94,7 +94,7 @@ async def _probe_one(
 
 async def main(config_path: str) -> int:
     orchestrator = MetricsOrchestrator(config_path=config_path)
-    catalog = await orchestrator.load_software_catalog()
+    catalog = await orchestrator.catalog.load()
     repo_names = sorted(catalog.keys())
     if not repo_names:
         print("Catalog is empty or could not be fetched -- nothing to probe.")

@@ -148,10 +148,10 @@ class TestForgeForPackage:
 
 class TestSanitizeRepoType:
     def test_normalized_to_lowercase(self):
-        from orchestrator import _sanitize_package_config
+        from catalog.catalog import _sanitize_package_config
         assert _sanitize_package_config({"repo_type": " GitLab "})["repo_type"] == "gitlab"
 
     @pytest.mark.parametrize("bad", [None, "", 3, ["gitlab"]])
     def test_bad_values_dropped(self, bad):
-        from orchestrator import _sanitize_package_config
+        from catalog.catalog import _sanitize_package_config
         assert "repo_type" not in _sanitize_package_config({"repo_type": bad})

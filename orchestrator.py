@@ -14,7 +14,6 @@ Usage:
 
 import argparse
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -30,6 +29,7 @@ import httpx
 import re
 import yaml
 
+from catalog.catalog import Catalog
 from collectors.ecosystem.base import configure_threshold_overrides, get_threshold
 from forge.base import (
     COLLECTION_GAP,
@@ -90,9 +90,6 @@ KNOWN_COLLECTOR_KEYS = {
     },
 }
 
-# Catalog package schema
-PACKAGE_CONFIG_SCHEMA_VERSION = 1
-
 _MAIN_ROW = re.compile(r'<p(?! class)[^>]*><strong>(?!Score:)[^<]+:</strong>')
 _SCORE_LINE = re.compile(r'<p[^>]*><strong>Score:</strong>[^<]*</p>')
 
@@ -123,51 +120,6 @@ def _repo_stats(impact_sub: Dict) -> Dict:
     forge refactor carry them as "github_stats" with no platform."""
     return impact_sub.get("repo_stats") or impact_sub.get("github_stats") or {}
 
-
-def _sanitize_package_config(data: Dict) -> Dict:
-    """Coerce a package_config collectors:
-    and overrides: blocks into well-formed dicts, dropping anything that
-    isn't -- so every downstream reader can assume this without
-    re-checking. This file is hand-edited YAML so can potentially
-    leave a key present with no value (parses to None) or the wrong type
-    entirely; treating that the same as
-    the key being absent keeps this feature's "fails open" guarantee intact
-    instead of raising deep in dict-chaining code that assumes it was
-    already validated.
-    """
-    if not isinstance(data, dict):
-        return {}
-    result = dict(data)
-
-    collectors = result.get("collectors")
-    if isinstance(collectors, dict):
-        result["collectors"] = {
-            group: value
-            for group, value in collectors.items()
-            if isinstance(value, dict)
-        }
-    else:
-        result.pop("collectors", None)
-
-    overrides = result.get("overrides")
-    if isinstance(overrides, dict):
-        result["overrides"] = {
-            section: labels
-            for section, labels in overrides.items()
-            if isinstance(labels, dict)
-        }
-    else:
-        result.pop("overrides", None)
-
-    repo_type = result.get("repo_type")
-    if isinstance(repo_type, str) and repo_type.strip():
-        result["repo_type"] = repo_type.strip().lower()
-    else:
-        result.pop("repo_type", None)
-
-    return result
-
-
 class MetricsOrchestrator:
     """Orchestrates metrics collection and dashboard integration"""
 
@@ -186,7 +138,7 @@ class MetricsOrchestrator:
         # thresholds.yaml raises here, at startup, instead of being
         # silently ignored.
         configure_threshold_overrides(self.config.get("thresholds"))
-        self.catalog_url = self.config.get("catalog_url", "")
+        self.catalog = Catalog(self.config.get("catalog_url", ""), self.config.get("api_credentials", {}))
         self.collectors_enabled = self.config.get("collectors", {})
         # Fine-grained per-sub-collector toggles (see config/orchestrator.yaml).
         self.ecosystem_collectors = self.config.get("ecosystem_collectors", {})
@@ -246,39 +198,6 @@ class MetricsOrchestrator:
             return [self._resolve_env_vars(v) for v in obj]
         return obj
 
-    async def _fetch_package_config(self, package_url) -> Dict:
-        """Fetch a catalog package.
-        """
-        try:
-            headers = self._github_headers(package_url, "application/vnd.github.v3+json")
-
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(package_url, headers=headers)
-            if resp.status_code != 200:
-                return {}
-            content = base64.b64decode(resp.json().get("content", "")).decode(
-                "utf-8", "replace"
-            )
-            package = yaml.safe_load(content) or {}
-        except Exception as e:
-            logger.warning(f"Could not fetch {package_url}: {e}")
-            return {}
-
-        if not isinstance(package, dict):
-            logger.warning(f"Ignoring {package_url}: not a mapping")
-            return {}
-        if package.get("schema") != PACKAGE_CONFIG_SCHEMA_VERSION:
-            logger.warning(
-                f"Ignoring {package_url}: "
-                f"unsupported schema {package.get('schema')!r}"
-            )
-            return {}
-        missing = [k for k in ("name", "repo_type", "repo_url") if not package.get(k)]
-        if missing:
-            logger.warning(f"Ignoring {package_url}: missing required field(s) {missing}")
-            return {}
-        return _sanitize_package_config(package)
-
     @staticmethod
     def _apply_section_overrides(html: Optional[str], section_overrides: Dict[str, str]) -> Optional[str]:
         """Replace sub-metric lines in a section's HTML with config-supplied values.
@@ -318,82 +237,6 @@ class MetricsOrchestrator:
             lines.append(f"<p><strong>{sm}:</strong> {value}</p>")
         lines.append(f"<p><strong>Score:</strong> 0/{total}</p>")
         return "\n".join(lines)
-
-    def _github_headers(self, url: str, accept: str) -> Dict[str, str]:
-        """Request headers for a GitHub API call. The token is attached only
-        when `url` is on api.github.com, so a catalog_url pointed elsewhere
-        can't leak it.
-        """
-        headers = {"Accept": accept}
-        token = self._get_github_token()
-        if token and urlparse(url).hostname == "api.github.com":
-            headers["Authorization"] = f"token {token}"
-        return headers
-
-    def _fetch_catalog_files(self, url: str) -> Optional[List[Dict]]:
-        """Fetch a list of configuration files for the catalog.
-        Currently this is the contents of a directory from a GitHub URL.
-
-        Args:
-            url: URL to fetch
-
-        Returns:
-            Returns the contents in a consistent object format regardless of the content type
-            or None if the url is not valid.
-        """
-        logger.info(f"Fetching {url}")
-
-        try:
-            headers = self._github_headers(url, "application/vnd.github.object+json")
-            response = httpx.get(url, timeout=30.0, follow_redirects=True, headers=headers)
-            response.raise_for_status()
-            contents = response.json().get("entries")
-            if contents is not None:
-                return contents
-            logger.error(f"{url} does not point to a GitHub directory")
-        except Exception as e:
-            logger.error(f"Failed to fetch {url}: {e}")
-        return None
-
-    async def load_software_catalog(self) -> Dict:
-        """Load the full software catalog from the catalog_url
-        Returns: dictionary containing catalog metadata
-        """
-        if not self.catalog_url:
-            raise RuntimeError(f"No catalog URL specified")
-        catalog_files = self._fetch_catalog_files(self.catalog_url)
-        if catalog_files is None:
-            # Fail loudly: an empty catalog would let the run report success
-            # having collected nothing.
-            raise RuntimeError(f"Could not load the software catalog from {self.catalog_url}")
-        catalog = {}
-        for catalog_file in catalog_files:
-            if catalog_file.get("type") != "file":
-                continue
-            file_name = catalog_file.get("name", "")
-            if not file_name.endswith((".yaml", ".yml")):
-                logger.warning(f"Skipping catalog file {file_name}: not a .yaml/.yml file")
-                continue
-            git_url = catalog_file["git_url"]
-            package = await self._fetch_package_config(git_url)
-            if not package:
-                # One bad file shouldn't take every other package down with
-                # it; _fetch_package_config has already logged why.
-                logger.error(f"Skipping catalog file {file_name}: could not load a valid package")
-                continue
-            name = package["name"]
-            if name in catalog:
-                logger.error(
-                    f"Skipping catalog file {file_name}: package name '{name}' "
-                    f"is already used by another catalog file"
-                )
-                continue
-            catalog[name] = package
-        if not catalog:
-            # Fail loudly: an empty catalog would let the run report success
-            # having collected nothing.
-            raise RuntimeError(f"No valid packages found in the catalog at {self.catalog_url}")
-        return catalog
 
     async def prepare_software_list(
         self,
@@ -450,9 +293,11 @@ class MetricsOrchestrator:
         if repo:
             if not name:
                 raise ValueError("name is required when repo is given")
-            catalog = {name: {"name": name, "repo_url": repo, "repo_type": repo_type}}
+            if not repo_type:
+                raise ValueError("repo type is required when repo is given")
+            catalog = self.catalog.to_catalog(name, repo, repo_type)
         else:
-            catalog = await self.load_software_catalog()
+            catalog = await self.catalog.load()
 
         software_list = []
         for name, package in catalog.items():
@@ -567,11 +412,6 @@ class MetricsOrchestrator:
             for key in candidate_keys
             if toggles.get(key, True) and not self._sub_enabled(group, key, package)
         )
-
-    def _get_github_token(self) -> Optional[str]:
-        """Extract GitHub token from resolved config"""
-        token = self.config.get("api_credentials", {}).get("github", {}).get("token", "")
-        return token if token else None
 
     def _forge_for_package(self, package: Dict) -> Optional[Forge]:
         """The Forge for a package, chosen by its repo_type (see Forge.for_repo)."""
