@@ -175,6 +175,33 @@ each CASS section keyed by number under `impact`, `ecosystem` and `quality`
 (a `title` and an HTML `data` string), and the dashboard data described in
 [Dashboard Data Files](#5-dashboard-data-files).
 
+`formatted` holds the same `impact`, `ecosystem` and `quality` sections.
+The dashboard still reads them from the top level; once it reads
+`formatted`, the top-level copies will be dropped.
+
+`metrics` holds the measurements the scores and sections were computed
+from:
+
+```
+"metrics": {
+  "overall_score": 66,
+  "impact":    {"score": 75.0, "citation": {...}},
+  "ecosystem": {"score": 68.39, "score_components": {"governance": 80.0, ...},
+                "governance": {...}, "licensing": {...}, ...},
+  "quality":   {"score": 53.38, "score_components": {...},
+                "ci_cd": {...}, "test_coverage": {...}, ...}
+}
+```
+
+Each dimension has its `score`, each sub-collector's percentage in that
+average (`score_components`), and each sub-collector's result under the
+key it is stored as (`sub_results` in `collectors/<dimension>/dimension.py`).
+Evidence and each result's `package_name`, `repository` and `timestamp`
+are left out. A dimension that was turned off or skipped has only its
+`score`. A value whose lookup failed is written as `{"not_collected": true}`,
+distinct from `null` (nothing there), and a number with no finite value
+(such as the median close time when most issues are still open) as `null`.
+
 ### 2. Summary Report
 **Location:** `../output/orchestrator_summary.json`
 
