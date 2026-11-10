@@ -409,6 +409,34 @@ class TestWriteMetrics:
                                    "ecosystem": {"score": 0.0}, "quality": {"score": 0.0}}
 
 
+    def test_raw_values_json_cannot_hold_are_replaced(self, orchestrator, tmp_path):
+        # A failed first-commit lookup leaves the COLLECTION_GAP sentinel in
+        # active maintenance's result, and engagement's median close time is
+        # infinite when most issues are still open. Neither may break the
+        # write or produce JSON a browser rejects.
+        from forge.base import COLLECTION_GAP
+        metrics = _base_metrics(ecosystem_sub={
+            "maintenance": {"maintenance_indicators": {"first_commit_date": COLLECTION_GAP}},
+            "engagement": {"issue_flow": {"median_close_hours": float("inf"), "cohort_size": 3}},
+        })
+        orchestrator.write_metrics(tmp_path, {"org/pkg": {}}, {"org/pkg": metrics})
+        text = (tmp_path / "pkg-metrics" / "metrics.json").read_text()
+        data = json.loads(text, parse_constant=lambda c: pytest.fail(f"non-standard JSON constant {c}"))
+        eco = data["metrics"]["ecosystem"]
+        assert eco["maintenance"]["maintenance_indicators"]["first_commit_date"] == {"not_collected": True}
+        assert eco["engagement"]["issue_flow"] == {"median_close_hours": None, "cohort_size": 3}
+
+    def test_an_unserializable_value_fails_only_its_package(self, orchestrator, tmp_path):
+        # Anything for_metrics_json doesn't know about fails that package's
+        # write without leaving a partial file, and the others are written.
+        bad = _base_metrics(quality_sub={"ci_cd": {"details": object()}})
+        with pytest.raises(RuntimeError, match="bad/pkg"):
+            orchestrator.write_metrics(
+                tmp_path, {"bad/pkg": {}, "good/other": {}},
+                {"bad/pkg": bad, "good/other": _base_metrics()})
+        assert not (tmp_path / "pkg-metrics").exists()
+        assert json.loads((tmp_path / "other-metrics" / "metrics.json").read_text())
+
 class TestPlatformLabels:
     """Stars, forks and code scanning are labelled by the package's forge,
     so a GitLab project isn't reported as having "GitHub Stars"."""

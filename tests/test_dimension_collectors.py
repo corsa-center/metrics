@@ -196,3 +196,14 @@ class TestRawMetrics:
     def test_impact_placeholder_has_only_its_score(self):
         collector = ImpactDimensionCollector(ON)
         assert collector.raw_metrics(collector.placeholder(PACKAGE)) == {"score": 0.0}
+
+    def test_values_json_cannot_hold_are_replaced(self):
+        from forge.base import COLLECTION_GAP
+        result = {"score": float("nan"), "score_components": {"x": float("inf")},
+                  "sub_results": {"x": {"gap": COLLECTION_GAP, "neg": float("-inf"),
+                                        "pair": (1, COLLECTION_GAP), "ok": 1.5}}}
+        assert QualityDimensionCollector(ON).raw_metrics(result) == {
+            "score": None, "score_components": {"x": None},
+            "x": {"gap": {"not_collected": True}, "neg": None,
+                  "pair": [1, {"not_collected": True}], "ok": 1.5},
+        }

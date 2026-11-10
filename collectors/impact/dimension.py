@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from collectors.dimension import DimensionCollector, sub_result_metrics
+from collectors.dimension import DimensionCollector, for_metrics_json, sub_result_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class ImpactDimensionCollector(DimensionCollector):
         metrics: Dict[str, Any] = {"score": result.get("score")}
         if result.get("sub_results"):
             metrics["citation"] = sub_result_metrics(result["sub_results"])
-        return metrics
+        return for_metrics_json(metrics)
 
     def placeholder(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """The result when citations couldn't be collected: a zero score

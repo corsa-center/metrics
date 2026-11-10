@@ -198,7 +198,9 @@ average (`score_components`), and each sub-collector's result under the
 key it is stored as (`sub_results` in `collectors/<dimension>/dimension.py`).
 Evidence and each result's `package_name`, `repository` and `timestamp`
 are left out. A dimension that was turned off or skipped has only its
-`score`.
+`score`. A value whose lookup failed is written as `{"not_collected": true}`,
+distinct from `null` (nothing there), and a number with no finite value
+(such as the median close time when most issues are still open) as `null`.
 
 ### 2. Summary Report
 **Location:** `../output/orchestrator_summary.json`

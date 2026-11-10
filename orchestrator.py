@@ -690,6 +690,11 @@ class MetricsOrchestrator:
                     # The measurements the scores and sections came from.
                     "metrics": self._raw_metrics(metrics),
                 }
+                # Serialized here, before the file is opened, so a value
+                # JSON can't hold fails this package alone and leaves no
+                # half-written file. allow_nan=False: browsers' JSON.parse
+                # rejects the NaN/Infinity json.dumps would otherwise write.
+                dashboard_json = json.dumps(dashboard_data, indent=2, allow_nan=False)
             except Exception as e:
                 logger.error(f"Could not render dashboard output for {package_name}: {e!r}", exc_info=True)
                 failed.append(package_name)
@@ -708,8 +713,7 @@ class MetricsOrchestrator:
             metrics_dir.mkdir(parents=True, exist_ok=True)
 
             output_file = metrics_dir / "metrics.json"
-            with open(output_file, "w") as f:
-                json.dump(dashboard_data, f, indent=2)
+            output_file.write_text(dashboard_json)
 
             logger.info(f"Dashboard metrics written to {output_file}")
 
