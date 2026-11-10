@@ -1,0 +1,44 @@
+package_report.py
+  s_4e3949389844f1::t_a9e388af849e5c 30,348,447,508-509
+  s_4e3949389844f1::t_7832910317ba04 72-74
+formatters/dashboard/impact.py
+  s_4e3949389844f1::t_e412d069abd845 20,27,39
+formatters/dashboard/common.py
+  s_4e3949389844f1::t_e412d069abd845 60,97,148,154
+formatters/dashboard/__init__.py
+  s_4e3949389844f1::t_656a754e9e0f2e 26
+docs/METRICS_CATALOG.md
+  s_4e3949389844f1::t_9072f780c38149 20-23,587
+formatters/dashboard/ecosystem.py
+  s_4e3949389844f1::t_e412d069abd845 38,51,97,108,134,208,233-234,357,637,639-641
+  s_4e3949389844f1::t_656a754e9e0f2e 131
+tests/test_orchestrator_dashboard_transform.py
+  s_4e3949389844f1::t_9636138b3b7bfb 94,188,210,238,253,346,633,645
+tests/test_package_report.py
+  s_4e3949389844f1::t_ad157babb7be58 123-129,131-133
+  s_4e3949389844f1::t_bd93c5fc955efe 130
+config/orchestrator.yaml
+  s_4e3949389844f1::t_9072f780c38149 20
+docs/ORCHESTRATOR_GUIDE.md
+  s_4e3949389844f1::t_9072f780c38149 359
+tests/test_citation.py
+  s_4e3949389844f1::t_9636138b3b7bfb 207-208
+formatters/dashboard/quality.py
+  s_4e3949389844f1::t_e412d069abd845 29,46,54,63,84,99,123,194,210,245,279,303,335,337,339,380,398,406
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19273f1b9856fce16d59a43b6a11ca9faed8e16e",
+  "prompts": {},
+  "sessions": {
+    "s_4e3949389844f1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ceb7fc8f-5133-4c4b-ba7b-566881c935ea",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
