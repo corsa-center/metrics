@@ -495,3 +495,46 @@ class TestGoFilterUsesThePackagesLanguage:
     def test_go_entry_kept_for_a_go_repository(self):
         sub = self._collect("Go")["overall_score"]["sub_scores"]
         assert "go" in sub["installation_success"]["value"]
+
+
+class TestSpackFromOrchestratorMatch:
+    """With Spack run by the orchestrator, its match is used, not a name
+    guess (dashboard #124, metrics #113)."""
+
+    def test_match_known_to_ecosystems(self, collector):
+        collector._get_json = _FakeJson({
+            "spack.io/packages/omega-h": {"name": "omega-h", "ecosystem": "spack",
+                                          "dependent_packages_count": 1, "install_command": "spack install omega-h"},
+        })
+        trace = {}
+        rec = asyncio.run(collector._spack_from_match(None, "o/r", {"name": "omega-h", "dependent_packages": 3}, trace))
+        assert rec["name"] == "omega-h" and rec["dependent_packages"] == 3
+        assert collector._get_json.urls == [
+            "https://packages.ecosyste.ms/api/v1/registries/spack.io/packages/omega-h"]
+        assert trace == {"matched_by_spack": True, "url": "https://github.com/o/r",
+                         "names": ["omega-h"], "failed": False}
+
+    def test_recipe_outside_builtin_is_built_from_spacks_answer(self, collector):
+        collector._get_json = _FakeJson({})
+        rec = asyncio.run(collector._spack_from_match(None, "o/r", {"name": "pcms", "dependent_packages": 0}, {}))
+        assert rec["ecosystem"] == "spack" and rec["name"] == "pcms"
+        assert rec["install_command"] == "spack install pcms"
+
+    def test_not_in_spack_looks_nothing_up(self, collector):
+        collector._get_json = _FakeJson({})
+        trace = {}
+        assert asyncio.run(collector._spack_from_match(None, "o/r", None, trace)) is None
+        assert collector._get_json.urls == []
+        ev = collector._registry_evidence([], {"spack": trace})
+        assert ev["searched"][0]["paths"] == [{"path": "https://github.com/o/r"}]
+        assert ev["searched"][0]["text"].startswith("Spack's recipes")
+
+    def test_collect_uses_the_match_instead_of_the_name_lookup(self, collector):
+        collector._get_json = _FakeJson({})
+        with patch.object(collector, "_lookup_spack", new=AsyncMock()) as by_name:
+            result = asyncio.run(collector.collect({
+                "name": "core", "repo_url": "https://github.com/SCOREC/core",
+                "spack_match": {"name": "pumi", "dependent_packages": 2},
+            }))
+        by_name.assert_not_called()
+        assert "spack" in result["ecosystems"]

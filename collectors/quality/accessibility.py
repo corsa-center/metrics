@@ -132,7 +132,7 @@ class AccessibilityCollector:
                     result["has_portable_build_system"] = True
                     result["other_build"] = other
             if not result["has_container"] and tree is not COLLECTION_GAP:
-                image, e4s_names = await self._e4s_image(client, ref)
+                image, e4s_names = await self._e4s_image(client, ref, package)
                 if image:
                     result["has_container"] = True
                     result["container_image"] = image
@@ -188,7 +188,10 @@ class AccessibilityCollector:
                                              "project's own code)"}]
             container["searched"] = [{"text": "Container file paths tried first (any capitalization)",
                                       "paths": root_files("containers")}]
-            if e4s_names is not None:
+            # No names means nothing was looked for: the E4S environment
+            # couldn't be read (None), or Spack has no recipe for this
+            # repository ([]).
+            if e4s_names:
                 container["searched"].append({
                     "text": "Spack package names looked for in the E4S image environment",
                     "paths": [{"path": n} for n in e4s_names]})
@@ -198,7 +201,8 @@ class AccessibilityCollector:
             "container": {"label": "Container Availability Assessment", "evidence": container},
         }
 
-    async def _e4s_image(self, client: httpx.AsyncClient, ref: str) -> tuple:
+    async def _e4s_image(self, client: httpx.AsyncClient, ref: str,
+                         package: Optional[Dict[str, Any]] = None) -> tuple:
         """(image, names): image is "E4S container image (Spack package
         <name>)" when the project's Spack recipe is in the E4S image
         environment, else None; names are the Spack package names looked
@@ -214,13 +218,23 @@ class AccessibilityCollector:
                 if resp.status_code != 200:
                     return None, None
                 _e4s_specs = set(_E4S_SPEC.findall(resp.text.split("specs:", 1)[-1]))
-        # The same recipe lookup the collaboration collector uses: the repo's
-        # own name, then recipes whose URLs are this repository.
-        from collectors.ecosystem.collaboration import CollaborationCollector
-        owner, _, repo = ref.rpartition("/")
-        names = [repo.lower()] + await CollaborationCollector(self.forge)._main_spack_recipe(
-            client, owner, repo)
-        names = list(dict.fromkeys(names))
+        if package is not None and "spack_match" in package:
+            # The orchestrator ran Spack, which matched this repository to
+            # its recipe, or found it has none (then there's nothing to
+            # look for in the image).
+            match = package["spack_match"]
+            if match is None:
+                names = []
+            else:
+                names = [match["name"]]
+        else:
+            # The same recipe lookup the collaboration collector uses: the
+            # repo's own name, then recipes whose URLs are this repository.
+            from collectors.ecosystem.collaboration import CollaborationCollector
+            owner, _, repo = ref.rpartition("/")
+            names = [repo.lower()] + await CollaborationCollector(self.forge)._main_spack_recipe(
+                client, owner, repo)
+            names = list(dict.fromkeys(names))
         for name in names:
             if name in _e4s_specs:
                 return f"E4S container image (Spack package {name})", names

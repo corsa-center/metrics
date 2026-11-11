@@ -433,6 +433,35 @@ class MetricsOrchestrator:
                 logger.warning(f"Spack dependency analysis failed: {e!r}")
                 return None
 
+    def _with_spack_match(self, package: Dict) -> Dict:
+        """The package as the collectors see it, with this batch's Spack
+        match added as `spack_match`.
+
+        Three cases, which the collectors tell apart:
+          - no `spack_match` key: Spack wasn't analyzed (a run without
+            Spack), so collectors fall back to looking the package up by name;
+          - `spack_match` is None: Spack has no recipe for this repository;
+          - `spack_match` is {"name", "dependent_packages"}: the recipe
+            Spack matched, and how many Spack packages depend on it.
+
+        Returns a copy, because the package itself is written out as
+        metrics.json's `metadata` and this shouldn't appear there.
+        """
+        repo_url = package.get("repo_url")
+        if self.spack_data is None or repo_url not in self.spack_data:
+            return package
+
+        entry = self.spack_data[repo_url]
+        if entry:
+            dependents = entry.get("dependents") or {}
+            spack_match = {"name": entry["name"], "dependent_packages": len(dependents)}
+        else:
+            spack_match = None
+
+        package_for_collectors = dict(package)
+        package_for_collectors["spack_match"] = spack_match
+        return package_for_collectors
+
     async def collect_dependency_info(self, package: Dict) -> Dict:
         """The package's `dependencies` (the forge's dependency graph) and
         `spack` (its Spack dependencies and dependents, from this batch's
@@ -482,9 +511,11 @@ class MetricsOrchestrator:
         dependency_info: Dict = {}
 
         if collect:
-            # Collect all 3 dimensions in parallel
+            # Collect all 3 dimensions in parallel. The collectors get a copy
+            # of the package with this batch's Spack match added.
+            collector_package = self._with_spack_match(package)
             *collected, dependency_info = await asyncio.gather(
-                *(dim.collect(package) for dim in self.dimensions.values()),
+                *(dim.collect(collector_package) for dim in self.dimensions.values()),
                 self.collect_dependency_info(package),
                 return_exceptions=True,
             )

@@ -202,6 +202,16 @@ class TestE4SContainerImage:
             "E4S container image (Spack package tau)", ["tau2", "tau"])
         assert asyncio.run(c._e4s_image(None, "anlsys/aml"))[0] == "E4S container image (Spack package aml)"
 
+    def test_spack_match_is_used_when_spack_ran(self, monkeypatch):
+        from collectors.quality import accessibility
+        from collectors.ecosystem import collaboration
+        monkeypatch.setattr(accessibility, "_e4s_specs", {"pumi"})
+        monkeypatch.setattr(collaboration, "_spack_by_repo", {})  # no name guess needed
+        c = accessibility.AccessibilityCollector(GitHubForge())
+        assert asyncio.run(c._e4s_image(None, "SCOREC/core", {"spack_match": {"name": "pumi"}})) == (
+            "E4S container image (Spack package pumi)", ["pumi"])
+        assert asyncio.run(c._e4s_image(None, "o/r", {"spack_match": None})) == (None, [])
+
     def test_package_not_in_e4s_is_not(self, monkeypatch):
         from collectors.quality import accessibility
         monkeypatch.setattr(accessibility, "_e4s_specs", {"tau"})

@@ -108,9 +108,18 @@ class CollaborationCollector:
         # What each lookup searched, for the report's evidence lines.
         lookups: Dict[str, Dict[str, Any]] = {"repository": {}, "spack": {}, "conda": {}, "audit": {}}
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            # When the orchestrator ran Spack, it has already matched this
+            # repository to its recipe (or found it has none); otherwise the
+            # recipe is looked for by name.
+            if "spack_match" in package:
+                spack_lookup = self._spack_from_match(
+                    client, ref, package["spack_match"], lookups["spack"])
+            else:
+                spack_lookup = self._lookup_spack(client, repo, owner, lookups["spack"])
+
             by_repo, spack, conda, source = await asyncio.gather(
                 self._lookup_by_repository(client, ref, lookups["repository"]),
-                self._lookup_spack(client, repo, owner, lookups["spack"]),
+                spack_lookup,
                 self._lookup_conda_forge(client, owner, repo, lookups["conda"]),
                 self._source_dependents(client, owner, repo, lookups["audit"]),
                 return_exceptions=True,
@@ -201,6 +210,38 @@ class CollaborationCollector:
         if not isinstance(data, list):
             return []
         return [self._normalize(p) for p in data if p.get("ecosystem") and p.get("name")]
+
+    async def _spack_from_match(
+        self, client: httpx.AsyncClient, ref: str, match: Optional[Dict[str, Any]], trace: Dict,
+    ) -> Optional[Dict[str, Any]]:
+        """The Spack package the orchestrator matched to this repository by
+        running Spack itself (tools/spack_dependencies.py): by the URLs its
+        recipe fetches from, searching builtin and the catalog's spack_repo
+        repositories. None when Spack has none -- then nothing is looked up.
+
+        ecosyste.ms supplies the registry record when it knows the package;
+        a recipe outside builtin (SCOREC's pcms) it doesn't, so the record
+        is built from what Spack reported.
+        """
+        trace["matched_by_spack"] = True
+        trace["url"] = f"https://{self.forge.host}/{ref}"
+        trace["names"] = []
+        trace["failed"] = False
+        if match is None:
+            return None
+        name = match["name"]
+        trace["names"].append(name)
+        data = await self._get_json(client, f"{_PACKAGES_API}/registries/spack.io/packages/{quote(name)}")
+        if isinstance(data, dict) and data.get("name"):
+            record = self._normalize(data)
+        else:
+            record = self._normalize({"ecosystem": "spack", "name": name,
+                                      "install_command": f"spack install {name}"})
+        # ecosyste.ms's Spack dependents lag Spack's own (AMReX 2 vs 6), so
+        # take the larger, as _lookup_spack does.
+        spack_count = match.get("dependent_packages") or 0
+        record["dependent_packages"] = max(record["dependent_packages"], spack_count)
+        return record
 
     async def _lookup_spack(
         self, client: httpx.AsyncClient, repo: str, owner: Optional[str] = None,
@@ -420,12 +461,18 @@ class CollaborationCollector:
                                      "whose repository URL is",
                              "paths": [{"path": by_repo["url"]}]})
         spack = lookups.get("spack", {})
-        if "spack" not in ecosystems and spack.get("names") and not spack.get("failed"):
-            places = list(spack["names"])
-            if spack.get("by_download_url"):
-                places.append("any recipe whose homepage or download URL is this repository")
-            searched.append({"text": "Spack recipes looked for by name",
-                             "paths": [{"path": p} for p in places]})
+        if "spack" not in ecosystems:
+            if spack.get("matched_by_spack"):
+                # The orchestrator ran Spack and it has no recipe for this repository.
+                searched.append({"text": "Spack's recipes (builtin, and any spack_repo in the catalog) checked "
+                                         "for one whose homepage, url or git is, or that is named after",
+                                 "paths": [{"path": spack.get("url") or "this repository"}]})
+            elif spack.get("names") and not spack.get("failed"):
+                places = list(spack["names"])
+                if spack.get("by_download_url"):
+                    places.append("any recipe whose homepage or download URL is this repository")
+                searched.append({"text": "Spack recipes looked for by name",
+                                 "paths": [{"path": p} for p in places]})
         conda = lookups.get("conda", {})
         if "conda" not in ecosystems and conda.get("names") and not conda.get("failed"):
             # A same-named package that doesn't point back here is the one
