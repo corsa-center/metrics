@@ -169,7 +169,7 @@ class TestFetchPackageConfig:
 class TestLoadSoftwareCatalog:
     def _load(self, entries, packages):
         c = Catalog("https://api.github.com/repos/o/r/contents/package_config",)
-        c._fetch_catalog_files = MagicMock(return_value=entries)
+        c._fetch_catalog_files = AsyncMock(return_value=entries)
         c._fetch_package_config = AsyncMock(side_effect=lambda url: packages[url])
         return asyncio.run(c.load())
 

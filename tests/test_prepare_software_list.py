@@ -140,7 +140,7 @@ class TestCatalogFetchFailure:
     def test_unreachable_catalog_raises_instead_of_returning_empty(self, orch):
         # An empty dict made a scheduled run report success with 0 packages.
         orch.catalog = Catalog()
-        orch.catalog._fetch_catalog_files=MagicMock(return_value=None)
+        orch.catalog._fetch_catalog_files = AsyncMock(return_value=None)
         orch.catalog.catalog_url = "https://github.com/HDFGroup/hdf5"
         with pytest.raises(RuntimeError, match="software catalog"):
             asyncio.run(orch.prepare_software_list())
