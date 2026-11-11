@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from catalog import catalog as catalog_module
-from catalog.catalog import Catalog, _get, _rate_limit_wait
+from catalog.catalog import Catalog, _rate_limit_wait, _wait_limit_get
 
 URL = "https://api.github.com/repos/o/r/contents/package_config"
 
@@ -60,7 +60,7 @@ def sleeps(monkeypatch):
 def _run_get(transport):
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-            return await _get(client, URL, {})
+            return await _wait_limit_get(client, URL, {})
     return asyncio.run(go())
 
 

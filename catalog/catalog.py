@@ -39,7 +39,7 @@ def _rate_limit_wait(response: httpx.Response) -> Optional[float]:
     return None
 
 
-async def _get(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> httpx.Response:
+async def _wait_limit_get(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> httpx.Response:
     """GET, waiting out a GitHub rate limit once if it resets within
     MAX_RATE_LIMIT_WAIT. A collect run starting soon after another can find
     the hourly quota spent; failing then wasted the run."""
@@ -181,7 +181,7 @@ class Catalog:
         try:
             headers = self._github_headers(url, "application/vnd.github.object+json")
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                response = await _get(client, url, headers)
+                response = await _wait_limit_get(client, url, headers)
             if response.is_error:
                 # GitHub's reason and quota, so a failed run says whether it
                 # was a rate limit or a permission problem.
@@ -210,7 +210,7 @@ class Catalog:
             headers = self._github_headers(package_url, "application/vnd.github.v3+json")
 
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await _get(client, package_url, headers)
+                resp = await _wait_limit_get(client, package_url, headers)
             if resp.status_code != 200:
                 return {}
             content = base64.b64decode(resp.json().get("content", "")).decode(
