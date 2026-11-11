@@ -17,14 +17,14 @@ def section_4_1_1(ctx: Context) -> Optional[str]:
         # with no citations most needs.
         formal = sub_metrics.get("formal_citations", {})
         if formal.get("not_collected"):
-            citation_lines.append('<p><strong>Formal Citations:</strong> Not yet collected</p>')
+            citation_lines.append('<p><strong>Formal Citations:</strong> Unavailable this run</p>')
         elif formal.get("raw_value") is not None:
             citation_lines.append(
                 f'<p><strong>Formal Citations:</strong> {formal["raw_value"]:,}</p>'
             )
         informal = sub_metrics.get("informal_mentions", {})
         if informal.get("not_collected"):
-            citation_lines.append('<p><strong>Informal Mentions:</strong> Not yet collected</p>')
+            citation_lines.append('<p><strong>Informal Mentions:</strong> Unavailable this run</p>')
         elif (informal.get("raw_value") or 0) > 0:
             citation_lines.append(
                 f'<p><strong>Informal Mentions:</strong> {informal["raw_value"]:,}</p>'
@@ -36,7 +36,7 @@ def section_4_1_1(ctx: Context) -> Optional[str]:
         # under a name that claims more than it measures.
         dois = sub_metrics.get("doi_resolutions", {})
         if dois.get("not_collected"):
-            citation_lines.append('<p><strong>DOI Resolutions:</strong> Not yet collected</p>')
+            citation_lines.append('<p><strong>DOI Resolutions:</strong> Unavailable this run</p>')
         elif (dois.get("raw_value") or 0) > 0:
             citation_lines.append(
                 f'<p><strong>DOI Resolutions:</strong> {dois["raw_value"]:,}</p>'

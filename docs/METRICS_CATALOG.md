@@ -17,8 +17,10 @@ is measured"). For a project's own results, that report also shows, for rows
 whose collector records it, what was found and in which file, and where the
 collector looked when it found nothing.
 
-**Legend:** ✅ collected · 🔲 rendered as "Not yet collected" · ⬜ whole section
-is a stub
+**Legend:** ✅ collected · 🔲 rendered as "Not yet implemented" · ⬜ whole section
+is a stub. A collected sub-metric whose lookup failed in a run, or whose
+collector is turned off, renders "Unavailable this run"; one that was looked
+up and found nothing shows 0 or ✗.
 
 Each collected sub-metric below now lists a **Meets threshold when** column —
 the value it's checked against today. Framed as a threshold rather than
@@ -582,7 +584,7 @@ quality_collectors:
 
 Omitted keys default to `true`, so deleting a block runs everything. Disabling
 a sub-collector skips its API calls and drops it from the dimension average
-rather than scoring it zero; the sections it feeds render "Not yet collected".
+rather than scoring it zero; the sections it feeds render "Unavailable this run".
 Turning off `active_maintenance` also empties 4.2.10 and 4.3.6, which are
 derived from it.
 

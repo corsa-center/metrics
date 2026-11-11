@@ -57,7 +57,7 @@ def sub_row(sub: Dict, key: str) -> str:
         # Reported, but neither a pass nor a fail -- no mark.
         return f'<p><strong>{label}:</strong> {info.get("value", "Not applicable")}</p>'
     if not info or info.get("not_collected"):
-        return f'<p><strong>{label}:</strong> Not yet collected</p>'
+        return f'<p><strong>{label}:</strong> Unavailable this run</p>'
     mark = "✓" if info.get("passing") else "✗"
     row = f'<p><strong>{label}:</strong> {info.get("value", "N/A")} {mark}</p>'
     detail = info.get("detail")
@@ -94,7 +94,7 @@ def rescore_section(html: Optional[str]) -> Optional[str]:
     """Recompute a section's "Score: X/Y" line from its rendered rows.
 
     X is the rows marked ✓; Y is the rows marked ✓ or ✗. A row with no
-    mark -- "Not yet collected", a gap, a config "N/A", a sample too thin
+    mark -- "Unavailable this run", a gap, a config "N/A", a sample too thin
     to judge -- is neither a pass nor a fail, so it is left out of Y.
     Sections used to hard-code Y as their full row count, so 4.2.7, 4.2.9
     and 4.3.4 read 0/5, 1/5 and 2/5 for packages that passed every row
@@ -145,13 +145,13 @@ def apply_section_overrides(html: Optional[str], section_overrides: Dict[str, st
 def build_stub_section(section_num: str, overrides: Dict[str, str]) -> str:
     """Build a placeholder HTML block for a section with no collector yet.
 
-    Sub-metrics default to 'Not yet collected' unless an override is provided.
+    Sub-metrics default to 'Not yet implemented' unless an override is provided.
     """
     submetrics = SECTION_SUBMETRICS.get(section_num, [])
     total = len(submetrics)
     lines = []
     for sm in submetrics:
-        value = overrides.get(sm, "Not yet collected")
+        value = overrides.get(sm, "Not yet implemented")
         lines.append(f"<p><strong>{sm}:</strong> {value}</p>")
     lines.append(f"<p><strong>Score:</strong> 0/{total}</p>")
     return "\n".join(lines)

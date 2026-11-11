@@ -91,7 +91,7 @@ class TestChaossCategoryScoresGapHandling:
         })
         result = DashboardFormatter().format(metrics, {})
         section_data = result["ecosystem"]["4.2.1"]["data"]
-        assert "Not collected" in section_data
+        assert "Unavailable this run" in section_data
         assert "Documentation Usability" in section_data
 
 
@@ -185,7 +185,7 @@ class TestRescoreSection:
             "<p><strong>A:</strong> x ✓</p>",
             '<p class="sub-detail">detail ✓</p>',
             "<p><strong>B:</strong> y ✗</p>",
-            "<p><strong>C:</strong> Not yet collected</p>",
+            "<p><strong>C:</strong> Unavailable this run</p>",
             "<p><strong>D:</strong> N/A</p>",
             "<p><strong>Score:</strong> 1/4</p>",
         ])
@@ -207,7 +207,7 @@ class TestStaticAnalysisGapNotShownAsConfirmedFail:
         result = DashboardFormatter().format(metrics, {})
         section_431 = result["quality"]["4.3.1"]["data"]
         assert "No CodeQL workflow found" not in section_431
-        assert "Not yet collected" in section_431
+        assert "Unavailable this run" in section_431
 
     def test_confirmed_no_codeql_still_renders_as_a_real_negative(self, orchestrator):
         metrics = _base_metrics(quality_sub={
@@ -235,7 +235,7 @@ class TestReproducibilityAndAccessibilityGapRows:
         result = DashboardFormatter().format(metrics, {})
         section = result["quality"]["4.3.3"]["data"]
         assert "FAIR4RS Compliance Assessment:</strong> ✗" not in section
-        assert "FAIR4RS Compliance Assessment:</strong> Not yet collected" in section
+        assert "FAIR4RS Compliance Assessment:</strong> Unavailable this run" in section
 
     def test_accessibility_gapped_category_is_not_a_confirmed_fail(self, orchestrator):
         metrics = _base_metrics(quality_sub={
@@ -250,7 +250,7 @@ class TestReproducibilityAndAccessibilityGapRows:
         result = DashboardFormatter().format(metrics, {})
         section = result["quality"]["4.3.5"]["data"]
         assert "Portable Build System Detection:</strong> ✗" not in section
-        assert "Portable Build System Detection:</strong> Not yet collected" in section
+        assert "Portable Build System Detection:</strong> Unavailable this run" in section
 
 
 class TestScoreAggregationDoesNotCrashOnNonePercentage:
@@ -343,7 +343,7 @@ class TestChaossScoreNone:
             "chaoss_activity": {"overall_score": {
                 "score": None, "max_score": 100, "status": "not_collected", "category_scores": {}}}})
         section = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.1"]["data"]
-        assert "<p><strong>CHAOSS Governance Metrics:</strong> Not yet collected</p>" in section
+        assert "<p><strong>CHAOSS Governance Metrics:</strong> Unavailable this run</p>" in section
 
     def test_one_failing_package_does_not_drop_the_others(self, orchestrator, tmp_path, monkeypatch):
         real = orchestrator.formatter.format
@@ -630,7 +630,7 @@ class TestSubDetailRendering:
             "overall_score": {"max_score": 2},
         }})
         data = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.1"]["data"]
-        assert "Governance: Not yet collected" in data
+        assert "Governance: Unavailable this run" in data
         assert "Contributing Guidelines: Not found" in data
 
 
@@ -642,7 +642,7 @@ class TestMaintainabilityWithoutMaintenanceData:
         }}}})
         data = DashboardFormatter().format(metrics, {})["quality"]["4.3.6"]["data"]
         assert "Advanced Complexity Analysis:</strong> 10 source files ✓" in data
-        assert "Knowledge Distribution Analysis:</strong> Not yet collected" in data
+        assert "Knowledge Distribution Analysis:</strong> Unavailable this run" in data
         # Rescored from the marks shown: only the one measured row counts.
         assert "Score:</strong> 1/1" in data
 

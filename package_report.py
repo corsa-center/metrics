@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from collectors.common import _THRESHOLDS_PATH, get_section_thresholds
+from formatters.dashboard import SECTIONS
 
 DIMENSIONS = [
     ("impact", "Impact"),
@@ -68,6 +69,9 @@ COLLECTOR_LABELS = {
 # what passes. Section headings there are "### 4.2.8 Financial Sustainability".
 METRICS_CATALOG = Path(__file__).parent / "docs" / "METRICS_CATALOG.md"
 METRICS_CATALOG_URL = "https://github.com/corsa-center/metrics/blob/main/docs/METRICS_CATALOG.md"
+# Sections nothing collects yet (as opposed to one with no data this run).
+_UNIMPLEMENTED_SECTIONS = {sec.number for secs in SECTIONS.values() for sec in secs if sec.build is None}
+
 _CATALOG_HEADING = re.compile(r"^### (\d+\.\d+\.\d+) (.+?)\s*$", re.M)
 
 # Rows whose dashboard label differs from their thresholds.yaml key.
@@ -341,6 +345,7 @@ def build_report(
                 "number": number,
                 "title": section.get("title", ""),
                 "collected": bool(section.get("data")),
+                "implemented": number not in _UNIMPLEMENTED_SECTIONS,
                 "score": score,
                 "methodology": methodology.get(number),
                 "rows": rows,
@@ -439,7 +444,7 @@ def render_html(report: Dict) -> str:
         '<span class="pass">✓ met</span> and <span class="fail">✗ not met</span> compare '
         "the measured value with the threshold listed under it. "
         '<span class="unscored">Not scored</span> rows were reported but not judged — not '
-        "yet collected, not applicable, or too little data — and are left out of the "
+        "yet implemented, unavailable this run, not applicable, or too little data — and are left out of the "
         "section score, which is ✓ rows out of ✓ and ✗ rows. Grey lines under a row are "
         "the evidence it was based on; where a collector records it, they also say "
         "what was <b>found</b> and where, and <b>where it looked</b>. Each section's "
@@ -500,7 +505,8 @@ def render_html(report: Dict) -> str:
                 f'{esc(sec["title"])}{score}{how}</h3>'
             )
             if not sec["collected"]:
-                out.append('<p class="muted">Not yet collected.</p>')
+                out.append('<p class="muted">Unavailable this run.</p>' if sec.get("implemented", True)
+                           else '<p class="muted">Not yet implemented.</p>')
             else:
                 out.append('<ul class="rows">')
                 for row in sec["rows"]:
