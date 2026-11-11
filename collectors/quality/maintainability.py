@@ -250,7 +250,7 @@ class MaintainabilityCollector:
             ):
                 docs.append(f)
 
-        large_file_bytes = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
+        large_file_bytes = get_threshold("quality/maintainability", "Advanced Complexity Analysis", "large_file_bytes")
         sizes = [f["size"] for f in source]
         large = [s for s in sizes if s > large_file_bytes]
         largest = sorted(source, key=lambda f: (-f["size"], f["path"]))[:_LARGE_FILES_SHOWN]
@@ -285,8 +285,8 @@ class MaintainabilityCollector:
         depth = comp.get("max_depth", 0)
         manageable = (
             source_files > 0
-            and large_share <= get_threshold("4.3.6", "Advanced Complexity Analysis", "max_large_file_share")
-            and depth <= get_threshold("4.3.6", "Advanced Complexity Analysis", "max_tree_depth")
+            and large_share <= get_threshold("quality/maintainability", "Advanced Complexity Analysis", "max_large_file_share")
+            and depth <= get_threshold("quality/maintainability", "Advanced Complexity Analysis", "max_tree_depth")
         )
         sub["complexity_analysis"] = {
             "label": "Advanced Complexity Analysis",
@@ -308,7 +308,7 @@ class MaintainabilityCollector:
             "value": f"{comp.get('test_files', 0):,} test files for "
                      f"{source_files:,} source files ({test_ratio:.2f} ratio){approx}"
                      if source_files else "No source files identified",
-            "passing": test_ratio >= get_threshold("4.3.6", "Code Quality Assessment"),
+            "passing": test_ratio >= get_threshold("quality/maintainability", "Code Quality Assessment"),
         }
 
         doc_ratio = comp.get("doc_files", 0) / source_files if source_files else 0.0
@@ -318,7 +318,7 @@ class MaintainabilityCollector:
             "value": f"{comp.get('doc_files', 0):,} documentation files "
                      f"({doc_ratio:.2f} ratio)"
                      + (f"; {', '.join(generators)}" if generators else ""),
-            "passing": bool(generators) or doc_ratio >= get_threshold("4.3.6", "Documentation Quality Evaluation"),
+            "passing": bool(generators) or doc_ratio >= get_threshold("quality/maintainability", "Documentation Quality Evaluation"),
         }
 
         share = refactor.get("share")
@@ -328,7 +328,7 @@ class MaintainabilityCollector:
                      f"{refactor.get('sampled', 0)} recent commits"
                      if refactor.get("sampled") else "No commits sampled",
             "detail": "; ".join(refactor.get("examples", [])) or None,
-            "passing": share is not None and share >= get_threshold("4.3.6", "Refactoring and Evolution Tracking"),
+            "passing": share is not None and share >= get_threshold("quality/maintainability", "Refactoring and Evolution Tracking"),
         }
 
         # An empty tree is as likely a failed fetch as an empty repository,
@@ -364,7 +364,7 @@ class MaintainabilityCollector:
     def _tree_evidence(self, comp: Dict, ref: Optional[str]) -> Dict[str, Dict]:
         """For the report: which files the tree-based rows rest on, and what
         each looked for and didn't find."""
-        large_file_bytes = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
+        large_file_bytes = get_threshold("quality/maintainability", "Advanced Complexity Analysis", "large_file_bytes")
         largest = comp.get("largest_sources", [])
         # The files over the size limit are the ones to split; with none, the
         # largest shows how much room is left.

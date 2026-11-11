@@ -3,11 +3,15 @@
 Every metric the framework collects, organized by the section numbering of the
 **CASS Sustainability Metrics Report v3**. Each section lists the sub-metrics
 named by the report, whether the framework fills them today, and where the data comes from.
+The framework names each metric by a path, `<dimension>/<metric>`, given
+under each heading; configuration (thresholds, per-package overrides) and
+`metrics.json` use the path, and the section number is for reading against
+the report.
 
 The report defines three dimensions — **4.1 Impact**, **4.2 Sustainability**,
 **4.3 Quality** — and 19 sections beneath them. Sub-metric names below are the
-report's own; they are also the keys used by the `../package_config` override
-files and by `SECTION_SUBMETRICS` in [`formatters/dashboard/common.py`](../formatters/dashboard/common.py).
+report's own; they are also the labels used by the `../package_config` override
+files and by `SECTIONS` in [`formatters/dashboard/__init__.py`](../formatters/dashboard/__init__.py).
 
 > [!NOTE]
 > Throughout the metrics collection framework and sustainability dashboard, we refer to 'Ecosystem' in place of the CASS 'Sustainability' dimension.
@@ -72,6 +76,7 @@ supplies overrides, in which case it renders those values against a 0/N score.
 ## 4.1 Impact
 
 ### 4.1.1 Software Citation and Adoption
+**Path:** `impact/citation_and_adoption`
 **Collector:** [`../collectors/impact/citation.py`](../collectors/impact/citation.py)
 
 This section renders its own labels rather than the report's five sub-metric
@@ -90,6 +95,7 @@ counts (or, for Citation Score, a computed composite), not a pass/fail bar.
 | Citation Score | ✅ | computed |
 
 ### 4.1.2 Field Research Impact
+**Path:** `impact/field_research`
 **Collector:** none — ⬜ stub
 
 AI-Enhanced Publication Analysis · Comprehensive Institutional Tracking ·
@@ -102,6 +108,7 @@ literature plus facility web scraping; see the "Hard" tier in
 ## 4.2 Ecosystem
 
 ### 4.2.1 Codes of Conduct, Governance, and Contributor Guidelines
+**Path:** `ecosystem/governance`
 **Collectors:** [`community_health.py`](../collectors/ecosystem/community_health.py),
 [`chaoss_governance.py`](../collectors/ecosystem/chaoss_governance.py),
 [`openssf_badge.py`](../collectors/ecosystem/openssf_badge.py),
@@ -127,6 +134,7 @@ no list of upper/lower variants catches, and the file was invisible. The root,
 case-insensitively — fewer requests as well as more hits.
 
 ### 4.2.2 Open-Source Licensing and FAIR Compliance
+**Path:** `ecosystem/licensing`
 **Collectors:** [`licensing.py`](../collectors/ecosystem/licensing.py) (Enhanced
 License Detection, OSI License Validation),
 [`fair_licensing.py`](../collectors/ecosystem/fair_licensing.py) (the other
@@ -149,6 +157,7 @@ also being fixed at source so GitHub classifies it directly; the fallback stays
 for every other project with a modified licence.)
 
 ### 4.2.3 Active Maintenance
+**Path:** `ecosystem/active_maintenance`
 **Collector:** [`active_maintenance.py`](../collectors/ecosystem/active_maintenance.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -161,6 +170,7 @@ for every other project with a modified licence.)
 | Contributor Abandonment Forecasting | ✅ | departure rate ≤50% (unmeasurable if there's no prior-year contributor history to compare against) | contributors active in the prior 52 weeks who committed nothing in the last 52, from `/stats/contributors` |
 
 ### 4.2.4 Engagement
+**Path:** `ecosystem/engagement`
 **Collector:** [`engagement.py`](../collectors/ecosystem/engagement.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -188,6 +198,7 @@ within a week separates the portfolio meaningfully instead — HDF5 43%,
 ADIOS2 53%, zfp 93%.
 
 ### 4.2.5 Outreach
+**Path:** `ecosystem/outreach`
 **Collector:** [`outreach.py`](../collectors/ecosystem/outreach.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -207,6 +218,7 @@ ADIOS2 53%, zfp 93%.
 > recent commits exceed the 10-page pagination cap.
 
 ### 4.2.6 Welcomeness
+**Path:** `ecosystem/welcomeness`
 **Collector:** [`welcomeness.py`](../collectors/ecosystem/welcomeness.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -220,6 +232,7 @@ ADIOS2 53%, zfp 93%.
 | Decision-Making Visibility | ✅ | ≥2 of: Discussions, wiki, Pages, roadmap doc, meeting notes, decision records, governance doc | `has_discussions` / `has_wiki` / `has_pages` plus roadmap, meeting notes, decision records, governance doc |
 
 ### 4.2.7 Collaboration
+**Path:** `ecosystem/collaboration`
 **Collector:** [`collaboration.py`](../collectors/ecosystem/collaboration.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -253,6 +266,7 @@ repositories (zfp: 111 repos from
 only 9 packages); both are real evidence of ecosystem integration.
 
 ### 4.2.8 Financial Sustainability
+**Path:** `ecosystem/financial_sustainability`
 **Collector:** [`funding.py`](../collectors/ecosystem/funding.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -269,6 +283,7 @@ only 9 packages); both are real evidence of ecosystem integration.
 > organizations instead of its actual 3.
 
 ### 4.2.9 Institutional & Organizational Support
+**Path:** `ecosystem/institutional_support`
 **Collector:** [`funding.py`](../collectors/ecosystem/funding.py) — shares
 4.2.8's contributor-affiliation pass rather than fetching it twice.
 
@@ -281,6 +296,7 @@ only 9 packages); both are real evidence of ecosystem integration.
 | Institutional Policy Analysis | 🔲 | — | not visible from the repository |
 
 ### 4.2.10 Project Longevity and Community Health
+**Path:** `ecosystem/project_longevity`
 **Collector:** none of its own — derived in the dashboard formatter (`formatters/dashboard/ecosystem.py`)
 ([`../orchestrator.py`](../orchestrator.py)) from data `active_maintenance.py`
 already fetched for 4.2.3. Costs **zero additional API calls**.
@@ -312,6 +328,7 @@ creation (zfp, by one day), so the repo date is sometimes the longer span.
 ## 4.3 Quality
 
 ### 4.3.1 Reliability and Robustness
+**Path:** `quality/reliability`
 **Collectors:** [`test_coverage.py`](../collectors/quality/test_coverage.py),
 [`static_analysis.py`](../collectors/quality/static_analysis.py),
 [`reliability.py`](../collectors/quality/reliability.py)
@@ -344,6 +361,7 @@ render "No Codecov data found" rather than a number. Coveralls was evaluated
 and rejected — its public JSON endpoint returns HTTP 403 to non-browser clients.
 
 ### 4.3.2 Development Practices
+**Path:** `quality/development_practices`
 **Collectors:** [`ci_cd.py`](../collectors/quality/development_practices/ci_cd.py),
 [`dev_tooling.py`](../collectors/quality/development_practices/dev_tooling.py),
 [`openssf_badge.py`](../collectors/ecosystem/openssf_badge.py)
@@ -357,6 +375,7 @@ and rejected — its public JSON endpoint returns HTTP 403 to non-browser client
 | Community Contribution Facilitation | ✅ | OpenSSF Best Practices badge progress = 100% (the *passing* level) | proxy — the report's own metric needs data this framework doesn't have another source for. A badge registered at 0% gets the repository scan for its criteria, like no badge |
 
 ### 4.3.3 Reproducibility
+**Path:** `quality/reproducibility`
 **Collector:** [`reproducibility.py`](../collectors/quality/reproducibility.py)
 
 | Sub-metric | Status | Meets threshold when | Source |
@@ -374,6 +393,7 @@ that couldn't be measured at all (every candidate path gapped) is dropped from
 both the score and its weight, not counted as 0.
 
 ### 4.3.4 Usability
+**Path:** `quality/usability`
 **Collectors:** [`usability.py`](../collectors/quality/usability.py),
 [`collaboration.py`](../collectors/ecosystem/collaboration.py)
 
@@ -396,6 +416,7 @@ Installation Success reuses the 4.2.7 registry lookup rather than querying
 ecosyste.ms a second time for the same answer.
 
 ### 4.3.5 Accessibility
+**Path:** `quality/accessibility`
 **Collectors:** [`accessibility.py`](../collectors/quality/accessibility.py),
 [`deployment_environments.py`](../collectors/quality/deployment_environments.py)
 
@@ -408,6 +429,7 @@ ecosyste.ms a second time for the same answer.
 | Deployment Environment Testing | ✅ | ≥2 distinct OS families across CI runner labels (GitHub-hosted labels, and the OS labels of self-hosted runners); no mark when it falls short and some CI runs on runners whose OS the configuration doesn't state (hardware-labelled self-hosted runners, a matrix variable with no standard labels in the file, GitLab CI, Jenkins, Travis, Azure, CircleCI, Buildkite) | [`deployment_environments.py`](../collectors/quality/deployment_environments.py) |
 
 ### 4.3.6 Maintainability and Understandability
+**Path:** `quality/maintainability`
 **Collector:** [`maintainability.py`](../collectors/quality/maintainability.py),
 plus the bus factor reused from `active_maintenance.py`.
 
@@ -439,6 +461,7 @@ most of this portfolio — HDF5 alone has ~24,500. Sampling 300 commits rather t
 threshold is indistinguishable from noise.
 
 ### 4.3.7 Performance and Efficiency
+**Path:** `quality/performance`
 **Collector:** none — ⬜ stub
 
 Performance Benchmarking Integration · Environmental Impact Assessment ·
@@ -451,6 +474,7 @@ All ten require running benchmarks on target hardware, profiling
 (Valgrind/Darshan/RAPL/NVML), or domain expertise to interpret.
 
 ### 4.3.8 Software Supply Chain Integrity
+**Path:** `quality/supply_chain`
 **Collector:** [`supply_chain.py`](../collectors/quality/supply_chain.py)
 
 | Sub-metric | Status | Meets threshold when | Source |

@@ -113,7 +113,7 @@ class TestKeywordGroups:
 
 class TestStaleness:
     def test_three_year_boundary(self, collector):
-        assert get_threshold("4.2.1", "Governance Effectiveness Assessment", "stale_days") == 1095
+        assert get_threshold("ecosystem/governance", "Governance Effectiveness Assessment", "stale_days") == 1095
 
 
 def _found(path):

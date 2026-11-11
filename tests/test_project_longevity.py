@@ -47,7 +47,7 @@ def _render(maintenance):
         "dimensions": {"ecosystem": {"sub_results": {"maintenance": maintenance}}}
     }
     out = DashboardFormatter().format(metrics, {})
-    return out["ecosystem"]["4.2.10"]["data"]
+    return out["ecosystem"]["project_longevity"]["data"]
 
 
 class TestSectionShape:

@@ -90,7 +90,7 @@ class TestChaossCategoryScoresGapHandling:
             }
         })
         result = DashboardFormatter().format(metrics, {})
-        section_data = result["ecosystem"]["4.2.1"]["data"]
+        section_data = result["ecosystem"]["governance"]["data"]
         assert "Unavailable this run" in section_data
         assert "Documentation Usability" in section_data
 
@@ -120,7 +120,7 @@ class TestScoreLineUsesDynamicMaxScore:
             )}}
         })
         result = DashboardFormatter().format(metrics, {})
-        assert "Score:</strong> 2/5" in result["ecosystem"]["4.2.5"]["data"]
+        assert "Score:</strong> 2/5" in result["ecosystem"]["outreach"]["data"]
 
     def test_outreach_fully_gapped_score_renders_as_text_not_none(self, orchestrator):
         metrics = _base_metrics(ecosystem_sub={
@@ -130,15 +130,15 @@ class TestScoreLineUsesDynamicMaxScore:
             }}
         })
         result = DashboardFormatter().format(metrics, {})
-        assert "None/0" not in result["ecosystem"]["4.2.5"]["data"]
-        assert "Score:</strong> Not collected" in result["ecosystem"]["4.2.5"]["data"]
+        assert "None/0" not in result["ecosystem"]["outreach"]["data"]
+        assert "Score:</strong> Not collected" in result["ecosystem"]["outreach"]["data"]
 
     def test_missing_sub_score_is_not_rendered_as_a_fail(self, orchestrator):
         metrics = _base_metrics(ecosystem_sub={
             "welcomeness": {"overall_score": {"score": 1, "max_score": 1,
                                               "sub_scores": _rows(["decision_making_visibility"])}}
         })
-        data = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.6"]["data"]
+        data = DashboardFormatter().format(metrics, {})["ecosystem"]["welcomeness"]["data"]
         assert "✗" not in data
         assert "Score:</strong> 1/1" in data
 
@@ -151,8 +151,8 @@ class TestScoreLineUsesDynamicMaxScore:
             )}}
         })
         result = DashboardFormatter().format(metrics, {})
-        assert "Score:</strong> 3/4" in result["ecosystem"]["4.2.8"]["data"]
-        assert "Score:</strong> 1/1" in result["ecosystem"]["4.2.9"]["data"]
+        assert "Score:</strong> 3/4" in result["ecosystem"]["financial_sustainability"]["data"]
+        assert "Score:</strong> 1/1" in result["ecosystem"]["institutional_support"]["data"]
 
     def test_collaboration_and_usability_exclude_uncollected_rows(self, orchestrator):
         collab = _rows(["advanced_dependency_analysis", "installation_success"],
@@ -165,15 +165,15 @@ class TestScoreLineUsesDynamicMaxScore:
             quality_sub={"usability": {"overall_score": {"score": 1, "sub_scores": usab}}},
         )
         result = DashboardFormatter().format(metrics, {})
-        assert "Score:</strong> 1/2" in result["ecosystem"]["4.2.7"]["data"]
-        assert "Score:</strong> 2/2" in result["quality"]["4.3.4"]["data"]
+        assert "Score:</strong> 1/2" in result["ecosystem"]["collaboration"]["data"]
+        assert "Score:</strong> 2/2" in result["quality"]["usability"]["data"]
 
     def test_institutional_support_gap_does_not_render_as_confirmed_zero(self, orchestrator):
         metrics = _base_metrics(ecosystem_sub={
             "funding": {"overall_score": {"score": 2, "max_score": 3, "sub_scores": _rows(
                 [], [], ["institutional_support"])}}
         })
-        section_429 = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.9"]["data"]
+        section_429 = DashboardFormatter().format(metrics, {})["ecosystem"]["institutional_support"]["data"]
         assert "0/5" not in section_429
         assert "Score:</strong> Not collected" in section_429
 
@@ -205,7 +205,7 @@ class TestStaticAnalysisGapNotShownAsConfirmedFail:
             "static_analysis": {"has_codeql": False, "not_collected": True},
         })
         result = DashboardFormatter().format(metrics, {})
-        section_431 = result["quality"]["4.3.1"]["data"]
+        section_431 = result["quality"]["reliability"]["data"]
         assert "No CodeQL workflow found" not in section_431
         assert "Unavailable this run" in section_431
 
@@ -215,7 +215,7 @@ class TestStaticAnalysisGapNotShownAsConfirmedFail:
             "static_analysis": {"has_codeql": False},
         })
         result = DashboardFormatter().format(metrics, {})
-        assert "No CodeQL workflow found" in result["quality"]["4.3.1"]["data"]
+        assert "No CodeQL workflow found" in result["quality"]["reliability"]["data"]
 
 
 class TestReproducibilityAndAccessibilityGapRows:
@@ -233,7 +233,7 @@ class TestReproducibilityAndAccessibilityGapRows:
             },
         })
         result = DashboardFormatter().format(metrics, {})
-        section = result["quality"]["4.3.3"]["data"]
+        section = result["quality"]["reproducibility"]["data"]
         assert "FAIR4RS Compliance Assessment:</strong> ✗" not in section
         assert "FAIR4RS Compliance Assessment:</strong> Unavailable this run" in section
 
@@ -248,7 +248,7 @@ class TestReproducibilityAndAccessibilityGapRows:
             },
         })
         result = DashboardFormatter().format(metrics, {})
-        section = result["quality"]["4.3.5"]["data"]
+        section = result["quality"]["accessibility"]["data"]
         assert "Portable Build System Detection:</strong> ✗" not in section
         assert "Portable Build System Detection:</strong> Unavailable this run" in section
 
@@ -313,7 +313,7 @@ class TestUnmeasuredRowsCarryNoMark:
                 "semantic_versioning": {},
             },
         }})
-        section = DashboardFormatter().format(metrics, {})["quality"]["4.3.3"]["data"]
+        section = DashboardFormatter().format(metrics, {})["quality"]["reproducibility"]["data"]
         assert "<p><strong>Environment Management:</strong> ✓</p>" in section
         assert "spack.yaml" in section
 
@@ -323,7 +323,7 @@ class TestUnmeasuredRowsCarryNoMark:
             "contributor_activity": {}, "score": {}, "channels": {"found": []},
             "abandonment": {"measurable": False},
         }})
-        section = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.3"]["data"]
+        section = DashboardFormatter().format(metrics, {})["ecosystem"]["active_maintenance"]["data"]
         row = [l for l in section.split("\n") if "Contributor Abandonment" in l][0]
         assert "✗" not in row and "needs two years" in row
 
@@ -331,7 +331,7 @@ class TestUnmeasuredRowsCarryNoMark:
         from collectors.ecosystem.collaboration import CollaborationCollector
         score = CollaborationCollector(FakeForge())._calculate_score([])
         metrics = _base_metrics(ecosystem_sub={"collaboration": {"overall_score": score, "registries": []}})
-        section = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.7"]["data"]
+        section = DashboardFormatter().format(metrics, {})["ecosystem"]["collaboration"]["data"]
         row = [l for l in section.split("\n") if "Collaboration Network" in l][0]
         assert "✗" not in row and "not audited" in row
 
@@ -342,7 +342,7 @@ class TestChaossScoreNone:
             "governance": {"effectiveness": {}},
             "chaoss_activity": {"overall_score": {
                 "score": None, "max_score": 100, "status": "not_collected", "category_scores": {}}}})
-        section = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.1"]["data"]
+        section = DashboardFormatter().format(metrics, {})["ecosystem"]["governance"]["data"]
         assert "<p><strong>CHAOSS Governance Metrics:</strong> Unavailable this run</p>" in section
 
     def test_one_failing_package_does_not_drop_the_others(self, orchestrator, tmp_path, monkeypatch):
@@ -394,7 +394,7 @@ class TestWriteMetrics:
         orchestrator.write_metrics(tmp_path, {"org/pkg": {}}, {"org/pkg": metrics})
         data = json.loads((tmp_path / "pkg-metrics" / "metrics.json").read_text())
         assert set(data["formatted"]) == {"impact", "ecosystem", "quality"}
-        assert data["formatted"]["quality"]["4.3.2"]["title"] == "Development Practices"
+        assert data["formatted"]["quality"]["development_practices"]["title"] == "Development Practices"
         assert not {"impact", "ecosystem", "quality"} & set(data)
         assert set(data["config_exclusions"]) == {"ecosystem", "quality"}
         assert data["metrics"]["overall_score"] == 42
@@ -451,23 +451,23 @@ class TestPlatformLabels:
 
     def test_gitlab_stars_and_forks(self, orchestrator):
         result = self._impact(orchestrator, {"repo_stats": {"stars": 12, "forks": 3, "platform": "GitLab"}})
-        section = result["impact"]["4.1.1"]["data"]
+        section = result["impact"]["citation_and_adoption"]["data"]
         assert "GitLab Stars:</strong> 12" in section and "GitLab Forks:</strong> 3" in section
         assert "GitHub" not in section
 
     def test_results_stored_before_the_rename_still_render(self, orchestrator):
         result = self._impact(orchestrator, {"github_stats": {"stars": 5, "forks": 1}})
-        assert "GitHub Stars:</strong> 5" in result["impact"]["4.1.1"]["data"]
+        assert "GitHub Stars:</strong> 5" in result["impact"]["citation_and_adoption"]["data"]
 
     def test_gitlab_sast_rendering(self, orchestrator):
         found = _base_metrics(quality_sub={"reliability": {}, "static_analysis": {
             "has_codeql": True, "scanner": "GitLab SAST", "workflow_file": ".gitlab-ci.yml",
             "workflow_url": "https://gitlab.example.com/g/p/-/blob/HEAD/.gitlab-ci.yml"}})
-        assert "GitLab SAST enabled" in DashboardFormatter().format(found, {})["quality"]["4.3.1"]["data"]
+        assert "GitLab SAST enabled" in DashboardFormatter().format(found, {})["quality"]["reliability"]["data"]
         missing = _base_metrics(quality_sub={"reliability": {}, "static_analysis": {
             "has_codeql": False, "scanners_checked": "CodeQL or GitLab SAST"}})
         assert ("No CodeQL or GitLab SAST workflow found"
-                in DashboardFormatter().format(missing, {})["quality"]["4.3.1"]["data"])
+                in DashboardFormatter().format(missing, {})["quality"]["reliability"]["data"])
 
 
 class TestDependencyInfo:
@@ -617,7 +617,7 @@ class TestSubDetailRendering:
                 "passing": False, "detail": ["a==1 (PyPI)", "b==2 (PyPI)"],
             },
         }}})
-        data = DashboardFormatter().format(metrics, {})["quality"]["4.3.8"]["data"]
+        data = DashboardFormatter().format(metrics, {})["quality"]["supply_chain"]["data"]
         assert '<p class="sub-detail">a==1 (PyPI), b==2 (PyPI)</p>' in data
         assert "['" not in data
 
@@ -629,7 +629,7 @@ class TestSubDetailRendering:
             "contributing_guidelines": {"exists": False},
             "overall_score": {"max_score": 2},
         }})
-        data = DashboardFormatter().format(metrics, {})["ecosystem"]["4.2.1"]["data"]
+        data = DashboardFormatter().format(metrics, {})["ecosystem"]["governance"]["data"]
         assert "Governance: Unavailable this run" in data
         assert "Contributing Guidelines: Not found" in data
 
@@ -640,12 +640,12 @@ class TestMaintainabilityWithoutMaintenanceData:
             "complexity_analysis": {"label": "Advanced Complexity Analysis", "value": "10 source files",
                                     "passing": True},
         }}}})
-        data = DashboardFormatter().format(metrics, {})["quality"]["4.3.6"]["data"]
+        data = DashboardFormatter().format(metrics, {})["quality"]["maintainability"]["data"]
         assert "Advanced Complexity Analysis:</strong> 10 source files ✓" in data
         assert "Knowledge Distribution Analysis:</strong> Unavailable this run" in data
         # Rescored from the marks shown: only the one measured row counts.
         assert "Score:</strong> 1/1" in data
 
     def test_neither_source_leaves_the_section_empty(self, orchestrator):
-        data = DashboardFormatter().format(_base_metrics(), {})["quality"]["4.3.6"]["data"]
+        data = DashboardFormatter().format(_base_metrics(), {})["quality"]["maintainability"]["data"]
         assert "Advanced Complexity Analysis" not in (data or "")

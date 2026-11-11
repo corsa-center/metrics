@@ -174,9 +174,10 @@ The package's catalog entry (`metadata`), `stars`, `forks`, `generated_at`,
 `config_exclusions`, the dashboard data described in
 [Dashboard Data Files](#5-dashboard-data-files), and:
 
-`formatted` holds what the dashboard renders: each CASS section keyed by
-number under `impact`, `ecosystem` and `quality` (a `title` and an HTML
-`data` string). Files written before corsa-center/metrics#110 have these
+`formatted` holds what the dashboard renders: each metric under its path,
+so `ecosystem/licensing` is `formatted["ecosystem"]["licensing"]`, with a
+`title`, its `path`, its CASS report section `number` (null for a metric
+that isn't in the report) and an HTML `data` string. Files written before corsa-center/metrics#110 have these
 sections at the top level instead, and the dashboard falls back to them.
 
 `metrics` holds the measurements the scores and sections were computed
@@ -250,8 +251,9 @@ lines come from an `evidence` entry a collector puts beside a row's `label`
 "notes": [{text}], "searched": [{text, paths}]}`; an item with `unless_met` is
 left off a ✓ row), on a sub-score or, for rows the dashboard formatter
 builds itself, in a `row_evidence` block. An entry whose row renders in
-another dimension's section names it with a `section` key beside the label
-(Installation Success Tracking, from collaboration, in 4.3.4). The dashboard
+another dimension's section names that metric's path with a `section` key
+beside the label (Installation Success Tracking, from collaboration, in
+`quality/usability`). The dashboard
 ignores evidence and
 `metrics.json` doesn't carry it. See `../package_report.py`.
 
@@ -354,10 +356,16 @@ until the two match.
 
 The dashboard's sections are built from those results by the dashboard
 formatter in `formatters/dashboard/`, which has one module per dimension and
-one function per section (`section_4_2_1` and so on). A section's rows come
-from its function. Its title, and whether an uncollected section falls back
-to "Not yet implemented" rows, come from `SECTIONS` in
-`formatters/dashboard/__init__.py`. The orchestrator calls the formatter
+one function per metric (`format_licensing` and so on). Each metric is named
+by a path, `<dimension>/<metric>` (`ecosystem/licensing`), and `SECTIONS` in
+`formatters/dashboard/__init__.py` is the one list of them: its path, title,
+function, sub-metric labels, whether an uncollected metric falls back to
+"Not yet implemented" rows, and its CASS report section number. The path is
+the key for its thresholds, per-package overrides, `metrics.json`'s
+`formatted` block and its anchor in `report.html`. The number is only shown
+to readers and used to link to the report, so a metric that isn't in the
+report can be added with no number: give it a path, a function and a
+`SECTIONS` entry. The orchestrator calls the formatter
 through the `Formatter` interface (`formatters/base.py`), so another
 presentation of the same results can be added as another `Formatter`.
 
@@ -375,7 +383,7 @@ metric_weights:
 Every sub-metric's pass/fail decision (the ✓/✗ shown on the dashboard) is
 governed by a value in [`../config/thresholds.yaml`](../config/thresholds.yaml) --
 that file **is** the full, current list of every changeable threshold and
-its default, organized by CASS report section number and the exact
+its default, organized by metric path and the exact
 sub-metric label, with an inline comment explaining each one.
 ([METRICS_CATALOG.md](METRICS_CATALOG.md)'s "Meets threshold when" column
 shows the same values in prose, for cross-reference against the report's
@@ -387,12 +395,12 @@ section/label(/param) structure from `../config/thresholds.yaml` into a
 
 ```yaml
 thresholds:
-  "4.3.1":
+  quality/reliability:
     Test Coverage Excellence: 70       # was 80 -- override a plain number
-  "4.3.2":
+  quality/development_practices:
     CI/CD Effectiveness Assessment:
       max_cycle_time_hours: 72         # override one param, others keep their default
-  "4.2.10":
+  ecosystem/project_longevity:
     Community Health Trends:
       - stable                         # override a set-membership list
       - increasing

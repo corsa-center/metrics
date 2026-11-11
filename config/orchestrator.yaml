@@ -128,9 +128,9 @@ spack:
 # being silently ignored. Left empty; uncomment to override, e.g.:
 #
 # thresholds:
-#   "4.2.3":
+#   ecosystem/active_maintenance:
 #     Release Pattern Assessment: 2          # require 2 releases/year, not 1
-#   "4.3.2":
+#   quality/development_practices:
 #     CI/CD Effectiveness Assessment:
 #       max_cycle_time_hours: 48             # tighten from the 168h default
 thresholds: {}

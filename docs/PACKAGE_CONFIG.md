@@ -58,7 +58,7 @@ collectors:
     supply_chain: false      # stop the 4.3.8 collector from running for this repo
 
 overrides:
-  "4.2.8":
+  ecosystem/financial_sustainability:
     NIH R50 Award Tracking: "N/A — not US-funded"
 ```
 
@@ -71,10 +71,12 @@ overrides:
   be re-enabled here. Boolean only.
 - **`overrides`** rewrites the displayed text of a specific sub-metric row,
   whether that row was actually collected or is part of a "not yet collected"
-  stub. Keys are section numbers; values map the exact sub-metric label (as
-  it appears in the rendered output, or the canonical label from
-  `SECTION_SUBMETRICS` in `formatters/dashboard/common.py` for a fully-stubbed section) to
-  replacement text. 
+  stub. Keys are metric paths (`ecosystem/financial_sustainability` for
+  CASS section 4.2.8; each section's path is under its heading in
+  [METRICS_CATALOG.md](METRICS_CATALOG.md)); values map the exact sub-metric
+  label (as it appears in the rendered output, or the canonical label listed
+  in `SECTIONS` in `formatters/dashboard/__init__.py` for a fully-stubbed
+  section) to replacement text.
 - These don't imply each other. Disabling a collector via `collectors` does not
   by itself produce a visible reason -- the section (or the rows only that
   collector fed) simply goes quiet, exactly like a global disable. If you want

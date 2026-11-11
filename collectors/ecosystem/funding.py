@@ -497,7 +497,7 @@ class FundingCollector:
         sub["funding_documentation"] = doc_entry
 
         orgs = affiliations.get("organizations", [])
-        affil_passing = len(orgs) >= get_threshold("4.2.8", "Institutional Affiliation Tracking")
+        affil_passing = len(orgs) >= get_threshold("ecosystem/financial_sustainability", "Institutional Affiliation Tracking")
         affil_entry: Dict[str, Any] = {
             "label": "Institutional Affiliation Tracking",
             "value": f"{len(orgs)} organizations across "
@@ -532,7 +532,7 @@ class FundingCollector:
         source_count = len(platforms) + len(awards) + sum(
             1 for g in acknowledged if g["value"] not in award_agencies
         )
-        portfolio_passing = source_count >= get_threshold("4.2.8", "Funding Portfolio Analysis")
+        portfolio_passing = source_count >= get_threshold("ecosystem/financial_sustainability", "Funding Portfolio Analysis")
         portfolio_entry: Dict[str, Any] = {
             "label": "Funding Portfolio Analysis",
             "value": f"{source_count} distinct funding source(s)",

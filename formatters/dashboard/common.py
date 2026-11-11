@@ -5,32 +5,7 @@ every section."""
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-
-
-# Sub-metric labels per section (CASS Sustainability Metrics Report v3)
-SECTION_SUBMETRICS: Dict[str, List[str]] = {
-    "4.1.1": ["Enhanced Citations and Mentions", "Improved DOI Tracking", "Comprehensive Citation Metadata", "Advanced Dependency Analysis", "AI-Enhanced Training Detection"],
-    "4.1.2": ["AI-Enhanced Publication Analysis", "Comprehensive Institutional Tracking", "Impact Narrative Extraction"],
-    "4.2.1": ["Enhanced Document Detection", "Governance Keyword Analysis", "OpenSSF Badge Integration", "CHAOSS Governance Metrics", "Governance Effectiveness Assessment"],
-    "4.2.2": ["Enhanced License Detection", "Automated FAIR4RS Assessment", "OSI License Validation", "License Exception Handling", "FAIR Metadata Assessment"],
-    "4.2.3": ["Commit Activity Pattern Analysis", "Maintenance Mode Indicator Detection", "Activity Trend Monitoring", "Release Pattern Assessment", "Multi-Channel Communication Activity", "Contributor Abandonment Forecasting"],
-    "4.2.4": ["Response Time Tracking", "Issue Resolution Analysis", "Pull Request Flow Assessment", "Support Request Closure Analysis", "Engagement Quality Metrics", "Communication Pattern Analysis", "Community Participation Assessment"],
-    "4.2.5": ["New Contributor Tracking", "Contributor Retention Analysis", "Contributor Lifecycle Mapping", "Contribution Type Diversity", "Good First Issue Effectiveness", "External Event Participation", "Training Material Integration", "Onboarding Infrastructure Assessment"],
-    "4.2.6": ["CHAOSS Community Experience Metrics", "Response Quality and Tone Analysis", "Communication Sentiment Analysis", "Contributor Journey Mapping", "Language and Communication Review", "Leadership Role Representation", "Decision-Making Visibility"],
-    "4.2.7": ["Advanced Dependency Analysis", "Cross-project Reference Detection", "Interoperability Assessment", "Collaboration Network Analysis", "Standards Compliance Tracking"],
-    "4.2.8": ["Enhanced Funding Documentation Analysis", "Institutional Affiliation Tracking", "NIH R50 Award Tracking", "Corporate Sponsorship Detection", "Funding Portfolio Analysis"],
-    "4.2.9": ["RSE Position Detection", "Institutional Support Tracking", "Career Development Indicators", "NIH R50 Award Integration", "Institutional Policy Analysis"],
-    "4.2.10": ["Comprehensive Activity Analysis", "Contributor Viability Assessment", "Maintenance Mode Detection", "Community Health Trends", "Project Lifecycle Assessment"],
-    "4.3.1": ["Advanced Static Analysis", "Enhanced Security Analysis", "CERT Guidelines Compliance", "Test Coverage Excellence", "Reliability Trend Analysis"],
-    "4.3.2": ["CI/CD Effectiveness Assessment", "Testing Framework Excellence", "Code Review Quality Analysis", "Development Tool Integration", "Community Contribution Facilitation"],
-    "4.3.3": ["FAIR4RS Compliance Assessment", "Containerization Excellence", "Version Control Best Practices", "Environment Management", "Reproducibility Documentation"],
-    "4.3.4": ["User Experience Assessment", "Documentation Completeness Analysis", "Accessibility Feature Detection", "Installation Success Tracking", "Usage Analytics Integration"],
-    "4.3.5": ["Portable Build System Detection", "Container Availability Assessment", "Architecture Compatibility Analysis", "Platform Documentation Evaluation", "Deployment Environment Testing"],
-    "4.3.6": ["Advanced Complexity Analysis", "Code Quality Assessment", "Documentation Quality Evaluation", "Knowledge Distribution Analysis", "Refactoring and Evolution Tracking"],
-    "4.3.7": ["Performance Benchmarking Integration", "Environmental Impact Assessment", "Resource Utilization Analysis", "Scalability Assessment", "Optimization Practice Evaluation", "Memory Efficiency Analysis", "I/O Performance Profiling", "Algorithmic Complexity Assessment", "Power Measurement Integration", "Performance Portability Assessment"],
-    "4.3.8": ["SBOM Detection", "Build Provenance", "Dependency Vulnerability Posture", "Dependency Freshness"],
-}
+from typing import Dict, Optional, Sequence
 
 
 @dataclass
@@ -142,12 +117,11 @@ def apply_section_overrides(html: Optional[str], section_overrides: Dict[str, st
     return rescore_section('\n'.join(new_lines))
 
 
-def build_stub_section(section_num: str, overrides: Dict[str, str]) -> str:
-    """Build a placeholder HTML block for a section with no collector yet.
+def build_stub_section(submetrics: Sequence[str], overrides: Dict[str, str]) -> str:
+    """Build a placeholder HTML block for a metric with no collector yet.
 
     Sub-metrics default to 'Not yet implemented' unless an override is provided.
     """
-    submetrics = SECTION_SUBMETRICS.get(section_num, [])
     total = len(submetrics)
     lines = []
     for sm in submetrics:

@@ -426,7 +426,7 @@ class DeploymentEnvironmentCollector:
         wall of text that says nothing the family list doesn't already say.
         """
         names = sorted(detected)
-        passing = len(names) >= get_threshold("4.3.5", "Deployment Environment Testing")
+        passing = len(names) >= get_threshold("quality/accessibility", "Deployment Environment Testing")
         if names:
             value = f"{len(names)} environment{'s' if len(names) != 1 else ''}: " + ", ".join(names)
         else:
@@ -436,7 +436,7 @@ class DeploymentEnvironmentCollector:
         accelerators = accelerators or []
 
         arch_ok = (len(architectures) + len(accelerators)
-                   >= get_threshold("4.3.5", "Architecture Compatibility Analysis"))
+                   >= get_threshold("quality/accessibility", "Architecture Compatibility Analysis"))
         if detected or architectures or accelerators:
             arch_value = ("x86-64 plus " + ", ".join(architectures) if architectures
                           else "x86-64 only")
@@ -445,7 +445,7 @@ class DeploymentEnvironmentCollector:
         else:
             arch_value = "No CI architectures detected"
 
-        docs_ok = len(documented) >= get_threshold("4.3.5", "Platform Documentation Evaluation")
+        docs_ok = len(documented) >= get_threshold("quality/accessibility", "Platform Documentation Evaluation")
         docs_value = (
             f"{len(documented)} platform{'s' if len(documented) != 1 else ''} named: "
             + ", ".join(documented)

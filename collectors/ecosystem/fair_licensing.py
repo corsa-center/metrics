@@ -726,7 +726,7 @@ class FairLicensingCollector:
         sub: Dict[str, Dict[str, Any]] = {}
 
         satisfied = fair.get("satisfied", [])
-        fair_passing = fair.get("count", 0) >= get_threshold("4.2.2", "Automated FAIR4RS Assessment")
+        fair_passing = fair.get("count", 0) >= get_threshold("ecosystem/licensing", "Automated FAIR4RS Assessment")
         fair_entry: Dict[str, Any] = {
             "label": "Automated FAIR4RS Assessment",
             "value": f"{fair.get('count', 0)}/4 principles satisfied",
@@ -770,7 +770,7 @@ class FairLicensingCollector:
                           f"(BibTeX in {bibtex['path']}; no CITATION.cff)")
         else:
             meta_value = "No CITATION.cff found"
-        meta_passing = len(present) >= get_threshold("4.2.2", "FAIR Metadata Assessment")
+        meta_passing = len(present) >= get_threshold("ecosystem/licensing", "FAIR Metadata Assessment")
         meta_entry: Dict[str, Any] = {
             "label": "FAIR Metadata Assessment",
             "value": meta_value,

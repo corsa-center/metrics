@@ -122,7 +122,7 @@ class CICDMetricsCollector:
         checks: List[tuple] = []
 
         # Workflow execution time under the cap (0 means no runs collected — skip)
-        max_exec_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_execution_time_hours")
+        max_exec_hours = get_threshold("quality/development_practices", "CI/CD Effectiveness Assessment", "max_execution_time_hours")
         exec_time = results.get("average_workflow_execution_time")
         exec_ok = exec_time is not None and exec_time > 0 and (exec_time / 3600) < max_exec_hours
         score += exec_ok
@@ -130,14 +130,14 @@ class CICDMetricsCollector:
                        f"under {max_exec_hours:g} h", exec_ok))
 
         # Overall workflow success above the configured rate
-        min_success_pct = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_success_rate_pct")
+        min_success_pct = get_threshold("quality/development_practices", "CI/CD Effectiveness Assessment", "min_success_rate_pct")
         success = results.get("total_workflow_success_percentage", 0)
         success_ok = success > min_success_pct
         score += success_ok
         checks.append(("Workflow success rate", f"{success:.0f}%", f"over {min_success_pct:g}%", success_ok))
 
         # Deployment frequency: at least the configured minimum per year
-        min_deployments_per_year = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_deployments_per_year")
+        min_deployments_per_year = get_threshold("quality/development_practices", "CI/CD Effectiveness Assessment", "min_deployments_per_year")
         num_deployments_key = next(
             (k for k in results if "num_of_deployments" in k), None
         )
@@ -161,7 +161,7 @@ class CICDMetricsCollector:
                                f"at least {needed}", deploy_ok))
 
         # Release frequency: at least the configured minimum per year
-        min_releases_per_year = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_releases_per_year")
+        min_releases_per_year = get_threshold("quality/development_practices", "CI/CD Effectiveness Assessment", "min_releases_per_year")
         num_releases_key = next(
             (k for k in results if "num_of_releases" in k), None
         )
@@ -180,7 +180,7 @@ class CICDMetricsCollector:
                                f"at least {needed}", release_ok))
 
         # Average time to failure under the cap (0 means no failed runs — skip)
-        max_time_to_failure_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_time_to_failure_hours")
+        max_time_to_failure_hours = get_threshold("quality/development_practices", "CI/CD Effectiveness Assessment", "max_time_to_failure_hours")
         time_to_failure = results.get("average_time_to_failure")
         failure_ok = (time_to_failure is not None and time_to_failure > 0
                       and (time_to_failure / 3600) < max_time_to_failure_hours)
@@ -192,7 +192,7 @@ class CICDMetricsCollector:
         # see config/thresholds.yaml for why that's the default and not DORA's
         # 24h "elite" tier).
         cycle_time = results.get("average_cycle_time")
-        max_cycle_hours = get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "max_cycle_time_hours")
+        max_cycle_hours = get_threshold("quality/development_practices", "CI/CD Effectiveness Assessment", "max_cycle_time_hours")
         cycle_ok = cycle_time is not None and cycle_time > 0 and (cycle_time / 3600) < max_cycle_hours
         score += cycle_ok
         checks.append(("Average pull request cycle time", _duration(cycle_time) if cycle_time

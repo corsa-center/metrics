@@ -542,7 +542,7 @@ class ReliabilityCollector:
         # issue and 35 bug-labelled ones, and reported "does not record defect
         # reports by type or label" on the strength of that one. Projects
         # migrating to issue types have both conventions in play at once.
-        min_volume = get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume")
+        min_volume = get_threshold("quality/reliability", "Reliability Trend Analysis", "min_trend_volume")
         if recent + previous < min_volume:
             # Comma-separated values in a label: qualifier are ORed, so one
             # query covers every convention in _DEFECT_LABELS. Attempted even
@@ -564,7 +564,7 @@ class ReliabilityCollector:
             return {"measurable": False, "recent": recent, "previous": previous,
                     "direction": None, "source": source, "not_collected": True}
 
-        if recent + previous < get_threshold("4.3.1", "Reliability Trend Analysis", "min_trend_volume"):
+        if recent + previous < get_threshold("quality/reliability", "Reliability Trend Analysis", "min_trend_volume"):
             return {"measurable": False, "recent": recent, "previous": previous,
                     "direction": None, "source": source, **searched}
 
@@ -572,7 +572,7 @@ class ReliabilityCollector:
             direction = "increasing"
         else:
             ratio = recent / previous
-            direction = ("stable" if ratio <= get_threshold("4.3.1", "Reliability Trend Analysis", "trend_tolerance")
+            direction = ("stable" if ratio <= get_threshold("quality/reliability", "Reliability Trend Analysis", "trend_tolerance")
                          else "increasing")
             if ratio < 0.75:
                 direction = "improving"
@@ -580,7 +580,7 @@ class ReliabilityCollector:
         # normal year-to-year variation. Only call a trend when the split
         # between the two windows is unlikely under an unchanged rate.
         within_variation = (direction != "stable" and _binomial_tail(recent, recent + previous, direction)
-                            >= get_threshold("4.3.1", "Reliability Trend Analysis", "significance"))
+                            >= get_threshold("quality/reliability", "Reliability Trend Analysis", "significance"))
         if within_variation:
             direction = "stable"
         return {"measurable": True, "recent": recent, "previous": previous,
@@ -600,7 +600,7 @@ class ReliabilityCollector:
             "label": "Advanced Static Analysis",
             "value": ", ".join(tools) if tools
                      else "No defect-analysis tooling found beyond CodeQL",
-            "passing": len(tools) >= get_threshold("4.3.1", "Advanced Static Analysis"),
+            "passing": len(tools) >= get_threshold("quality/reliability", "Advanced Static Analysis"),
         }
         # An empty result built on a gap isn't a confirmed "no tooling" --
         # a found tool stands regardless, since it came from data that did
@@ -615,7 +615,7 @@ class ReliabilityCollector:
                      f"{'s' if len(hardening) != 1 else ''}: " + ", ".join(hardening)
                      if hardening else "No hardening settings found in the build files or CI",
             "detail": "Practice indicators, not audited conformance",
-            "passing": len(hardening) >= get_threshold("4.3.1", "CERT Guidelines Compliance"),
+            "passing": len(hardening) >= get_threshold("quality/reliability", "CERT Guidelines Compliance"),
         }
         if not hardening and hardening_gap:
             cert_entry["not_collected"] = True
@@ -643,7 +643,7 @@ class ReliabilityCollector:
             value = (f"{trend['recent']} defect reports in the last year vs "
                      f"{trend['previous']} the year before ({direction}, "
                      f"by {trend.get('source', 'label')})")
-            passing = trend["direction"] in get_threshold("4.3.1", "Reliability Trend Analysis", "passing_directions")
+            passing = trend["direction"] in get_threshold("quality/reliability", "Reliability Trend Analysis", "passing_directions")
         trend_entry: Dict[str, Any] = {
             "label": "Reliability Trend Analysis",
             "value": value,

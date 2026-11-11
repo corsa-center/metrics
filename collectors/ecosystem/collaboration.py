@@ -154,7 +154,7 @@ class CollaborationCollector:
             # data; these name the package each came from. Matched by
             # section, since this is an Ecosystem collector.
             "row_evidence": {"reverse_dependencies": {
-                "label": "Reverse-Dependency Analysis", "section": "4.1.1",
+                "label": "Reverse-Dependency Analysis", "section": "impact/citation_and_adoption",
                 "evidence": self._reverse_dependency_evidence(registries),
             }},
         }
@@ -512,13 +512,13 @@ class CollaborationCollector:
             "value": f"{len(ecosystems)} ecosystem{'s' if len(ecosystems) != 1 else ''}: "
                      + ", ".join(ecosystems)
                      if ecosystems else "Not packaged in any indexed ecosystem",
-            "passing": len(ecosystems) >= get_threshold("4.2.7", "Advanced Dependency Analysis"),
+            "passing": len(ecosystems) >= get_threshold("ecosystem/collaboration", "Advanced Dependency Analysis"),
             "evidence": self._registry_evidence(registries, lookups),
         }
 
         reach = (
-            max_packages >= get_threshold("4.2.7", "Collaboration Network Analysis", "min_dependent_packages")
-            or max_repos >= get_threshold("4.2.7", "Collaboration Network Analysis", "min_dependent_repos")
+            max_packages >= get_threshold("ecosystem/collaboration", "Collaboration Network Analysis", "min_dependent_packages")
+            or max_repos >= get_threshold("ecosystem/collaboration", "Collaboration Network Analysis", "min_dependent_repos")
         )
         sub["collaboration_network"] = {
             "label": "Collaboration Network Analysis",
@@ -563,7 +563,7 @@ class CollaborationCollector:
             "passing": bool(installable),
             # The row renders in 4.3.4 (Quality) though this collector is
             # Ecosystem's, so the report matches it by section, not dimension.
-            "section": "4.3.4",
+            "section": "quality/usability",
             "evidence": self._install_evidence(registries, lookups),
         }
 

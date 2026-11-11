@@ -372,7 +372,7 @@ class OutreachCollector:
             for login, recent in recent_counts.items()
             if login in totals and totals[login] <= recent
         ]
-        retained_min_commits = get_threshold("4.2.5", "Contributor Retention Analysis", "retained_min_commits")
+        retained_min_commits = get_threshold("ecosystem/outreach", "Contributor Retention Analysis", "retained_min_commits")
         retained = [
             login for login in new_contributors
             if recent_counts[login] >= retained_min_commits
@@ -383,7 +383,7 @@ class OutreachCollector:
             else None
         )
 
-        casual_max_commits = get_threshold("4.2.5", "Contributor Lifecycle Mapping", "casual_max_commits")
+        casual_max_commits = get_threshold("ecosystem/outreach", "Contributor Lifecycle Mapping", "casual_max_commits")
         lifecycle = {"one_time": 0, "casual": 0, "repeat": 0}
         for count in totals.values():
             if count <= 1:
@@ -434,14 +434,14 @@ class OutreachCollector:
         sub["new_contributor_tracking"] = new_entry
 
         rate = growth.get("retention_rate")
-        retention_passing = rate is not None and rate >= get_threshold("4.2.5", "Contributor Retention Analysis", "min_retention_rate_pct")
+        retention_passing = rate is not None and rate >= get_threshold("ecosystem/outreach", "Contributor Retention Analysis", "min_retention_rate_pct")
         retention_entry: Dict[str, Any] = {
             "label": "Contributor Retention Analysis",
             "value": f"{rate}% of new contributors returned" if rate is not None
                      else "No new contributors to measure",
             "passing": retention_passing,
         }
-        min_new = get_threshold("4.2.5", "Contributor Retention Analysis", "min_new_contributors")
+        min_new = get_threshold("ecosystem/outreach", "Contributor Retention Analysis", "min_new_contributors")
         if not retention_passing and (contributors_gap or commits_gap):
             retention_entry["not_collected"] = True
         elif incomplete:
@@ -456,7 +456,7 @@ class OutreachCollector:
 
         lifecycle = growth.get("lifecycle", {})
         repeat = lifecycle.get("repeat", 0)
-        lifecycle_passing = repeat >= get_threshold("4.2.5", "Contributor Lifecycle Mapping", "min_repeat_contributors")
+        lifecycle_passing = repeat >= get_threshold("ecosystem/outreach", "Contributor Lifecycle Mapping", "min_repeat_contributors")
         lifecycle_entry: Dict[str, Any] = {
             "label": "Contributor Lifecycle Mapping",
             "value": f"{lifecycle.get('one_time', 0)} one-time / "
@@ -489,7 +489,7 @@ class OutreachCollector:
         sub["good_first_issue"] = gfi_entry
 
         found = onboarding.get("found", [])
-        onboarding_passing = len(found) >= get_threshold("4.2.5", "Onboarding Infrastructure Assessment")
+        onboarding_passing = len(found) >= get_threshold("ecosystem/outreach", "Onboarding Infrastructure Assessment")
         onboarding_entry: Dict[str, Any] = {
             "label": "Onboarding Infrastructure Assessment",
             "value": f"{len(found)}/{len(_ONBOARDING_LABELS)} resources",
