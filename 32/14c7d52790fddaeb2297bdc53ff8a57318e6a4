@@ -1,0 +1,26 @@
+tests/test_prepare_software_list.py
+  s_4e3949389844f1::t_276ca32d970f95 143
+catalog/catalog.py
+  s_4e3949389844f1::t_89e6a56022cf2d 185-196
+  s_4e3949389844f1::t_276ca32d970f95 5,8,21-56,123,168,183-184,213
+tests/test_package_config.py
+  s_4e3949389844f1::t_276ca32d970f95 172
+tests/test_catalog_rate_limit.py
+  s_4e3949389844f1::t_cdced80a49aead 1-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3214c7d52790fddaeb2297bdc53ff8a57318e6a4",
+  "prompts": {},
+  "sessions": {
+    "s_4e3949389844f1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ceb7fc8f-5133-4c4b-ba7b-566881c935ea",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "M. Scot Breitenfeld <brtnfld@hdfgroup.org>"
+    }
+  }
+}
