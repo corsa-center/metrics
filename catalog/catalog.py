@@ -2,8 +2,10 @@
 Catalog class to manage access to package catalog. This allows other tools to easily access the
 catalog package information, as well as enabling different catalogs to be implemented in the future.
 """
+import asyncio
 import base64
 import logging
+import time
 from typing import Dict, Optional, List
 from urllib.parse import urlparse
 
@@ -15,6 +17,42 @@ logger = logging.getLogger(__name__)
 
 # Catalog package schema
 PACKAGE_CONFIG_SCHEMA_VERSION = 1
+
+# Longest wait for GitHub's rate limit to reset before giving up on the
+# catalog. Nothing can be collected without it, and the quota is hourly.
+MAX_RATE_LIMIT_WAIT = 20 * 60
+
+
+def _rate_limit_wait(response: httpx.Response) -> Optional[float]:
+    """Seconds until GitHub lets this token make requests again, if the
+    response is a rate limit (Retry-After, or an exhausted quota's
+    x-ratelimit-reset); None for any other response."""
+    if response.status_code not in (403, 429):
+        return None
+    retry_after = response.headers.get("retry-after")
+    if retry_after and retry_after.isdigit():
+        return float(retry_after)
+    if response.headers.get("x-ratelimit-remaining") == "0":
+        reset = response.headers.get("x-ratelimit-reset")
+        if reset and reset.isdigit():
+            return max(0.0, int(reset) - time.time()) + 5
+    return None
+
+
+async def _get(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> httpx.Response:
+    """GET, waiting out a GitHub rate limit once if it resets within
+    MAX_RATE_LIMIT_WAIT. A collect run starting soon after another can find
+    the hourly quota spent; failing then wasted the run."""
+    response = await client.get(url, headers=headers)
+    wait = _rate_limit_wait(response)
+    if wait is None:
+        return response
+    if wait > MAX_RATE_LIMIT_WAIT:
+        logger.error(f"GitHub rate limit for {url} resets in {wait / 60:.0f} min; not waiting")
+        return response
+    logger.warning(f"GitHub rate limit reached fetching {url}; waiting {wait / 60:.1f} min for it to reset")
+    await asyncio.sleep(wait)
+    return await client.get(url, headers=headers)
 
 
 def _sanitize_package_config(data: Dict) -> Dict:
@@ -82,7 +120,7 @@ class Catalog:
         """
         if not self.catalog_url:
             raise RuntimeError(f"No catalog URL specified")
-        catalog_files = self._fetch_catalog_files(self.catalog_url)
+        catalog_files = await self._fetch_catalog_files(self.catalog_url)
         if catalog_files is None:
             # Fail loudly: an empty catalog would let the run report success
             # having collected nothing.
@@ -127,7 +165,7 @@ class Catalog:
         """
         return {name: {"name": name, "repo_url": repo_url, "repo_type": repo_type}}
 
-    def _fetch_catalog_files(self, url: str) -> Optional[List[Dict]]:
+    async def _fetch_catalog_files(self, url: str) -> Optional[List[Dict]]:
         """Fetch a list of configuration files for the catalog.
         Currently this is the contents of a directory from a GitHub URL.
 
@@ -142,7 +180,20 @@ class Catalog:
 
         try:
             headers = self._github_headers(url, "application/vnd.github.object+json")
-            response = httpx.get(url, timeout=30.0, follow_redirects=True, headers=headers)
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await _get(client, url, headers)
+            if response.is_error:
+                # GitHub's reason and quota, so a failed run says whether it
+                # was a rate limit or a permission problem.
+                try:
+                    message = response.json().get("message")
+                except ValueError:
+                    message = None
+                logger.error(
+                    f"{url}: HTTP {response.status_code} {message or ''} "
+                    f"(x-ratelimit-remaining={response.headers.get('x-ratelimit-remaining')}, "
+                    f"x-ratelimit-reset={response.headers.get('x-ratelimit-reset')})"
+                )
             response.raise_for_status()
             contents = response.json().get("entries")
             if contents is not None:
@@ -159,7 +210,7 @@ class Catalog:
             headers = self._github_headers(package_url, "application/vnd.github.v3+json")
 
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(package_url, headers=headers)
+                resp = await _get(client, package_url, headers)
             if resp.status_code != 200:
                 return {}
             content = base64.b64decode(resp.json().get("content", "")).decode(
