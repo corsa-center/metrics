@@ -188,7 +188,10 @@ class AccessibilityCollector:
                                              "project's own code)"}]
             container["searched"] = [{"text": "Container file paths tried first (any capitalization)",
                                       "paths": root_files("containers")}]
-            if e4s_names:  # none: lookup unread, or Spack has no package for it
+            # No names means nothing was looked for: the E4S environment
+            # couldn't be read (None), or Spack has no recipe for this
+            # repository ([]).
+            if e4s_names:
                 container["searched"].append({
                     "text": "Spack package names looked for in the E4S image environment",
                     "paths": [{"path": n} for n in e4s_names]})
@@ -216,10 +219,14 @@ class AccessibilityCollector:
                     return None, None
                 _e4s_specs = set(_E4S_SPEC.findall(resp.text.split("specs:", 1)[-1]))
         if package is not None and "spack_match" in package:
-            # The recipe Spack itself matched to this repository (the
-            # orchestrator's run); none means there is nothing to look for.
+            # The orchestrator ran Spack, which matched this repository to
+            # its recipe, or found it has none (then there's nothing to
+            # look for in the image).
             match = package["spack_match"]
-            names = [match["name"]] if match else []
+            if match is None:
+                names = []
+            else:
+                names = [match["name"]]
         else:
             # The same recipe lookup the collaboration collector uses: the
             # repo's own name, then recipes whose URLs are this repository.

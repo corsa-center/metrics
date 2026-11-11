@@ -507,22 +507,23 @@ class TestSpackFromOrchestratorMatch:
                                           "dependent_packages_count": 1, "install_command": "spack install omega-h"},
         })
         trace = {}
-        rec = asyncio.run(collector._spack_from_match(None, {"name": "omega-h", "dependent_packages": 3}, trace))
+        rec = asyncio.run(collector._spack_from_match(None, "o/r", {"name": "omega-h", "dependent_packages": 3}, trace))
         assert rec["name"] == "omega-h" and rec["dependent_packages"] == 3
         assert collector._get_json.urls == [
             "https://packages.ecosyste.ms/api/v1/registries/spack.io/packages/omega-h"]
-        assert trace == {"matched_by_spack": True, "names": ["omega-h"], "failed": False}
+        assert trace == {"matched_by_spack": True, "url": "https://github.com/o/r",
+                         "names": ["omega-h"], "failed": False}
 
     def test_recipe_outside_builtin_is_built_from_spacks_answer(self, collector):
         collector._get_json = _FakeJson({})
-        rec = asyncio.run(collector._spack_from_match(None, {"name": "pcms", "dependent_packages": 0}, {}))
+        rec = asyncio.run(collector._spack_from_match(None, "o/r", {"name": "pcms", "dependent_packages": 0}, {}))
         assert rec["ecosystem"] == "spack" and rec["name"] == "pcms"
         assert rec["install_command"] == "spack install pcms"
 
     def test_not_in_spack_looks_nothing_up(self, collector):
         collector._get_json = _FakeJson({})
-        trace = {"url": "https://github.com/o/r"}
-        assert asyncio.run(collector._spack_from_match(None, None, trace)) is None
+        trace = {}
+        assert asyncio.run(collector._spack_from_match(None, "o/r", None, trace)) is None
         assert collector._get_json.urls == []
         ev = collector._registry_evidence([], {"spack": trace})
         assert ev["searched"][0]["paths"] == [{"path": "https://github.com/o/r"}]
