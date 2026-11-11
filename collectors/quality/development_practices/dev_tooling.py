@@ -417,7 +417,7 @@ class DevToolingCollector:
         sub: Dict[str, Dict[str, Any]] = {}
 
         test_found = testing.get("found", [])
-        test_passing = len(test_found) >= get_threshold("4.3.2", "Testing Framework Excellence")
+        test_passing = len(test_found) >= get_threshold("quality/development_practices", "Testing Framework Excellence")
         testing_entry: Dict[str, Any] = {
             "label": "Testing Framework Excellence",
             "value": f"{len(test_found)}/{len(_TESTING_PATHS)} indicators",
@@ -437,7 +437,7 @@ class DevToolingCollector:
             "label": "Code Review Quality Analysis",
             "value": f"{cov}% of {review.get('sampled', 0)} merged PRs reviewed"
                      if cov is not None else "No merged PRs to sample",
-            "passing": cov is not None and cov >= get_threshold("4.3.2", "Code Review Quality Analysis"),
+            "passing": cov is not None and cov >= get_threshold("quality/development_practices", "Code Review Quality Analysis"),
         }
         if review.get("not_collected"):
             review_entry["not_collected"] = True
@@ -448,7 +448,7 @@ class DevToolingCollector:
         sub["code_review_quality"] = review_entry
 
         tool_found = tooling.get("found", [])
-        tool_passing = len(tool_found) >= get_threshold("4.3.2", "Development Tool Integration")
+        tool_passing = len(tool_found) >= get_threshold("quality/development_practices", "Development Tool Integration")
         tooling_entry: Dict[str, Any] = {
             "label": "Development Tool Integration",
             "value": f"{len(tool_found)}/{len(_TOOLING_PATHS)} tools",

@@ -425,7 +425,7 @@ class CommunityHealthCollector:
 
         maintained = (
             last_updated_days is not None
-            and last_updated_days <= get_threshold("4.2.1", "Governance Effectiveness Assessment", "stale_days")
+            and last_updated_days <= get_threshold("ecosystem/governance", "Governance Effectiveness Assessment", "stale_days")
         )
         return {
             "has_codeowners": has_codeowners,

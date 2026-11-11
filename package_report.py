@@ -69,14 +69,14 @@ COLLECTOR_LABELS = {
 # what passes. Section headings there are "### 4.2.8 Financial Sustainability".
 METRICS_CATALOG = Path(__file__).parent / "docs" / "METRICS_CATALOG.md"
 METRICS_CATALOG_URL = "https://github.com/corsa-center/metrics/blob/main/docs/METRICS_CATALOG.md"
-# Sections nothing collects yet (as opposed to one with no data this run).
-_UNIMPLEMENTED_SECTIONS = {sec.number for secs in SECTIONS.values() for sec in secs if sec.build is None}
+# Metrics nothing collects yet (as opposed to one with no data this run), by path.
+_UNIMPLEMENTED_SECTIONS = {sec.path for sec in SECTIONS if sec.build is None}
 
 _CATALOG_HEADING = re.compile(r"^### (\d+\.\d+\.\d+) (.+?)\s*$", re.M)
 
 # Rows whose dashboard label differs from their thresholds.yaml key.
 THRESHOLD_ROW_ALIASES = {
-    ("4.2.1", "OpenSSF Badge Integration"): "OpenSSF Scorecard",
+    ("ecosystem/governance", "OpenSSF Badge Integration"): "OpenSSF Scorecard",
 }
 
 # Rows are usually one <p> per line, but some builders put a row and its
@@ -139,7 +139,7 @@ def parse_section(section_html: Optional[str]) -> Tuple[List[Dict], Optional[str
 
 
 def threshold_descriptions(path=_THRESHOLDS_PATH) -> Dict[tuple, str]:
-    """Inline comments from config/thresholds.yaml, keyed (section, label[, param]).
+    """Inline comments from config/thresholds.yaml, keyed (path, label[, param]).
 
     The comment beside a value is the only place its meaning is written
     down ("of 4 FAIR principles satisfied, minimum"), so the report reuses
@@ -223,10 +223,10 @@ def evidence_index(sub_results: Any) -> Dict[str, Dict]:
 
 
 def sectioned_evidence(dims: Dict) -> Dict[Tuple[str, str], Dict]:
-    """(section, row label) -> evidence, for rows a collector in one
+    """(metric path, row label) -> evidence, for rows a collector in one
     dimension supplies to a section of another (collaboration's
-    Installation Success Tracking, rendered in 4.3.4). Such an entry names
-    its "section" beside its "label", and is matched in every dimension.
+    Installation Success Tracking, rendered in quality/usability). Such an entry names
+    its metric path as "section" beside its "label", and is matched in every dimension.
     """
     index: Dict[Tuple[str, str], Dict] = {}
     stack = [dim.get("sub_results") for dim in dims.values() if isinstance(dim, dict)]
@@ -271,25 +271,25 @@ def _fmt_value(value: Any) -> str:
     return str(value)
 
 
-def section_thresholds(section: str, descriptions: Dict[tuple, str]) -> Dict[str, List[str]]:
+def section_thresholds(path: str, descriptions: Dict[tuple, str]) -> Dict[str, List[str]]:
     """Row label -> the thresholds it was judged against, as text lines.
 
     Values are the effective ones (config overrides applied); keys are the
     label the row carries on the dashboard.
     """
     result: Dict[str, List[str]] = {}
-    for label, value in get_section_thresholds(section).items():
-        row_label = THRESHOLD_ROW_ALIASES.get((section, label), label)
+    for label, value in get_section_thresholds(path).items():
+        row_label = THRESHOLD_ROW_ALIASES.get((path, label), label)
         if isinstance(value, dict):
             lines = []
             for param, param_value in value.items():
-                desc = descriptions.get((section, label, param))
+                desc = descriptions.get((path, label, param))
                 lines.append(
                     f"{param.replace('_', ' ')} = {_fmt_value(param_value)}"
                     + (f" — {desc}" if desc else "")
                 )
         else:
-            desc = descriptions.get((section, label))
+            desc = descriptions.get((path, label))
             lines = [_fmt_value(value) + (f" — {desc}" if desc else "")]
         result[row_label] = lines
     return result
@@ -330,24 +330,29 @@ def build_report(
         placeholder = dim.get("metadata", {}).get("status") == "placeholder"
         evidence = evidence_index(dim.get("sub_results"))
         sections = []
-        for number, section in dashboard.get(key, {}).items():
+        for metric, section in dashboard.get(key, {}).items():
+            path = section.get("path") or f"{key}/{metric}"
+            # The CASS report section, for display and the methodology
+            # link; None for a metric that isn't in the report.
+            number = section.get("number")
             rows, score = parse_section(section.get("data"))
-            thresholds = section_thresholds(number, descriptions)
-            overridden = overrides.get(number, {})
+            thresholds = section_thresholds(path, descriptions)
+            overridden = overrides.get(path, {})
             for row in rows:
                 row["thresholds"] = thresholds.pop(row["label"], [])
                 row["overridden"] = row["label"] in overridden
                 # Config-set text wasn't measured, so nothing backs it.
                 row["evidence"] = None if row["overridden"] else (
-                    cross_section.get((number, row["label"])) or evidence.get(row["label"]))
+                    cross_section.get((path, row["label"])) or evidence.get(row["label"]))
                 row["details"] = _uncovered_details(row)
             sections.append({
+                "path": path,
                 "number": number,
                 "title": section.get("title", ""),
                 "collected": bool(section.get("data")),
-                "implemented": number not in _UNIMPLEMENTED_SECTIONS,
+                "implemented": path not in _UNIMPLEMENTED_SECTIONS,
                 "score": score,
-                "methodology": methodology.get(number),
+                "methodology": methodology.get(number) if number else None,
                 "rows": rows,
                 # Thresholds for rows this package's section didn't render.
                 "other_thresholds": thresholds,
@@ -424,8 +429,15 @@ def _h(segs: Segments) -> str:
     )
 
 
-def _anchor(number: str) -> str:
-    return "s" + number.replace(".", "-")
+def _anchor(path: str) -> str:
+    """A metric's id in the report: its path with "/" as "-"
+    (ecosystem/licensing -> #ecosystem-licensing)."""
+    return path.replace("/", "-")
+
+
+def _heading(sec: Dict) -> str:
+    """A metric's title, after its CASS report section number if it has one."""
+    return f'{sec["number"]} {sec["title"]}' if sec.get("number") else sec["title"]
 
 
 def render_html(report: Dict) -> str:
@@ -489,8 +501,7 @@ def render_html(report: Dict) -> str:
         for sec in dim["sections"]:
             score = f' <span class="muted">({esc(sec["score"])})</span>' if sec["score"] else ""
             out.append(
-                f'<li><a href="#{_anchor(sec["number"])}">{esc(sec["number"])} '
-                f'{esc(sec["title"])}</a>{score}</li>'
+                f'<li><a href="#{_anchor(sec["path"])}">{esc(_heading(sec))}</a>{score}</li>'
             )
     out.append("</ol></nav>")
 
@@ -501,8 +512,7 @@ def render_html(report: Dict) -> str:
             how = (f'<a class="how" href="{esc(sec["methodology"])}">How this is measured</a>'
                    if sec["methodology"] else "")
             out.append(
-                f'<h3 id="{_anchor(sec["number"])}">{esc(sec["number"])} '
-                f'{esc(sec["title"])}{score}{how}</h3>'
+                f'<h3 id="{_anchor(sec["path"])}">{esc(_heading(sec))}{score}{how}</h3>'
             )
             if not sec["collected"]:
                 out.append('<p class="muted">Unavailable this run.</p>' if sec.get("implemented", True)
@@ -606,6 +616,6 @@ def render_package_report(
         dashboard: the package's DashboardFormatter output
         metrics: the package's collect_all_metrics output
         weights: dimension -> weight used for the overall score
-        overrides: section -> {label: text} rows whose text came from config
+        overrides: metric path -> {label: text} rows whose text came from config
     """
     return render_html(build_report(package, dashboard, metrics, weights, overrides))

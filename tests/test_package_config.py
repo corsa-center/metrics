@@ -85,7 +85,7 @@ class TestSanitizePackageConfig:
             "name": "package_name",
             "repo_url": "package_repo_url",
             "collectors": {"quality": {"supply_chain": False}},
-            "overrides": {"4.2.8": {"NIH R50 Award Tracking": "N/A"}},
+            "overrides": {"ecosystem/financial_sustainability": {"NIH R50 Award Tracking": "N/A"}},
         }
         assert _sanitize_package_config(data) == data
 
@@ -104,7 +104,7 @@ class TestSanitizePackageConfig:
         assert result.get("collectors", {}) == {}
 
     def test_wrong_type_override_section_is_dropped(self):
-        result = _sanitize_package_config({"overrides": {"4.2.8": "N/A"}})
+        result = _sanitize_package_config({"overrides": {"ecosystem/financial_sustainability": "N/A"}})
         assert result.get("overrides", {}) == {}
 
     def test_non_dict_input_returns_empty(self):
@@ -139,7 +139,7 @@ name: HDF5
 repo_type: github
 repo_url: https://github.com/HDFGroup/hdf5
 overrides:
-  "4.2.8":
+  "ecosystem/financial_sustainability":
     NIH R50 Award Tracking: N/A
 """
 
@@ -153,7 +153,7 @@ class TestFetchPackageConfig:
     def test_valid_package_is_returned(self):
         package = self._fetch(_mock_response(content_b64=_b64(_HDF5_YAML)))
         assert package["name"] == "HDF5"
-        assert package["overrides"] == {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}
+        assert package["overrides"] == {"ecosystem/financial_sustainability": {"NIH R50 Award Tracking": "N/A"}}
 
     def test_http_error_returns_empty(self):
         assert self._fetch(_mock_response(status_code=404)) == {}

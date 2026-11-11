@@ -239,7 +239,7 @@ class UsabilityCollector:
 
         # A complete README, or a thinner one backed by real documentation
         # elsewhere, both count as documented.
-        complete = len(sections) >= get_threshold("4.3.4", "Documentation Completeness Analysis") or (
+        complete = len(sections) >= get_threshold("quality/usability", "Documentation Completeness Analysis") or (
             bool(sections) and bool(doc_dir) and bool(site)
         )
 

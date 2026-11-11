@@ -6,7 +6,7 @@ from collectors.common import get_threshold
 from formatters.dashboard.common import Context, score_line, sub_row
 
 
-def section_4_2_1(ctx: Context) -> Optional[str]:
+def format_governance(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     # --- 4.2.1 CoC, Governance, and Contributor Guidelines (PDF §4.2.1 — 5 sub-metrics) ---
     # 1. Enhanced Document Detection  2. Governance Keyword Analysis
@@ -41,7 +41,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
             gov_score = governance.get("overall_score", {})
             doc_total = gov_score.get("max_score", 3)
             # CoC + Contributing is sufficient; Governance is optional.
-            passing = doc_found >= get_threshold("4.2.1", "Enhanced Document Detection")
+            passing = doc_found >= get_threshold("ecosystem/governance", "Enhanced Document Detection")
             gov_pts += 1 if passing else 0
             gov_lines.append(
                 f'<p><strong>Enhanced Document Detection:</strong> {doc_found}/{doc_total} {"✓" if passing else "✗"}</p>'
@@ -55,7 +55,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
         #    decision process, or merely exist?
         kw = governance.get("keyword_analysis", {})
         groups = kw.get("groups_found", [])
-        kw_ok = len(groups) >= get_threshold("4.2.1", "Governance Keyword Analysis")
+        kw_ok = len(groups) >= get_threshold("ecosystem/governance", "Governance Keyword Analysis")
         gov_pts += 1 if kw_ok else 0
         gov_lines.append(
             f'<p><strong>Governance Keyword Analysis:</strong> '
@@ -73,7 +73,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
             # a check listed as "failing" should always be one that's
             # actually below the same bar the overall pass/fail uses,
             # not an independent number that could drift from it.
-            min_score = get_threshold("4.2.1", "OpenSSF Badge Integration", "min_score")
+            min_score = get_threshold("ecosystem/governance", "OpenSSF Badge Integration", "min_score")
             passing = sc_val is not None and sc_val >= min_score
             gov_pts += 1 if passing else 0
             mark = "✓" if passing else "✗"
@@ -107,7 +107,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
                 # Every category unmeasured or gapped: no score to judge.
                 gov_lines.append('<p><strong>CHAOSS Governance Metrics:</strong> Unavailable this run</p>')
             else:
-                chaoss_ok = score_val >= get_threshold("4.2.1", "CHAOSS Governance Metrics")
+                chaoss_ok = score_val >= get_threshold("ecosystem/governance", "CHAOSS Governance Metrics")
                 gov_pts += 1 if chaoss_ok else 0
                 gov_lines.append(
                     f'<p><strong>CHAOSS Governance Metrics:</strong> '
@@ -156,7 +156,7 @@ def section_4_2_1(ctx: Context) -> Optional[str]:
     return section_421_data
 
 
-def section_4_2_2(ctx: Context) -> Optional[str]:
+def format_licensing(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     # --- 4.2.2 Licensing and FAIR Compliance (PDF §4.2.2 — 5 sub-metrics) ---
     # 1. Enhanced License Detection  2. Automated FAIR4RS Assessment
@@ -240,7 +240,7 @@ def section_4_2_2(ctx: Context) -> Optional[str]:
     return section_422_data
 
 
-def section_4_2_3(ctx: Context) -> Optional[str]:
+def format_active_maintenance(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     # --- 4.2.3 Active Maintenance (PDF §4.2.3 — 6 sub-metrics) ---
     # 1. Commit Activity Pattern Analysis   2. Maintenance Mode Indicator Detection
@@ -276,14 +276,14 @@ def section_4_2_3(ctx: Context) -> Optional[str]:
 
         # 3. Activity Trend Monitoring
         trend = commits.get("recent_trend", "unknown")
-        trend_ok = trend in get_threshold("4.2.3", "Activity Trend Monitoring")
+        trend_ok = trend in get_threshold("ecosystem/active_maintenance", "Activity Trend Monitoring")
         maint_pts += 1 if trend_ok else 0
         maint_lines.append(f'<p><strong>Activity Trend Monitoring:</strong> '
                             f'{trend.capitalize()} {"✓" if trend_ok else "✗"}</p>')
 
         # 4. Release Pattern Assessment
         rel_count = releases.get("releases_last_year", 0)
-        rel_ok = rel_count >= get_threshold("4.2.3", "Release Pattern Assessment")
+        rel_ok = rel_count >= get_threshold("ecosystem/active_maintenance", "Release Pattern Assessment")
         maint_pts += 1 if rel_ok else 0
         rel_detail = (f'{releases["latest_release"]} ({releases.get("days_since_latest_release", "?")} days ago)'
                       if releases.get("latest_release") else "No releases")
@@ -300,7 +300,7 @@ def section_4_2_3(ctx: Context) -> Optional[str]:
         # 5. Multi-Channel Communication Activity
         channels = maintenance.get("channels", {})
         ch_found = channels.get("found", [])
-        ch_ok = len(ch_found) >= get_threshold("4.2.3", "Multi-Channel Communication Activity", "min_channels")
+        ch_ok = len(ch_found) >= get_threshold("ecosystem/active_maintenance", "Multi-Channel Communication Activity", "min_channels")
         maint_pts += 1 if ch_ok else 0
         maint_lines.append(
             f'<p><strong>Multi-Channel Communication Activity:</strong> '
@@ -315,7 +315,7 @@ def section_4_2_3(ctx: Context) -> Optional[str]:
         ab = maintenance.get("abandonment", {})
         if ab.get("measurable"):
             rate = ab.get("departure_rate", 0)
-            ab_ok = rate <= get_threshold("4.2.3", "Contributor Abandonment Forecasting")
+            ab_ok = rate <= get_threshold("ecosystem/active_maintenance", "Contributor Abandonment Forecasting")
             maint_pts += 1 if ab_ok else 0
             maint_lines.append(
                 f'<p><strong>Contributor Abandonment Forecasting:</strong> '
@@ -341,7 +341,7 @@ def section_4_2_3(ctx: Context) -> Optional[str]:
     return section_423_data
 
 
-def section_4_2_4(ctx: Context) -> Optional[str]:
+def format_engagement(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     # --- 4.2.4 Engagement ---
     engagement = eco.get("engagement", {})
@@ -389,7 +389,7 @@ def section_4_2_4(ctx: Context) -> Optional[str]:
     return section_424_data
 
 
-def section_4_2_10(ctx: Context) -> Optional[str]:
+def format_project_longevity(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     maintenance = eco.get("maintenance", {})
     # --- 4.2.10 Project Longevity and Community Health (PDF §4.2.10 — 5 sub-metrics) ---
@@ -416,10 +416,10 @@ def section_4_2_10(ctx: Context) -> Optional[str]:
         rel_last_year = releases.get("releases_last_year", 0)
         dims_active = sum([
             commits_52w > 0,
-            rel_last_year >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_releases_last_year"),
-            active_weeks >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_active_weeks"),
+            rel_last_year >= get_threshold("ecosystem/project_longevity", "Comprehensive Activity Analysis", "min_releases_last_year"),
+            active_weeks >= get_threshold("ecosystem/project_longevity", "Comprehensive Activity Analysis", "min_active_weeks"),
         ])
-        activity_ok = dims_active >= get_threshold("4.2.10", "Comprehensive Activity Analysis", "min_dimensions")
+        activity_ok = dims_active >= get_threshold("ecosystem/project_longevity", "Comprehensive Activity Analysis", "min_dimensions")
         long_pts += 1 if activity_ok else 0
         section_4210_lines.append(
             f'<p><strong>Comprehensive Activity Analysis:</strong> '
@@ -433,7 +433,7 @@ def section_4_2_10(ctx: Context) -> Optional[str]:
         # 2. Contributor Viability Assessment — bus factor.
         bus_factor = contribs.get("bus_factor", 0)
         total_contribs = contribs.get("total_contributors", 0)
-        viable = bus_factor >= get_threshold("4.2.10", "Contributor Viability Assessment")
+        viable = bus_factor >= get_threshold("ecosystem/project_longevity", "Contributor Viability Assessment")
         long_pts += 1 if viable else 0
         section_4210_lines.append(
             f'<p><strong>Contributor Viability Assessment:</strong> '
@@ -453,7 +453,7 @@ def section_4_2_10(ctx: Context) -> Optional[str]:
         if indicators.get("maintenance_signals"):
             warnings.extend(indicators["maintenance_signals"])
         if (days_since_push is not None
-                and days_since_push > get_threshold("4.2.10", "Maintenance Mode Detection", "max_days_since_push")):
+                and days_since_push > get_threshold("ecosystem/project_longevity", "Maintenance Mode Detection", "max_days_since_push")):
             warnings.append(f"no push in {days_since_push} days")
         no_warnings = not warnings
         long_pts += 1 if no_warnings else 0
@@ -465,7 +465,7 @@ def section_4_2_10(ctx: Context) -> Optional[str]:
 
         # 4. Community Health Trends — 52-week commit trend from /stats/participation.
         trend = commits.get("recent_trend", "unknown")
-        trend_ok = trend in get_threshold("4.2.10", "Community Health Trends")
+        trend_ok = trend in get_threshold("ecosystem/project_longevity", "Community Health Trends")
         long_pts += 1 if trend_ok else 0
         section_4210_lines.append(
             f'<p><strong>Community Health Trends:</strong> '
@@ -492,7 +492,7 @@ def section_4_2_10(ctx: Context) -> Optional[str]:
             stage = "Mature"
         else:
             stage = "Legacy"
-        lifecycle_ok = stage in get_threshold("4.2.10", "Project Lifecycle Assessment")
+        lifecycle_ok = stage in get_threshold("ecosystem/project_longevity", "Project Lifecycle Assessment")
         long_pts += 1 if lifecycle_ok else 0
         section_4210_lines.append(
             f'<p><strong>Project Lifecycle Assessment:</strong> '
@@ -521,7 +521,7 @@ def section_4_2_10(ctx: Context) -> Optional[str]:
     return section_4210_data
 
 
-def section_4_2_5(ctx: Context) -> Optional[str]:
+def format_outreach(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     # --- 4.2.5 Outreach (PDF §4.2.5 — 8 sub-metrics) ---
     outreach = eco.get("outreach", {})
@@ -546,7 +546,7 @@ def section_4_2_5(ctx: Context) -> Optional[str]:
     return section_425_data
 
 
-def section_4_2_6(ctx: Context) -> Optional[str]:
+def format_welcomeness(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     # --- 4.2.6 Welcomeness (PDF §4.2.6 — 7 sub-metrics) ---
     # Only Decision-Making Visibility is answerable from repository data;
@@ -572,7 +572,7 @@ def section_4_2_6(ctx: Context) -> Optional[str]:
     return section_426_data
 
 
-def section_4_2_7(ctx: Context) -> Optional[str]:
+def format_collaboration(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     # --- 4.2.7 Collaboration (PDF §4.2.7 — 5 sub-metrics) ---
     collaboration = eco.get("collaboration", {})
@@ -596,7 +596,7 @@ def section_4_2_7(ctx: Context) -> Optional[str]:
     return section_427_data
 
 
-def section_4_2_8(ctx: Context) -> Optional[str]:
+def format_financial_sustainability(ctx: Context) -> Optional[str]:
     # --- 4.2.8 Financial Sustainability ---
     # One collector serves both 4.2.8 and 4.2.9: they rest on the same
     # funding documentation and contributor-affiliation pass.
@@ -617,7 +617,7 @@ def section_4_2_8(ctx: Context) -> Optional[str]:
     return "\n".join(fin_lines)
 
 
-def section_4_2_9(ctx: Context) -> Optional[str]:
+def format_institutional_support(ctx: Context) -> Optional[str]:
     # --- 4.2.9 Institutional Support ---
     # Only Institutional Support Tracking is derivable from the
     # repository. RSE titles, career development and institutional policy

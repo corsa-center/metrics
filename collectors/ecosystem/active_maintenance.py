@@ -32,7 +32,7 @@ _COMMUNITY_ISSUE_PAGES = 5
 
 # The pass/fail thresholds for this collector's data (departure rate,
 # channel count, release cadence, etc.) live in config/thresholds.yaml under
-# section "4.2.3" and are applied in the dashboard formatter (formatters/dashboard/),
+# ecosystem/active_maintenance and are applied in the dashboard formatter (formatters/dashboard/),
 # not here -- this collector only gathers the underlying numbers.
 
 
@@ -164,7 +164,7 @@ class ActiveMaintenanceCollector:
         """
         since = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
         enough = get_threshold(
-            "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
+            "ecosystem/active_maintenance", "Multi-Channel Communication Activity", "min_community_issues")
         outside = 0
         try:
             for page in range(1, _COMMUNITY_ISSUE_PAGES + 1):
@@ -253,7 +253,7 @@ class ActiveMaintenanceCollector:
         if repo_info.get("has_wiki") and wiki_has_content:
             found.append("Wiki")
         min_issues = get_threshold(
-            "4.2.3", "Multi-Channel Communication Activity", "min_community_issues")
+            "ecosystem/active_maintenance", "Multi-Channel Communication Activity", "min_community_issues")
         if (repo_info.get("has_issues", True) and community_issues is not None
                 and community_issues >= min_issues):
             found.append(f"{platform} Issues")

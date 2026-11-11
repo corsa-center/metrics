@@ -50,13 +50,13 @@ def registry():
 
 class TestRegistryResolution:
     def test_scalar_default(self, registry):
-        assert registry.get("4.2.3", "Release Pattern Assessment") == 1
+        assert registry.get("ecosystem/active_maintenance", "Release Pattern Assessment") == 1
 
     def test_set_membership_default(self, registry):
-        assert registry.get("4.2.3", "Activity Trend Monitoring") == ["stable", "increasing"]
+        assert registry.get("ecosystem/active_maintenance", "Activity Trend Monitoring") == ["stable", "increasing"]
 
     def test_dict_param_default(self, registry):
-        assert registry.get("4.3.2", "CI/CD Effectiveness Assessment", "max_cycle_time_hours") == 168
+        assert registry.get("quality/development_practices", "CI/CD Effectiveness Assessment", "max_cycle_time_hours") == 168
 
     def test_unknown_section_raises(self, registry):
         with pytest.raises(KeyError):
@@ -64,36 +64,36 @@ class TestRegistryResolution:
 
     def test_unknown_label_raises(self, registry):
         with pytest.raises(KeyError):
-            registry.get("4.2.3", "Not A Real Sub-Metric")
+            registry.get("ecosystem/active_maintenance", "Not A Real Sub-Metric")
 
     def test_unknown_param_raises(self, registry):
         with pytest.raises(KeyError):
-            registry.get("4.3.2", "CI/CD Effectiveness Assessment", "not_a_real_param")
+            registry.get("quality/development_practices", "CI/CD Effectiveness Assessment", "not_a_real_param")
 
     def test_param_on_a_scalar_entry_raises(self, registry):
         # Release Pattern Assessment is a bare number, not a mapping --
         # asking it for a named parameter is a call-site bug.
         with pytest.raises(KeyError):
-            registry.get("4.2.3", "Release Pattern Assessment", "anything")
+            registry.get("ecosystem/active_maintenance", "Release Pattern Assessment", "anything")
 
 
 class TestOverridePrecedence:
     def test_scalar_override_replaces_default(self, registry):
-        registry.set_overrides({"4.2.3": {"Release Pattern Assessment": 2}})
-        assert registry.get("4.2.3", "Release Pattern Assessment") == 2
+        registry.set_overrides({"ecosystem/active_maintenance": {"Release Pattern Assessment": 2}})
+        assert registry.get("ecosystem/active_maintenance", "Release Pattern Assessment") == 2
 
     def test_override_does_not_leak_to_other_labels(self, registry):
-        registry.set_overrides({"4.2.3": {"Release Pattern Assessment": 2}})
-        assert registry.get("4.2.3", "Contributor Abandonment Forecasting") == 0.5
+        registry.set_overrides({"ecosystem/active_maintenance": {"Release Pattern Assessment": 2}})
+        assert registry.get("ecosystem/active_maintenance", "Contributor Abandonment Forecasting") == 0.5
 
     def test_partial_dict_override_leaves_other_params_at_default(self, registry):
         registry.set_overrides({
-            "4.3.2": {"CI/CD Effectiveness Assessment": {"max_cycle_time_hours": 48}}
+            "quality/development_practices": {"CI/CD Effectiveness Assessment": {"max_cycle_time_hours": 48}}
         })
-        assert registry.get("4.3.2", "CI/CD Effectiveness Assessment", "max_cycle_time_hours") == 48
+        assert registry.get("quality/development_practices", "CI/CD Effectiveness Assessment", "max_cycle_time_hours") == 48
         # The sibling param wasn't touched by the override -- confirm it's
         # still at its own default, not dragged along or cleared.
-        assert registry.get("4.3.2", "CI/CD Effectiveness Assessment", "min_success_rate_pct") == 60
+        assert registry.get("quality/development_practices", "CI/CD Effectiveness Assessment", "min_success_rate_pct") == 60
 
     def test_unrecognized_section_override_raises(self, registry):
         with pytest.raises(ValueError):
@@ -101,17 +101,17 @@ class TestOverridePrecedence:
 
     def test_unrecognized_label_override_raises(self, registry):
         with pytest.raises(ValueError):
-            registry.set_overrides({"4.2.3": {"Not A Real Sub-Metric": 1}})
+            registry.set_overrides({"ecosystem/active_maintenance": {"Not A Real Sub-Metric": 1}})
 
     def test_unrecognized_param_override_raises(self, registry):
         with pytest.raises(ValueError):
             registry.set_overrides({
-                "4.3.2": {"CI/CD Effectiveness Assessment": {"bogus_param": 1}}
+                "quality/development_practices": {"CI/CD Effectiveness Assessment": {"bogus_param": 1}}
             })
 
     def test_dict_override_for_a_scalar_default_raises(self, registry):
         with pytest.raises(ValueError):
-            registry.set_overrides({"4.2.3": {"Release Pattern Assessment": {"x": 1}}})
+            registry.set_overrides({"ecosystem/active_maintenance": {"Release Pattern Assessment": {"x": 1}}})
 
     def test_scalar_override_for_a_dict_default_raises(self, registry):
         # The reverse of the case above: a sub-metric with named parameters
@@ -119,21 +119,21 @@ class TestOverridePrecedence:
         # would mean get(section, label, param=...) just ignores it, since
         # only a dict override is ever consulted for a specific param.
         with pytest.raises(ValueError):
-            registry.set_overrides({"4.3.2": {"CI/CD Effectiveness Assessment": 999}})
+            registry.set_overrides({"quality/development_practices": {"CI/CD Effectiveness Assessment": 999}})
 
     def test_null_override_raises(self, registry):
         with pytest.raises(ValueError):
-            registry.set_overrides({"4.2.3": {"Release Pattern Assessment": None}})
+            registry.set_overrides({"ecosystem/active_maintenance": {"Release Pattern Assessment": None}})
 
     def test_bare_lookup_of_a_dict_default_without_param_raises(self, registry):
         with pytest.raises(KeyError):
-            registry.get("4.3.2", "CI/CD Effectiveness Assessment")
+            registry.get("quality/development_practices", "CI/CD Effectiveness Assessment")
 
     def test_empty_overrides_is_a_noop(self, registry):
         registry.set_overrides({})
-        assert registry.get("4.2.3", "Release Pattern Assessment") == 1
+        assert registry.get("ecosystem/active_maintenance", "Release Pattern Assessment") == 1
         registry.set_overrides(None)
-        assert registry.get("4.2.3", "Release Pattern Assessment") == 1
+        assert registry.get("ecosystem/active_maintenance", "Release Pattern Assessment") == 1
 
 
 class TestConfigMatchesCode:

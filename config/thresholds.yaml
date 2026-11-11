@@ -8,8 +8,9 @@
 # entry fails a test (tests/test_thresholds.py) instead of silently doing
 # nothing.
 #
-# Keyed by CASS report section number, then the exact sub-metric label from
-# METRICS_CATALOG.md / SECTION_SUBMETRICS in orchestrator.py. A sub-metric
+# Keyed by metric path (ecosystem/licensing; see SECTIONS in
+# formatters/dashboard/__init__.py, and each section's heading in
+# METRICS_CATALOG.md), then the exact sub-metric label. A sub-metric
 # with nothing configurable (a pure presence/structural check, like "a
 # license was identified") has no entry here -- absence means "not
 # configurable," not "use some hidden default."
@@ -38,7 +39,7 @@
 # pagination caps, and values that only feed descriptive text rather than
 # a pass/fail outcome.
 
-"4.2.1":
+ecosystem/governance:
   Enhanced Document Detection: 2       # of {CoC, Governance, Contributing}, minimum found
   Governance Keyword Analysis: 2       # of 4 governance concept groups, minimum documented
   OpenSSF Badge Integration:
@@ -52,11 +53,11 @@
     # actually makes it configurable via overrides.
     stale_days: 1095                   # three years
 
-"4.2.2":
+ecosystem/licensing:
   Automated FAIR4RS Assessment: 3    # of 4 FAIR principles satisfied, minimum
   FAIR Metadata Assessment: 4        # of 6 CITATION.cff fields present, minimum
 
-"4.2.3":
+ecosystem/active_maintenance:
   Activity Trend Monitoring:
     # 52-week commit trend must be one of these to meet the threshold.
     - stable
@@ -68,7 +69,7 @@
                                  # 365 days before the issue tracker counts as a channel
   Contributor Abandonment Forecasting: 0.5    # departure rate, maximum
 
-"4.2.4":
+ecosystem/engagement:
   Response Time Tracking: 168           # median hours to first response, maximum (one week, strictly under)
   Issue Resolution Analysis: 720        # median hours to close, maximum (30 days, strictly under), over
                                         # issues opened between a year ago and this many hours ago
@@ -81,7 +82,7 @@
     min_timely_response_share: 0.70     # share of issues answered within the window, minimum
   Community Participation Assessment: 0.15  # share of issues/PRs from outside the maintainer group, minimum
 
-"4.2.5":
+ecosystem/outreach:
   Contributor Retention Analysis:
     retained_min_commits: 2       # commits within the recent window to count as "retained"
     min_retention_rate_pct: 50    # share of new contributors who return, minimum
@@ -91,11 +92,11 @@
     min_repeat_contributors: 3    # repeat contributors, minimum
   Onboarding Infrastructure Assessment: 3  # of 4 onboarding resources, minimum found
 
-"4.2.6":
+ecosystem/welcomeness:
   Decision-Making Visibility: 2   # public decision-making channels/documents found, minimum
                                    # (one alone -- e.g. a wiki nobody writes in -- says little)
 
-"4.2.7":
+ecosystem/collaboration:
   Advanced Dependency Analysis: 2   # distinct packaging ecosystems, minimum
   Collaboration Network Analysis:
     # Either signal alone is enough: a library can be depended on by many
@@ -104,11 +105,11 @@
     min_dependent_packages: 10
     min_dependent_repos: 50
 
-"4.2.8":
+ecosystem/financial_sustainability:
   Institutional Affiliation Tracking: 3  # distinct organizations among top contributors, minimum
   Funding Portfolio Analysis: 2          # distinct funding sources, minimum
 
-"4.2.10":
+ecosystem/project_longevity:
   Comprehensive Activity Analysis:
     min_dimensions: 2                  # of 3 dimensions active, minimum
     min_active_weeks: 26               # of 52 weeks with a commit, minimum
@@ -127,7 +128,7 @@
     - Growing
     - Mature
 
-"4.3.1":
+quality/reliability:
   Test Coverage Excellence: 80          # Codecov line coverage %, minimum
   Advanced Static Analysis: 1           # defect-analysis tools found beyond CodeQL, minimum
   CERT Guidelines Compliance: 1         # secure-coding hardening indicators found, minimum
@@ -139,7 +140,7 @@
       - stable
       - improving
 
-"4.3.2":
+quality/development_practices:
   CI/CD Effectiveness Assessment:
     # Average PR cycle time, in hours, maximum. 168 (one week) is today's
     # real, shipped behavior -- not DORA's 24h "elite" tier -- so it's kept
@@ -157,17 +158,17 @@
   Development Tool Integration: 2       # of 4 dev tooling indicators, minimum found
   Community Contribution Facilitation: 100  # OpenSSF badge progress %, minimum (must be 100 -- fully registered)
 
-"4.3.4":
+quality/usability:
   Documentation Completeness Analysis: 3  # of 4 core README sections, minimum
                                            # (waived if a thinner README is backed by a doc
                                            # directory and a published documentation site)
 
-"4.3.5":
+quality/accessibility:
   Deployment Environment Testing: 2      # distinct CI runner OS families, minimum
   Architecture Compatibility Analysis: 1 # non-x86 architectures explicitly tested, minimum
   Platform Documentation Evaluation: 2   # supported platforms named in the README, minimum
 
-"4.3.6":
+quality/maintainability:
   Knowledge Distribution Analysis: 3    # bus factor, minimum -- same value as 4.2.10's
                                          # Contributor Viability Assessment, kept as its own
                                          # key for the same reason as 4.2.10's Community

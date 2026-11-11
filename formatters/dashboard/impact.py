@@ -5,7 +5,7 @@ from typing import Optional
 from formatters.dashboard.common import Context, citation_repo_stats
 
 
-def section_4_1_1(ctx: Context) -> Optional[str]:
+def format_citation_and_adoption(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     impact_sub = ctx.impact_sub
     # --- 4.1.1 Software Citation and Adoption ---

@@ -65,7 +65,7 @@ class TestTreeClassification:
         assert collector._analyze_tree([_f("mkdocs.yml")])["doc_generators"] == ["MkDocs"]
 
     def test_depth_and_size_stats(self, collector):
-        large_file_bytes = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
+        large_file_bytes = get_threshold("quality/maintainability", "Advanced Complexity Analysis", "large_file_bytes")
         c = collector._analyze_tree([
             _f("a/b/c/d.c", size=10), _f("e.c", size=large_file_bytes + 1),
         ])
@@ -206,7 +206,7 @@ class TestEvidence:
     """What report.html shows under each 4.3.6 row (issue #99)."""
 
     def test_oversized_and_deepest_source_files_are_named(self):
-        large = get_threshold("4.3.6", "Advanced Complexity Analysis", "large_file_bytes")
+        large = get_threshold("quality/maintainability", "Advanced Complexity Analysis", "large_file_bytes")
         result = _collect(files={
             "src/big.c": "x" * (large + 1024), "src/small.c": "x",
             "src/a/b/deep.c": "x", "test/deeper/still/t.c": "x",

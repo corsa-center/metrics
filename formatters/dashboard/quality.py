@@ -6,7 +6,7 @@ from collectors.common import get_threshold
 from formatters.dashboard.common import Context, sub_row
 
 
-def section_4_3_1(ctx: Context) -> Optional[str]:
+def format_reliability(ctx: Context) -> Optional[str]:
     qual = ctx.qual
     # --- 4.3.1 Reliability and Robustness (PDF §4.3.1 — 5 sub-metrics) ---
     # 1. Advanced Static Analysis    2. Enhanced Security Analysis
@@ -66,7 +66,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
         if test_coverage.get("coverage_exists"):
             pct = test_coverage["coverage_percentage"]
             url = test_coverage.get("coverage_url", "")
-            passing = pct >= get_threshold("4.3.1", "Test Coverage Excellence")
+            passing = pct >= get_threshold("quality/reliability", "Test Coverage Excellence")
             rel_pts += 1 if passing else 0
             mark = "✓" if passing else "✗"
             link = f'<a href="{url}">{pct}%</a>' if url else f'{pct}%'
@@ -102,7 +102,7 @@ def section_4_3_1(ctx: Context) -> Optional[str]:
     return section_431_data
 
 
-def section_4_3_3(ctx: Context) -> Optional[str]:
+def format_reproducibility(ctx: Context) -> Optional[str]:
     qual = ctx.qual
     # --- 4.3.3 Reproducibility ---
     reproducibility = qual.get("reproducibility", {})
@@ -168,7 +168,7 @@ def section_4_3_3(ctx: Context) -> Optional[str]:
     return section_433_data
 
 
-def section_4_3_2(ctx: Context) -> Optional[str]:
+def format_development_practices(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     qual = ctx.qual
     # --- 4.3.2 Development Practices (PDF §4.3.2 — 5 sub-metrics) ---
@@ -183,7 +183,7 @@ def section_4_3_2(ctx: Context) -> Optional[str]:
         if ci_cd:
             cicd_score = ci_cd.get("score", 0)
             cicd_max   = ci_cd.get("max_score", 6)
-            passing    = cicd_score > get_threshold("4.3.2", "CI/CD Effectiveness Assessment", "min_score")
+            passing    = cicd_score > get_threshold("quality/development_practices", "CI/CD Effectiveness Assessment", "min_score")
             dp_pts    += 1 if passing else 0
             mark       = "✓" if passing else "✗"
             section_432_lines.append(
@@ -215,7 +215,7 @@ def section_4_3_2(ctx: Context) -> Optional[str]:
                 level = badge_status.get("level", "").capitalize()
                 badge_url = badge_status.get("url", "")
                 pct = badge_status.get("progress_percentage", 0)
-                passing = pct >= get_threshold("4.3.2", "Community Contribution Facilitation")
+                passing = pct >= get_threshold("quality/development_practices", "Community Contribution Facilitation")
                 dp_pts += 1 if passing else 0
                 mark = "✓" if passing else "✗"
                 link = f'<a href="{badge_url}">{level}</a>' if badge_url else level
@@ -249,7 +249,7 @@ def section_4_3_2(ctx: Context) -> Optional[str]:
     return section_432_data
 
 
-def section_4_3_4(ctx: Context) -> Optional[str]:
+def format_usability(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     qual = ctx.qual
     collaboration = eco.get("collaboration", {})
@@ -285,7 +285,7 @@ def section_4_3_4(ctx: Context) -> Optional[str]:
     return section_434_data
 
 
-def section_4_3_5(ctx: Context) -> Optional[str]:
+def format_accessibility(ctx: Context) -> Optional[str]:
     qual = ctx.qual
     # --- 4.3.5 Accessibility (PDF §4.3.5 — 5 sub-metrics) ---
     # 1. Portable Build System   2. Container Availability   3. Architecture Compatibility
@@ -349,7 +349,7 @@ def section_4_3_5(ctx: Context) -> Optional[str]:
     return section_435_data
 
 
-def section_4_3_6(ctx: Context) -> Optional[str]:
+def format_maintainability(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     qual = ctx.qual
     maintenance = eco.get("maintenance", {})
@@ -383,7 +383,7 @@ def section_4_3_6(ctx: Context) -> Optional[str]:
         if contributor_activity:
             bus_factor = contributor_activity.get("bus_factor", 0)
             top_pct = contributor_activity.get("top_contributor_pct", 0)
-            healthy = bus_factor >= get_threshold("4.3.6", "Knowledge Distribution Analysis")
+            healthy = bus_factor >= get_threshold("quality/maintainability", "Knowledge Distribution Analysis")
             maint436_pts += 1 if healthy else 0
             mark = "✓" if healthy else "✗"
             section_436_lines.append(
@@ -409,7 +409,7 @@ def section_4_3_6(ctx: Context) -> Optional[str]:
     return section_436_data
 
 
-def section_4_3_8(ctx: Context) -> Optional[str]:
+def format_supply_chain(ctx: Context) -> Optional[str]:
     eco = ctx.eco
     qual = ctx.qual
     # --- 4.3.8 Software Supply Chain Integrity (PDF §4.3.8 — new section) ---

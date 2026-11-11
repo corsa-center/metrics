@@ -243,7 +243,7 @@ class WelcomenessCollector:
         looked: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         signals = list(channels) + list(documents.get("found", []))
-        passing = len(signals) >= get_threshold("4.2.6", "Decision-Making Visibility")
+        passing = len(signals) >= get_threshold("ecosystem/welcomeness", "Decision-Making Visibility")
 
         # A below-threshold count built on a gap isn't confirmed -- a gapped
         # channel lookup or decision-document candidate could have supplied

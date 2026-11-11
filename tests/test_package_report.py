@@ -74,26 +74,26 @@ class TestParseSection:
 class TestThresholds:
     def test_inline_comment_and_its_continuation(self):
         desc = threshold_descriptions()
-        assert desc[("4.2.2", "Automated FAIR4RS Assessment")] == (
+        assert desc[("ecosystem/licensing", "Automated FAIR4RS Assessment")] == (
             "of 4 FAIR principles satisfied, minimum"
         )
         # Wrapped onto a second comment line in thresholds.yaml.
-        assert desc[("4.2.3", "Multi-Channel Communication Activity", "min_community_issues")].endswith(
+        assert desc[("ecosystem/active_maintenance", "Multi-Channel Communication Activity", "min_community_issues")].endswith(
             "before the issue tracker counts as a channel"
         )
 
     def test_block_rationale_is_not_a_description(self):
         # 4.2.7's params carry only a block comment above them, no inline one.
         desc = threshold_descriptions()
-        assert ("4.2.7", "Collaboration Network Analysis", "min_dependent_packages") not in desc
+        assert ("ecosystem/collaboration", "Collaboration Network Analysis", "min_dependent_packages") not in desc
 
     def test_overrides_are_what_gets_reported(self, reset_overrides):
-        configure_threshold_overrides({"4.2.2": {"FAIR Metadata Assessment": 5}})
-        lines = section_thresholds("4.2.2", threshold_descriptions())
+        configure_threshold_overrides({"ecosystem/licensing": {"FAIR Metadata Assessment": 5}})
+        lines = section_thresholds("ecosystem/licensing", threshold_descriptions())
         assert lines["FAIR Metadata Assessment"][0].startswith("5 — ")
 
     def test_keyed_by_the_label_the_dashboard_row_carries(self):
-        assert "OpenSSF Scorecard" in section_thresholds("4.2.1", threshold_descriptions())
+        assert "OpenSSF Scorecard" in section_thresholds("ecosystem/governance", threshold_descriptions())
 
 
 class TestBuildReport:
@@ -112,7 +112,7 @@ class TestBuildReport:
 
     def test_config_overridden_rows_are_flagged(self, orchestrator):
         metrics = _metrics()
-        overrides = {"4.2.8": {"NIH R50 Award Tracking": "N/A"}}
+        overrides = {"ecosystem/financial_sustainability": {"NIH R50 Award Tracking": "N/A"}}
         dashboard = DashboardFormatter().format(metrics, overrides)
         report = build_report("owner/repo", dashboard, metrics, orchestrator._metric_weights(), overrides)
         rows = next(s for d in report["dimensions"] for s in d["sections"] if s["number"] == "4.2.8")["rows"]
@@ -124,8 +124,8 @@ class TestBuildReport:
         # 4.1.2 has no collector; 4.2.9 is implemented but had no data.
         metrics = _metrics()
         dashboard = DashboardFormatter().format(metrics, {})
-        dashboard["impact"]["4.1.2"] = {"title": "Field Research Impact", "data": None}
-        dashboard["ecosystem"]["4.2.9"] = {"title": "Funding", "data": None}
+        dashboard["impact"]["field_research"] = {"title": "Field Research Impact", "data": None}
+        dashboard["ecosystem"]["institutional_support"] = {"title": "Funding", "data": None}
         page = render_package_report("owner/repo", dashboard, metrics, orchestrator._metric_weights())
         assert page.count("Not yet implemented.") == 2  # 4.1.2 and 4.3.7
         assert "Unavailable this run." in page
@@ -160,7 +160,7 @@ class TestHtmlOutput:
         assert "Governance documents (4.2.1) 67; Licensing (4.2.2) 100" in page
         assert "Not yet measured — counted as 0 in the overall score" in page
         assert "not collected: Financial sustainability (4.2.8)" in page
-        assert 'id="s4-2-2"' in page
+        assert 'id="ecosystem-licensing"' in page
 
     def test_collected_text_is_escaped(self, orchestrator):
         metrics = _metrics(sub_results={"governance": {
@@ -268,7 +268,7 @@ class TestEvidence:
         assert "<b>Funding files looked for:</b> none present" in page
 
     def test_config_overridden_row_shows_no_evidence(self, orchestrator):
-        overrides = {"4.2.8": {"Enhanced Funding Documentation Analysis": "See our NOTICE"}}
+        overrides = {"ecosystem/financial_sustainability": {"Enhanced Funding Documentation Analysis": "See our NOTICE"}}
         row = self._row(orchestrator, _funding_metrics(), overrides)
         assert row["overridden"] and row["evidence"] is None
 
@@ -326,14 +326,14 @@ class TestCrossSectionEvidence:
         registries = [{"name": "h5py", "ecosystem": "pypi", "registry_url": "https://pypi.org/project/h5py",
                        "install_command": "pip install h5py"}]
         entry = {"label": "Installation Success Tracking", "value": "Installable from 1 package manager: pypi",
-                 "passing": True, "section": "4.3.4",
+                 "passing": True, "section": "quality/usability",
                  "evidence": CollaborationCollector._install_evidence(registries, {})}
         metrics = self._metrics(entry)
         dashboard = DashboardFormatter().format(metrics, {})
         report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
-        rows = {(s["number"], r["label"]): r for d in report["dimensions"]
+        rows = {(s["path"], r["label"]): r for d in report["dimensions"]
                 for s in d["sections"] for r in s["rows"]}
-        row = rows[("4.3.4", "Installation Success Tracking")]
+        row = rows[("quality/usability", "Installation Success Tracking")]
         assert row["evidence"]["found"] == [{"path": "h5py (pypi)", "url": "https://pypi.org/project/h5py",
                                              "quote": "pip install h5py"}]
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
@@ -342,10 +342,10 @@ class TestCrossSectionEvidence:
 
     def test_sectioned_entries_stay_out_of_the_label_index(self):
         from package_report import evidence_index, sectioned_evidence
-        entry = {"label": "Installation Success Tracking", "section": "4.3.4", "evidence": {"found": []}}
+        entry = {"label": "Installation Success Tracking", "section": "quality/usability", "evidence": {"found": []}}
         dims = {"ecosystem": {"sub_results": {"collaboration": {"x": entry}}}}
         assert evidence_index(dims["ecosystem"]["sub_results"]) == {}
-        assert sectioned_evidence(dims) == {("4.3.4", "Installation Success Tracking"): {"found": []}}
+        assert sectioned_evidence(dims) == {("quality/usability", "Installation Success Tracking"): {"found": []}}
 
     def test_no_install_path_names_the_packages_and_the_search(self):
         from collectors.ecosystem.collaboration import CollaborationCollector
@@ -402,4 +402,4 @@ class TestRepeatedDetailLines:
         page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
         assert page.count("DE-AC05-00OR22725") == 1
         # The dashboard keeps its own detail line.
-        assert "DE-AC05-00OR22725</p>" in dashboard["ecosystem"]["4.2.8"]["data"]
+        assert "DE-AC05-00OR22725</p>" in dashboard["ecosystem"]["financial_sustainability"]["data"]

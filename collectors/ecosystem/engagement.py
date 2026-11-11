@@ -176,7 +176,7 @@ class EngagementCollector:
         Two searches, issued one after the other rather than together.
         """
         now = datetime.now(timezone.utc)
-        threshold_h = get_threshold("4.2.4", "Issue Resolution Analysis")
+        threshold_h = get_threshold("ecosystem/engagement", "Issue Resolution Analysis")
         year_ago = (now - timedelta(days=365)).strftime("%Y-%m-%d")
         youngest = (now - timedelta(hours=threshold_h)).strftime("%Y-%m-%d")
         cohort = await self.forge.issues_opened_between(client, ref, year_ago, youngest)
@@ -278,7 +278,7 @@ class EngagementCollector:
         # at 10% although every outside issue had been answered.
         timely_share = None
         if discussable:
-            response_window_hours = get_threshold("4.2.4", "Communication Pattern Analysis", "response_window_hours")
+            response_window_hours = get_threshold("ecosystem/engagement", "Communication Pattern Analysis", "response_window_hours")
             timely = sum(
                 1 for n in discussable_idx
                 if n < len(response_times) and response_times[n] is not None
@@ -372,7 +372,7 @@ class EngagementCollector:
         # 1. Response Time Tracking — passing if median first response is under the cap
         frt = issue_stats.get("median_first_response_hours")
         sampled = issue_stats.get("sample_size", 0)
-        passing = frt is not None and frt < get_threshold("4.2.4", "Response Time Tracking")
+        passing = frt is not None and frt < get_threshold("ecosystem/engagement", "Response Time Tracking")
         sub["response_time_tracking"] = {
             "label": "Response Time Tracking",
             "value": (f"{frt:.0f} hours" if frt is not None
@@ -397,7 +397,7 @@ class EngagementCollector:
                                        "passing": False, "pts": 0, "not_collected": True}
             unscored += 1
         else:
-            passing = mct < get_threshold("4.2.4", "Issue Resolution Analysis")
+            passing = mct < get_threshold("ecosystem/engagement", "Issue Resolution Analysis")
             value = (f"{mct:.0f} hours median to close" if mct != float("inf")
                      else "over half still open")
             sub["issue_resolution"] = {
@@ -414,7 +414,7 @@ class EngagementCollector:
 
         # 3. Pull Request Flow Assessment — passing if merge rate is above the floor
         mrp = pr_stats.get("merge_rate_pct")
-        passing = mrp is not None and mrp > get_threshold("4.2.4", "Pull Request Flow Assessment")
+        passing = mrp is not None and mrp > get_threshold("ecosystem/engagement", "Pull Request Flow Assessment")
         sub["pr_flow"] = {
             "label": "Pull Request Flow Assessment",
             "value": f"{mrp:.0f}%" if mrp is not None else None,
@@ -432,7 +432,7 @@ class EngagementCollector:
             unscored += 1
         else:
             ratio = opened / closed if closed else float("inf")
-            passing = ratio < get_threshold("4.2.4", "Support Request Closure Analysis")
+            passing = ratio < get_threshold("ecosystem/engagement", "Support Request Closure Analysis")
             sub["support_closure"] = {
                 "label": "Support Request Closure Analysis",
                 "value": f"{opened} opened, {closed} closed 30-365 days ago"
@@ -450,7 +450,7 @@ class EngagementCollector:
 
         # 5. Engagement Quality Metrics — depth of discussion per issue
         mc = issue_stats.get("median_comments")
-        passing = mc is not None and mc >= get_threshold("4.2.4", "Engagement Quality Metrics")
+        passing = mc is not None and mc >= get_threshold("ecosystem/engagement", "Engagement Quality Metrics")
         sub["engagement_quality"] = {
             "label": "Engagement Quality Metrics",
             "value": f"{mc:g} comments per issue (median)" if mc is not None else None,
@@ -468,7 +468,7 @@ class EngagementCollector:
         # 6. Communication Pattern Analysis — whether everyone gets an answer,
         # not just the typical reporter.
         timely = issue_stats.get("timely_response_share")
-        passing = timely is not None and timely >= get_threshold("4.2.4", "Communication Pattern Analysis", "min_timely_response_share")
+        passing = timely is not None and timely >= get_threshold("ecosystem/engagement", "Communication Pattern Analysis", "min_timely_response_share")
         sub["communication_patterns"] = {
             "label": "Communication Pattern Analysis",
             "value": f"{timely * 100:.0f}% of community issues answered within a week"
@@ -496,7 +496,7 @@ class EngagementCollector:
             issue_stats.get("outside_authors", 0) + pr_stats.get("outside_authors", 0)
         )
         share = outside_n / total_n if total_n else None
-        passing = share is not None and share >= get_threshold("4.2.4", "Community Participation Assessment")
+        passing = share is not None and share >= get_threshold("ecosystem/engagement", "Community Participation Assessment")
         sub["community_participation"] = {
             "label": "Community Participation Assessment",
             "value": f"{share * 100:.0f}% of {total_n} issues and PRs opened from "
