@@ -528,6 +528,26 @@ class TestRepoActivity:
         assert self._activity(orchestrator, forge) == {}
 
 
+class TestSpackMatchForCollectors:
+    PACKAGE = {"name": "core", "repo_url": "https://github.com/SCOREC/core"}
+
+    def test_match_is_passed_on_a_copy(self, orchestrator):
+        orchestrator.spack_data = {self.PACKAGE["repo_url"]: {
+            "name": "pumi", "dependencies": {"zlib": {}}, "dependents": {"a": {}, "b": {}}}}
+        package = dict(self.PACKAGE)
+        seen = orchestrator._with_spack_match(package)
+        assert seen["spack_match"] == {"name": "pumi", "dependent_packages": 2}
+        assert "spack_match" not in package  # kept out of metrics.json's metadata
+
+    def test_not_in_spack(self, orchestrator):
+        orchestrator.spack_data = {self.PACKAGE["repo_url"]: None}
+        assert orchestrator._with_spack_match(dict(self.PACKAGE))["spack_match"] is None
+
+    def test_spack_not_analyzed_leaves_it_out(self, orchestrator):
+        orchestrator.spack_data = None
+        assert "spack_match" not in orchestrator._with_spack_match(dict(self.PACKAGE))
+
+
 class TestSpackDependencies:
     def _run(self, orchestrator, packages, spack_repos=None):
         return asyncio.run(orchestrator.collect_spack_dependencies(packages, spack_repos))

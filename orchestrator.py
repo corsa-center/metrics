@@ -433,6 +433,17 @@ class MetricsOrchestrator:
                 logger.warning(f"Spack dependency analysis failed: {e!r}")
                 return None
 
+    def _with_spack_match(self, package: Dict) -> Dict:
+        """The package as the collectors see it: with `spack_match`, this
+        batch's Spack match for it ({name, dependent_packages}, or None when
+        Spack has no package for it), when Spack was analyzed. A copy, since
+        the package itself is written out as metrics.json's metadata."""
+        if self.spack_data is None or package.get("repo_url") not in self.spack_data:
+            return package
+        entry = self.spack_data[package["repo_url"]]
+        return {**package, "spack_match": entry and {
+            "name": entry["name"], "dependent_packages": len(entry.get("dependents") or {})}}
+
     async def collect_dependency_info(self, package: Dict) -> Dict:
         """The package's `dependencies` (the forge's dependency graph) and
         `spack` (its Spack dependencies and dependents, from this batch's
@@ -484,7 +495,7 @@ class MetricsOrchestrator:
         if collect:
             # Collect all 3 dimensions in parallel
             *collected, dependency_info = await asyncio.gather(
-                *(dim.collect(package) for dim in self.dimensions.values()),
+                *(dim.collect(self._with_spack_match(package)) for dim in self.dimensions.values()),
                 self.collect_dependency_info(package),
                 return_exceptions=True,
             )
