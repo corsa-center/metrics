@@ -17,9 +17,7 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -31,6 +29,7 @@ import yaml
 
 from catalog.catalog import Catalog
 from collectors.common import configure_threshold_overrides
+from collectors.dependencies import DependencyCollector, SpackDependencyCollector, with_spack_match
 from collectors.ecosystem.dimension import EcosystemDimensionCollector
 from collectors.impact.dimension import ImpactDimensionCollector
 from collectors.quality.dimension import QualityDimensionCollector
@@ -80,8 +79,13 @@ class MetricsOrchestrator:
         # Turns the dimensions' raw results into the dashboard's sections
         # (formatters/); another Formatter can present them differently.
         self.formatter = DashboardFormatter()
-        # Catalog repo_url -> collect_spack_dependencies() entry, or None
-        # until a batch has been analyzed (or when Spack isn't available).
+        # Outside the dimensions: Spack's dependency data, once per batch,
+        # and each package's dependencies (collectors/dependencies.py).
+        self.spack_collector = SpackDependencyCollector(self.config)
+        self.dependency_collector = DependencyCollector(self.config)
+        # Catalog repo_url -> the batch's Spack entry (see
+        # SpackDependencyCollector.collect), or None until a batch has been
+        # analyzed (or when Spack isn't available).
         self.spack_data: Optional[Dict[str, Optional[Dict]]] = None
 
     def _configure_logging(self) -> None:
@@ -320,173 +324,6 @@ class MetricsOrchestrator:
             logger.warning(f"activity counts failed for {package['repo_url']}: {e!r}")
         return activity
 
-    @staticmethod
-    async def _clone_spack_repos(urls: List[str], into: Path, timeout: float) -> Optional[List[str]]:
-        """Shallow clones of the package repositories at `urls`, as the
-        directories holding their repo.yaml, or None if any clone failed."""
-        paths = []
-        for i, url in enumerate(urls):
-            dest = into / f"repo{i}"
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "git", "clone", "--quiet", "--depth", "1", url, str(dest),
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
-                )
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout)
-            except (OSError, asyncio.TimeoutError) as e:
-                logger.warning(f"Cloning Spack repository {url} failed: {e!r}")
-                return None
-            if proc.returncode != 0:
-                logger.warning(f"Cloning Spack repository {url} failed: {stderr.decode(errors='replace')[-500:]}")
-                return None
-            # repo.yaml sits at the root, or under spack_repo/<namespace>/.
-            found = sorted(dest.glob("repo.yaml")) or sorted(dest.glob("spack_repo/*/repo.yaml"))
-            if not found:
-                logger.warning(f"Spack repository {url} has no repo.yaml")
-                return None
-            paths += [str(f.parent) for f in found]
-        return paths
-
-    @staticmethod
-    def _spack_repos(catalog_packages) -> List[str]:
-        """The package repositories catalog entries name in `spack_repo`
-        (a git URL, or a list of them) for recipes Spack's builtin
-        repository lacks."""
-        urls = set()
-        for package in catalog_packages:
-            value = package.get("spack_repo")
-            for url in [value] if isinstance(value, str) else value if isinstance(value, list) else []:
-                if isinstance(url, str) and url.strip():
-                    urls.add(url.strip())
-        return sorted(urls)
-
-    @staticmethod
-    def _log_spack_matches(result: Dict[str, Optional[Dict]]) -> None:
-        """Which repositories got a Spack package, and which didn't: one of
-        the latter that does have a recipe outside Spack's builtin
-        repository needs `spack_repo` in its catalog entry."""
-        def short(url):
-            return urlparse(url).path.strip("/").removesuffix(".git") or url
-        found = [f"{short(u)} -> {e['name']}" for u, e in sorted(result.items()) if e]
-        missing = [short(u) for u, e in sorted(result.items()) if not e]
-        logger.info(f"Spack packages found for {len(found)} of {len(result)} repositories: {', '.join(found)}")
-        if missing:
-            logger.info(f"Not in Spack: {', '.join(missing)}")
-
-    async def collect_spack_dependencies(
-        self, packages: List[Dict], spack_repos: Optional[List[str]] = None,
-    ) -> Optional[Dict[str, Optional[Dict]]]:
-        """Spack's dependency data for the packages, keyed by repo_url:
-        {name, dependencies, dependents} for the Spack package built from
-        that repository (see tools/spack_dependencies.py), or None when
-        Spack has none. None overall when Spack isn't on PATH or the
-        analysis failed -- a gap, so the metrics files leave the `spack` key
-        out.
-
-        One `spack python` run covers the whole batch, since finding a
-        package's dependents means loading every package Spack has. The
-        package repositories in `spack_repos` are searched after Spack's
-        own, for every package: a recipe there can depend on any package
-        (SCOREC's pcms on hdf5 and adios2), so it is one of their dependents
-        too.
-        """
-        spack = shutil.which("spack")
-        if spack is None:
-            logger.info("spack is not on PATH; skipping Spack dependency data")
-            return None
-        repo_urls = sorted({p["repo_url"] for p in packages if p.get("repo_url")})
-        if not repo_urls:
-            return {}
-        script = Path(__file__).resolve().parent / "tools" / "spack_dependencies.py"
-        spack_config = self.config.get("spack") or {}
-        timeout = float(spack_config.get("timeout", 1800))
-        with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp) / "spack.json"
-            # Without a repository, its packages would be recorded as not in
-            # Spack; better a gap, so the last good day's data is kept.
-            extra = await self._clone_spack_repos(spack_repos or [], Path(tmp), 300)
-            if extra is None:
-                return None
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    spack, "python", str(script), "--output", str(output),
-                    *(arg for path in extra for arg in ("--repo", path)), *repo_urls,
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
-                )
-                try:
-                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    logger.warning(f"Spack dependency analysis timed out after {timeout:.0f}s")
-                    return None
-                if proc.returncode != 0:
-                    logger.warning(
-                        f"Spack dependency analysis failed (exit {proc.returncode}): "
-                        f"{stderr.decode(errors='replace')[-2000:]}"
-                    )
-                    return None
-                result = json.loads(output.read_text())
-                self._log_spack_matches(result)
-                return result
-            except (OSError, ValueError) as e:
-                logger.warning(f"Spack dependency analysis failed: {e!r}")
-                return None
-
-    def _with_spack_match(self, package: Dict) -> Dict:
-        """The package as the collectors see it, with this batch's Spack
-        match added as `spack_match`.
-
-        Three cases, which the collectors tell apart:
-          - no `spack_match` key: Spack wasn't analyzed (a run without
-            Spack), so collectors fall back to looking the package up by name;
-          - `spack_match` is None: Spack has no recipe for this repository;
-          - `spack_match` is {"name", "dependent_packages"}: the recipe
-            Spack matched, and how many Spack packages depend on it.
-
-        Returns a copy, because the package itself is written out as
-        metrics.json's `metadata` and this shouldn't appear there.
-        """
-        repo_url = package.get("repo_url")
-        if self.spack_data is None or repo_url not in self.spack_data:
-            return package
-
-        entry = self.spack_data[repo_url]
-        if entry:
-            dependents = entry.get("dependents") or {}
-            spack_match = {"name": entry["name"], "dependent_packages": len(dependents)}
-        else:
-            spack_match = None
-
-        package_for_collectors = dict(package)
-        package_for_collectors["spack_match"] = spack_match
-        return package_for_collectors
-
-    async def collect_dependency_info(self, package: Dict) -> Dict:
-        """The package's `dependencies` (the forge's dependency graph) and
-        `spack` (its Spack dependencies and dependents, from this batch's
-        collect_spack_dependencies run). A key is left out when its lookup
-        was a gap, so tools/dashboard_data.py can keep an earlier day's
-        entry instead of publishing a blank one.
-        """
-        info: Dict = {}
-        if self.spack_data is not None and package.get("repo_url") in self.spack_data:
-            info["spack"] = self.spack_data[package["repo_url"]]
-
-        forge = self._forge_for_package(package)
-        ref = forge.extract_ref(package["repo_url"]) if forge else None
-        if ref is None:
-            return info
-        try:
-            async with httpx.AsyncClient(timeout=60.0, transport=RetryingTransport()) as client:
-                dependencies = await forge.dependency_graph(client, ref)
-        except Exception as e:
-            logger.warning(f"dependencies failed for {package['repo_url']}: {e!r}")
-        else:
-            if dependencies is not COLLECTION_GAP:
-                info["dependencies"] = dependencies
-        return info
-
     async def collect_all_metrics(self, package: Dict) -> Dict:
         """Collect all metrics for a package across the 3 dimensions.
 
@@ -513,10 +350,10 @@ class MetricsOrchestrator:
         if collect:
             # Collect all 3 dimensions in parallel. The collectors get a copy
             # of the package with this batch's Spack match added.
-            collector_package = self._with_spack_match(package)
+            collector_package = with_spack_match(package, self.spack_data)
             *collected, dependency_info = await asyncio.gather(
                 *(dim.collect(collector_package) for dim in self.dimensions.values()),
-                self.collect_dependency_info(package),
+                self.dependency_collector.collect(package, self.spack_data),
                 return_exceptions=True,
             )
 
@@ -612,8 +449,8 @@ class MetricsOrchestrator:
         all_metrics = {}
         # Repositories named anywhere in the catalog, not just this batch,
         # so a package's dependents don't depend on which batch it is in.
-        self.spack_data = await self.collect_spack_dependencies(
-            [catalog[p] for p in software_list], self._spack_repos(catalog.values()))
+        self.spack_data = await self.spack_collector.collect(
+            [catalog[p] for p in software_list], SpackDependencyCollector.spack_repos(catalog.values()))
 
         # Packages are independent, and each one spends nearly all its time
         # waiting on the GitHub API, so they are processed in a small pool

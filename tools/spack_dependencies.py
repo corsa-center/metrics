@@ -4,10 +4,9 @@ Spack dependency analyzer (CORSA metrics framework)
 For each repository: the Spack package built from it, what that package
 depends on and which Spack packages depend on it, with the version,
 variant, dependency-type, platform and target conditions Spack records for
-each edge. The orchestrator runs this
-once per batch (see Orchestrator.collect_spack_dependencies) and stores
-each package's entry in its metrics.json under `spack`;
-tools/dashboard_data.py assembles the dashboard's
+each edge. SpackDependencyCollector (collectors/dependencies.py) runs this
+once per batch, and each package's entry is stored in its metrics.json under
+`spack`; tools/dashboard_data.py assembles the dashboard's
 spackPackageDependencies.json and spackPackageDependents.json from those.
 
 Ported from the dashboard's _explore/scripts/get_spack_dependencies.py.
@@ -17,6 +16,12 @@ version's url or git points at it (SCOREC/core -> pumi, SCOREC/omega_h ->
 omega-h); when several do, the one named after the repository, else the one
 most packages depend on. A repository no recipe points at falls back to a
 recipe named after it, lower-cased, with "_" read as "-".
+
+--package NAME=URL names the repository's package outright, for a
+monorepo whose most-depended-on recipe isn't the one to show
+(darshan-hpc/darshan builds darshan-util and darshan-runtime). It comes
+from the catalog entry's `spack_package`; a name Spack has no recipe for is
+ignored, and the repository is matched as above.
 
 --repo adds a package repository after Spack's own, so it supplies only the
 packages Spack's builtin repository lacks and cannot shadow a builtin
@@ -117,9 +122,12 @@ def _names_for(repo_url: str) -> List[str]:
 
 
 def match_recipes(repo_urls: Iterable[str], recipes: Dict[str, List[str]],
-                  dependent_counts: Dict[str, int]) -> Dict[str, Optional[str]]:
+                  dependent_counts: Dict[str, int],
+                  chosen: Optional[Dict[str, str]] = None) -> Dict[str, Optional[str]]:
     """{repo_url: Spack package name or None}, given each recipe's URLs
-    (recipe_urls) and how many packages depend on each recipe."""
+    (recipe_urls), how many packages depend on each recipe, and the
+    packages catalog entries name outright ({repo_url: name})."""
+    chosen = chosen or {}
     by_location = defaultdict(set)
     for name, urls in recipes.items():
         for url in urls:
@@ -129,6 +137,9 @@ def match_recipes(repo_urls: Iterable[str], recipes: Dict[str, List[str]],
 
     result = {}
     for repo_url in repo_urls:
+        if chosen.get(repo_url) in recipes:
+            result[repo_url] = chosen[repo_url]
+            continue
         location = repo_location(repo_url)
         names = _names_for(repo_url)
         matched = set()
@@ -187,8 +198,9 @@ def analyze(packages):
     return dependency_db, dependent_db
 
 
-def find_recipes(repo_urls: List[str]) -> Dict[str, Optional[str]]:
-    """{repo_url: Spack package name or None} over every recipe Spack has."""
+def find_recipes(repo_urls: List[str], chosen: Optional[Dict[str, str]] = None) -> Dict[str, Optional[str]]:
+    """{repo_url: Spack package name or None} over every recipe Spack has;
+    `chosen` as in match_recipes."""
     import spack.repo as sr
 
     recipes, dependent_counts = {}, defaultdict(int)
@@ -196,7 +208,7 @@ def find_recipes(repo_urls: List[str]) -> Dict[str, Optional[str]]:
         recipes[pkg.name] = recipe_urls(pkg)
         for name in {name for deps in pkg.dependencies.values() for name in deps}:
             dependent_counts[name] += 1
-    return match_recipes(repo_urls, recipes, dependent_counts)
+    return match_recipes(repo_urls, recipes, dependent_counts, chosen)
 
 
 def main(argv=None):
@@ -205,10 +217,17 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True, help="JSON file to write")
     parser.add_argument("--repo", action="append", default=[],
                         help="package repository (the directory holding repo.yaml) to search after Spack's own")
+    parser.add_argument("--package", action="append", default=[], metavar="NAME=URL",
+                        help="the Spack package to use for the repository at URL")
     args = parser.parse_args(argv)
 
+    chosen = {}
+    for value in args.package:
+        name, _, url = value.partition("=")
+        chosen[url] = name
+
     add_repositories(args.repo)
-    names = find_recipes(args.repo_urls)
+    names = find_recipes(args.repo_urls, chosen)
     found = {name for name in names.values() if name}
     dependencies, dependents = analyze(found)
     result = {

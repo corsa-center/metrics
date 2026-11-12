@@ -470,34 +470,7 @@ class TestPlatformLabels:
                 in DashboardFormatter().format(missing, {})["quality"]["reliability"]["data"])
 
 
-class TestDependencyInfo:
-    PACKAGE = {"name": "P", "repo_type": "github", "repo_url": "https://github.com/o/HDF5"}
-
-    def _collect(self, orchestrator, forge):
-        from unittest.mock import patch
-        with patch.object(orchestrator, "_forge_for_package", return_value=forge):
-            return asyncio.run(orchestrator.collect_dependency_info(dict(self.PACKAGE)))
-
-    def test_dependencies_collected(self, orchestrator):
-        forge = FakeForge(dependency_data={"dependencyGraphManifests": {"nodes": []}})
-        assert self._collect(orchestrator, forge) == {"dependencies": {"dependencyGraphManifests": {"nodes": []}}}
-
-    def test_a_gap_leaves_the_key_out(self, orchestrator):
-        assert self._collect(orchestrator, FakeForge(gaps={"dependency_graph"})) == {}
-
-    def test_spack_entry_matched_by_repo_url(self, orchestrator):
-        entry = {"name": "hdf5", "dependencies": {"zlib": {}}, "dependents": {}}
-        orchestrator.spack_data = {"https://github.com/o/HDF5": entry}
-        assert self._collect(orchestrator, FakeForge())["spack"] == entry
-
-    def test_not_in_spack_is_recorded_as_none(self, orchestrator):
-        orchestrator.spack_data = {"https://github.com/o/HDF5": None}
-        assert self._collect(orchestrator, FakeForge())["spack"] is None
-
-    def test_spack_unavailable_leaves_the_key_out(self, orchestrator):
-        orchestrator.spack_data = None
-        assert "spack" not in self._collect(orchestrator, FakeForge())
-
+class TestDependencyInfoInMetricsJson:
     def test_written_into_metrics_json(self, orchestrator, tmp_path):
         metrics = {**_base_metrics(), "dependency_info": {"spack": None}}
         orchestrator.write_metrics(tmp_path, {"o/r": {"repo_url": "https://github.com/o/r"}}, {"o/r": metrics})
@@ -526,107 +499,6 @@ class TestRepoActivity:
     def test_gaps_leave_keys_out(self, orchestrator):
         forge = FakeForge(gaps={"activity_counts", "languages"})
         assert self._activity(orchestrator, forge) == {}
-
-
-class TestSpackMatchForCollectors:
-    PACKAGE = {"name": "core", "repo_url": "https://github.com/SCOREC/core"}
-
-    def test_match_is_passed_on_a_copy(self, orchestrator):
-        orchestrator.spack_data = {self.PACKAGE["repo_url"]: {
-            "name": "pumi", "dependencies": {"zlib": {}}, "dependents": {"a": {}, "b": {}}}}
-        package = dict(self.PACKAGE)
-        seen = orchestrator._with_spack_match(package)
-        assert seen["spack_match"] == {"name": "pumi", "dependent_packages": 2}
-        assert "spack_match" not in package  # kept out of metrics.json's metadata
-
-    def test_not_in_spack(self, orchestrator):
-        orchestrator.spack_data = {self.PACKAGE["repo_url"]: None}
-        assert orchestrator._with_spack_match(dict(self.PACKAGE))["spack_match"] is None
-
-    def test_spack_not_analyzed_leaves_it_out(self, orchestrator):
-        orchestrator.spack_data = None
-        assert "spack_match" not in orchestrator._with_spack_match(dict(self.PACKAGE))
-
-
-class TestSpackDependencies:
-    def _run(self, orchestrator, packages, spack_repos=None):
-        return asyncio.run(orchestrator.collect_spack_dependencies(packages, spack_repos))
-
-    def test_no_spack_is_a_gap(self, orchestrator, monkeypatch):
-        monkeypatch.setattr("orchestrator.shutil.which", lambda _: None)
-        assert self._run(orchestrator, [{"repo_url": "https://github.com/o/r"}]) is None
-
-    def _fake_spack(self, monkeypatch, tmp_path):
-        # A stand-in `spack` whose `python` subcommand runs the helper's
-        # contract: write {repo_url: entry} to --output.
-        fake = tmp_path / "spack"
-        fake.write_text(
-            "#!/usr/bin/env python3\n"
-            "import json, sys\n"
-            "args = sys.argv[3:]\n"
-            "out = args[args.index('--output') + 1]\n"
-            "urls = [a for a in args if a.startswith('https://')]\n"
-            "open(out, 'w').write(json.dumps({u: None for u in urls}))\n"
-            "open(sys.argv[0] + '.log', 'a').write(' '.join(args) + '\\n')\n"
-        )
-        fake.chmod(0o755)
-        monkeypatch.setattr("orchestrator.shutil.which", lambda _: str(fake))
-        return tmp_path / "spack.log"
-
-    def test_runs_the_helper_once_for_the_batch(self, orchestrator, monkeypatch, tmp_path):
-        log = self._fake_spack(monkeypatch, tmp_path)
-        packages = [{"repo_url": "https://gitlab.com/g/adios2.git"}, {"repo_url": "https://github.com/HDFGroup/HDF5"}]
-        assert self._run(orchestrator, packages) == {
-            "https://github.com/HDFGroup/HDF5": None, "https://gitlab.com/g/adios2.git": None}
-        assert log.read_text().count("\n") == 1
-        assert "--repo" not in log.read_text()
-
-    def test_spack_repos_are_cloned_and_passed(self, orchestrator, monkeypatch, tmp_path):
-        log = self._fake_spack(monkeypatch, tmp_path)
-        source = tmp_path / "scorec"
-        (source / "spack_repo" / "scorec").mkdir(parents=True)
-        (source / "spack_repo" / "scorec" / "repo.yaml").write_text("repo:\n  namespace: scorec\n")
-        subprocess.run(["git", "init", "-q", str(source)], check=True)
-        subprocess.run(["git", "-C", str(source), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(source), "-c", "user.name=t", "-c", "user.email=t@t",
-                        "commit", "-q", "-m", "x"], check=True)
-        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}], [f"file://{source}"]) == {
-            "https://github.com/SCOREC/pcms": None}
-        assert re.search(r"--repo \S+/repo0/spack_repo/scorec https://github.com/SCOREC/pcms", log.read_text())
-
-    def test_a_failed_clone_is_a_gap(self, orchestrator, monkeypatch, tmp_path):
-        log = self._fake_spack(monkeypatch, tmp_path)
-        assert self._run(orchestrator, [{"repo_url": "https://github.com/SCOREC/pcms"}],
-                         [f"file://{tmp_path}/missing"]) is None
-        assert not log.exists()
-
-    def test_matches_and_misses_are_logged(self, orchestrator, caplog):
-        import logging
-        with caplog.at_level(logging.INFO, logger="orchestrator"):
-            orchestrator._log_spack_matches({
-                "https://github.com/SCOREC/core": {"name": "pumi"},
-                "https://github.com/SCOREC/pcms.git": None,
-            })
-        assert "found for 1 of 2 repositories: SCOREC/core -> pumi" in caplog.text
-        assert "Not in Spack: SCOREC/pcms" in caplog.text
-
-    def test_spack_repos_come_from_the_catalog(self, orchestrator):
-        scorec = "https://github.com/SCOREC/scorec-spack-packages.git"
-        catalog = [
-            {"repo_url": "https://github.com/SCOREC/pcms", "spack_repo": scorec},
-            {"repo_url": "https://github.com/SCOREC/pumi-pic", "spack_repo": [scorec, " https://x/y.git "]},
-            {"repo_url": "https://github.com/HDFGroup/hdf5"},
-            {"repo_url": "https://github.com/o/bad", "spack_repo": None},
-            {"repo_url": "https://github.com/o/bad2", "spack_repo": {"git": "u"}},
-        ]
-        assert orchestrator._spack_repos(catalog) == [scorec, "https://x/y.git"]
-
-    def test_failure_is_a_gap(self, orchestrator, monkeypatch, tmp_path):
-        fake = tmp_path / "spack"
-        fake.write_text("#!/bin/sh\necho boom >&2\nexit 3\n")
-        fake.chmod(0o755)
-        monkeypatch.setattr("orchestrator.shutil.which", lambda _: str(fake))
-        assert self._run(orchestrator, [{"repo_url": "https://github.com/o/r"}]) is None
 
 
 class TestSubDetailRendering:

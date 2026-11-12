@@ -273,9 +273,11 @@ the repository: description, homepage, language, license, dates, `topics`,
   repository a dependency points at
 - `spack` -- the package's Spack dependencies and dependents (`{name,
   dependencies, dependents}`; `null` when Spack has no package for the
-  repository). The Spack package is the recipe whose homepage, url or git
+  repository). The Spack package is the one the catalog entry names as
+  `spack_package`, if any; otherwise the recipe whose homepage, url or git
   (or any version's) points at the repository -- often not the repository's
-  name (SCOREC/core -> `pumi`) -- else a recipe named after it. Collected
+  name (SCOREC/core -> `pumi`), and of several, the one most packages depend
+  on -- else a recipe named after it. Collected
   only when `spack` is on `PATH`: one `spack python
   tools/spack_dependencies.py` run per batch covers every package in it,
   searching Spack's builtin recipes and then the package repositories
@@ -285,8 +287,10 @@ the repository: description, homepage, language, license, dates, `topics`,
   packages (pcms on hdf5 and adios2) and so are among their dependents. The
   run log lists each repository's Spack package and, under "Not in Spack",
   those without one -- where to look for a recipe that needs `spack_repo`.
+  A `spack_package` Spack has no recipe for is logged as a warning.
 
-A key is left out when its lookup failed, rather than written empty.
+A key is left out when its lookup failed, rather than written empty. Both
+are collected by `collectors/dependencies.py`, outside the three dimensions.
 
 The metrics_data repository's daily "Generate dashboard data" workflow turns
 those into the dashboard's `intReposInfo.json`, `intRepos_Topics.json`,

@@ -117,7 +117,8 @@ spack:
   timeout: 1800             # seconds for the one `spack python` run per batch
   # A package whose recipe isn't in Spack's builtin repository names the
   # package repository holding it as `spack_repo` in its metrics_packages
-  # config.
+  # config; one several recipes build from can name its own as
+  # `spack_package` (see docs/PACKAGE_CONFIG.md).
 
 # Threshold overrides. Open config/thresholds.yaml for the full, current
 # list of every changeable threshold and its default -- this block only

@@ -115,7 +115,8 @@ class CollaborationCollector:
                 spack_lookup = self._spack_from_match(
                     client, ref, package["spack_match"], lookups["spack"])
             else:
-                spack_lookup = self._lookup_spack(client, repo, owner, lookups["spack"])
+                spack_lookup = self._lookup_spack(
+                    client, repo, owner, lookups["spack"], package.get("spack_package"))
 
             by_repo, spack, conda, source = await asyncio.gather(
                 self._lookup_by_repository(client, ref, lookups["repository"]),
@@ -245,19 +246,23 @@ class CollaborationCollector:
 
     async def _lookup_spack(
         self, client: httpx.AsyncClient, repo: str, owner: Optional[str] = None,
-        trace: Optional[Dict] = None,
+        trace: Optional[Dict] = None, spack_package: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Spack recipe for this project, looked up by name.
 
-        Tried lower-cased as well, since Spack package names are lower-case by
-        convention while repository names often are not (ADIOS2 -> adios2),
-        then under any name whose recipe downloads from this repository.
+        The catalog entry's `spack_package` first, when it names one; then
+        the repository name, also lower-cased, since Spack package names are
+        lower-case by convention while repository names often are not
+        (ADIOS2 -> adios2); then any name whose recipe downloads from this
+        repository.
 
         `trace`, if given, records the names tried, whether recipes were
         also matched by download URL, and whether any lookup failed.
         """
         trace = {} if trace is None else trace
         names = [repo, repo.lower()]
+        if isinstance(spack_package, str) and spack_package.strip():
+            names.insert(0, spack_package.strip())
         if owner:
             names += await self._main_spack_recipe(client, owner, repo)
             # The index only knows GitHub URLs (see _spack_names_for).
