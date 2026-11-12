@@ -606,9 +606,41 @@ class TestSpackDependencies:
             orchestrator._log_spack_matches({
                 "https://github.com/SCOREC/core": {"name": "pumi"},
                 "https://github.com/SCOREC/pcms.git": None,
-            })
+            }, {})
         assert "found for 1 of 2 repositories: SCOREC/core -> pumi" in caplog.text
         assert "Not in Spack: SCOREC/pcms" in caplog.text
+        assert "spack_package" not in caplog.text
+
+    def test_a_spack_package_spack_lacks_is_warned_about(self, orchestrator, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="orchestrator"):
+            orchestrator._log_spack_matches({
+                "https://github.com/darshan-hpc/darshan": {"name": "darshan-runtime"},
+                "https://github.com/SCOREC/core": {"name": "pumi"},
+                "https://github.com/o/r": None,
+            }, {
+                "https://github.com/darshan-hpc/darshan": "darshan-runtime",
+                "https://github.com/SCOREC/core": "pumi-typo",
+                "https://github.com/o/r": "r-typo",
+                "https://github.com/not/in-batch": "x",
+            })
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == [
+            "SCOREC/core: spack_package 'pumi-typo' is not a Spack package; matched pumi instead",
+            "o/r: spack_package 'r-typo' is not a Spack package; matched none instead",
+        ]
+
+    def test_spack_package_is_passed_to_the_helper(self, orchestrator, monkeypatch, tmp_path):
+        log = self._fake_spack(monkeypatch, tmp_path)
+        packages = [
+            {"repo_url": "https://github.com/darshan-hpc/darshan", "spack_package": " darshan-runtime "},
+            {"repo_url": "https://github.com/HDFGroup/hdf5", "spack_package": None},
+            {"repo_url": "https://github.com/o/r", "spack_package": ["not", "a", "name"]},
+        ]
+        self._run(orchestrator, packages)
+        args = log.read_text().split()
+        assert args.count("--package") == 1
+        assert args[args.index("--package") + 1] == "darshan-runtime=https://github.com/darshan-hpc/darshan"
 
     def test_spack_repos_come_from_the_catalog(self, orchestrator):
         scorec = "https://github.com/SCOREC/scorec-spack-packages.git"

@@ -212,6 +212,15 @@ class TestE4SContainerImage:
             "E4S container image (Spack package pumi)", ["pumi"])
         assert asyncio.run(c._e4s_image(None, "o/r", {"spack_match": None})) == (None, [])
 
+    def test_spack_package_is_looked_for_without_spack(self, monkeypatch):
+        from collectors.quality import accessibility
+        from collectors.ecosystem import collaboration
+        monkeypatch.setattr(accessibility, "_e4s_specs", {"darshan-runtime"})
+        monkeypatch.setattr(collaboration, "_spack_by_repo", {})
+        c = accessibility.AccessibilityCollector(GitHubForge())
+        assert asyncio.run(c._e4s_image(None, "darshan-hpc/darshan", {"spack_package": "darshan-runtime"})) == (
+            "E4S container image (Spack package darshan-runtime)", ["darshan-runtime", "darshan"])
+
     def test_package_not_in_e4s_is_not(self, monkeypatch):
         from collectors.quality import accessibility
         monkeypatch.setattr(accessibility, "_e4s_specs", {"tau"})

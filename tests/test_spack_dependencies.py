@@ -64,6 +64,20 @@ class TestMatchRecipes:
         result = match_recipes(["https://github.com/llvm/llvm-project"], recipes, COUNTS)
         assert result["https://github.com/llvm/llvm-project"] == "llvm-project"
 
+    def test_a_named_package_wins(self):
+        # darshan-hpc/darshan builds darshan-util (more dependents) and
+        # darshan-runtime; the catalog entry can pick the one to show.
+        recipes = {"darshan-util": ["https://github.com/darshan-hpc/darshan.git"],
+                   "darshan-runtime": ["https://github.com/darshan-hpc/darshan.git"]}
+        counts = {"darshan-util": 2}
+        url = "https://github.com/darshan-hpc/darshan"
+        assert match_recipes([url], recipes, counts) == {url: "darshan-util"}
+        assert match_recipes([url], recipes, counts, {url: "darshan-runtime"}) == {url: "darshan-runtime"}
+
+    def test_a_named_package_spack_lacks_is_ignored(self):
+        url = "https://github.com/SCOREC/core"
+        assert match_recipes([url], RECIPES, COUNTS, {url: "pumi-typo"}) == {url: "pumi"}
+
     def test_a_longer_repository_name_is_not_a_match(self):
         # github.com/scorec/core must not match github.com/scorec/core-extra.
         recipes = {"core-extra": ["https://github.com/SCOREC/core-extra"]}

@@ -361,10 +361,25 @@ class MetricsOrchestrator:
         return sorted(urls)
 
     @staticmethod
-    def _log_spack_matches(result: Dict[str, Optional[Dict]]) -> None:
+    def _spack_packages(packages: List[Dict]) -> Dict[str, str]:
+        """{repo_url: name} for the catalog entries that name their Spack
+        package outright in `spack_package` -- a monorepo whose recipe to
+        show isn't the one the matching picks (darshan-hpc/darshan builds
+        darshan-util and darshan-runtime)."""
+        chosen = {}
+        for package in packages:
+            name = package.get("spack_package")
+            if package.get("repo_url") and isinstance(name, str) and name.strip():
+                chosen[package["repo_url"]] = name.strip()
+        return chosen
+
+    @staticmethod
+    def _log_spack_matches(result: Dict[str, Optional[Dict]], chosen: Dict[str, str]) -> None:
         """Which repositories got a Spack package, and which didn't: one of
         the latter that does have a recipe outside Spack's builtin
-        repository needs `spack_repo` in its catalog entry."""
+        repository needs `spack_repo` in its catalog entry. A `spack_package`
+        Spack has no recipe for is matched as if it weren't set, and warned
+        about."""
         def short(url):
             return urlparse(url).path.strip("/").removesuffix(".git") or url
         found = [f"{short(u)} -> {e['name']}" for u, e in sorted(result.items()) if e]
@@ -372,6 +387,11 @@ class MetricsOrchestrator:
         logger.info(f"Spack packages found for {len(found)} of {len(result)} repositories: {', '.join(found)}")
         if missing:
             logger.info(f"Not in Spack: {', '.join(missing)}")
+        for url, name in sorted(chosen.items()):
+            entry = result.get(url)
+            if url in result and (entry or {}).get("name") != name:
+                logger.warning(f"{short(url)}: spack_package {name!r} is not a Spack package; "
+                               f"matched {entry['name'] if entry else 'none'} instead")
 
     async def collect_spack_dependencies(
         self, packages: List[Dict], spack_repos: Optional[List[str]] = None,
@@ -388,7 +408,7 @@ class MetricsOrchestrator:
         package repositories in `spack_repos` are searched after Spack's
         own, for every package: a recipe there can depend on any package
         (SCOREC's pcms on hdf5 and adios2), so it is one of their dependents
-        too.
+        too. A package's `spack_package`, when set, names its recipe.
         """
         spack = shutil.which("spack")
         if spack is None:
@@ -397,6 +417,7 @@ class MetricsOrchestrator:
         repo_urls = sorted({p["repo_url"] for p in packages if p.get("repo_url")})
         if not repo_urls:
             return {}
+        chosen = self._spack_packages(packages)
         script = Path(__file__).resolve().parent / "tools" / "spack_dependencies.py"
         spack_config = self.config.get("spack") or {}
         timeout = float(spack_config.get("timeout", 1800))
@@ -410,7 +431,9 @@ class MetricsOrchestrator:
             try:
                 proc = await asyncio.create_subprocess_exec(
                     spack, "python", str(script), "--output", str(output),
-                    *(arg for path in extra for arg in ("--repo", path)), *repo_urls,
+                    *(arg for path in extra for arg in ("--repo", path)),
+                    *(arg for url, name in sorted(chosen.items()) for arg in ("--package", f"{name}={url}")),
+                    *repo_urls,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
                 )
                 try:
@@ -427,7 +450,7 @@ class MetricsOrchestrator:
                     )
                     return None
                 result = json.loads(output.read_text())
-                self._log_spack_matches(result)
+                self._log_spack_matches(result, chosen)
                 return result
             except (OSError, ValueError) as e:
                 logger.warning(f"Spack dependency analysis failed: {e!r}")

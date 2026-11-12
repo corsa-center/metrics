@@ -93,6 +93,21 @@ related_repositories:
   - spack/spack-packages
 ```
 
+Two fields tell the Spack lookup where to find the package's recipe. The
+lookup matches a repository to the recipe whose homepage or download URLs point
+at it (SCOREC/core is `pumi`), searching Spack's builtin recipes.
+
+- **`spack_repo`** -- a package repository (a git URL, or a list of them) to
+  also search, for a recipe that isn't in Spack's builtin repository.
+- **`spack_package`** -- the Spack package to use, for a repository several
+  recipes build from. Without it, the lookup picks the recipe most packages
+  depend on. A name Spack has no recipe for is logged and ignored.
+
+```yaml
+spack_repo: "https://github.com/SCOREC/scorec-spack-packages.git"
+spack_package: "darshan-runtime"
+```
+
 A package that isn't ready to be shown publicly can set `published: false`. The
 dashboard then asks for a password before showing that package's page, checked
 against `password_sha256`, the hex SHA-256 of the password:

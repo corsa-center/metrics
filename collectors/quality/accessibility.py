@@ -229,11 +229,15 @@ class AccessibilityCollector:
                 names = [match["name"]]
         else:
             # The same recipe lookup the collaboration collector uses: the
-            # repo's own name, then recipes whose URLs are this repository.
+            # catalog entry's spack_package, the repo's own name, then
+            # recipes whose URLs are this repository.
             from collectors.ecosystem.collaboration import CollaborationCollector
             owner, _, repo = ref.rpartition("/")
             names = [repo.lower()] + await CollaborationCollector(self.forge)._main_spack_recipe(
                 client, owner, repo)
+            spack_package = (package or {}).get("spack_package")
+            if isinstance(spack_package, str) and spack_package.strip():
+                names.insert(0, spack_package.strip())
             names = list(dict.fromkeys(names))
         for name in names:
             if name in _e4s_specs:

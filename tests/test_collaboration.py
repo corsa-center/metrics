@@ -334,6 +334,17 @@ class TestSpackByRepository:
         assert asyncio.run(collector._lookup_spack(None, "llvm-project", "llvm"))["name"] == "llvm"
 
 
+    def test_spack_package_is_tried_first(self, collector, monkeypatch):
+        import collectors.ecosystem.collaboration as collab
+        monkeypatch.setattr(collab, "_spack_by_repo", {"darshan-hpc/darshan": ["darshan-util"]})
+        collector._get_json = _FakeJson({
+            "spack.io/packages/darshan-runtime": {"name": "darshan-runtime", "ecosystem": "spack"},
+            "spack.io/packages/darshan-util": {"name": "darshan-util", "ecosystem": "spack"},
+        })
+        rec = asyncio.run(collector._lookup_spack(None, "darshan", "darshan-hpc", None, "darshan-runtime"))
+        assert rec["name"] == "darshan-runtime"
+
+
 class TestFetchFailure:
     def _get(self, collector, status):
         import httpx

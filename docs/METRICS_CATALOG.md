@@ -262,7 +262,9 @@ that guessing is needed: the orchestrator has already matched each repository
 to its recipe by running Spack (see `tools/spack_dependencies.py`), including
 recipes a version fetches from a fork (SCOREC/omega_h is `omega-h`) and
 recipes in a package repository a catalog entry names as `spack_repo`
-(SCOREC's pcms and pumi-pic). That match is used here and for the E4S image
+(SCOREC's pcms and pumi-pic). A catalog entry can also name its recipe as
+`spack_package`, for a repository several recipes build from; the name lookup
+tries it first as well. That match is used here and for the E4S image
 check in 4.3.5, with Spack's own dependent count; a repository Spack has no
 recipe for isn't looked up at all. The name lookup above is the fallback for
 runs without Spack.
