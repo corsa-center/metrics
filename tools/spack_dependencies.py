@@ -4,10 +4,9 @@ Spack dependency analyzer (CORSA metrics framework)
 For each repository: the Spack package built from it, what that package
 depends on and which Spack packages depend on it, with the version,
 variant, dependency-type, platform and target conditions Spack records for
-each edge. The orchestrator runs this
-once per batch (see Orchestrator.collect_spack_dependencies) and stores
-each package's entry in its metrics.json under `spack`;
-tools/dashboard_data.py assembles the dashboard's
+each edge. SpackDependencyCollector (collectors/dependencies.py) runs this
+once per batch, and each package's entry is stored in its metrics.json under
+`spack`; tools/dashboard_data.py assembles the dashboard's
 spackPackageDependencies.json and spackPackageDependents.json from those.
 
 Ported from the dashboard's _explore/scripts/get_spack_dependencies.py.

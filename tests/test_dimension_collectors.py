@@ -113,7 +113,7 @@ class TestCollectAllMetrics:
         o = MetricsOrchestrator(config_path="config/orchestrator.yaml")
         dim = {"dimension": "x", "score": 50.0, "max_score": 100.0}
         with patch.object(o, "_update_repo_info", new=AsyncMock(return_value=(True, ""))), \
-             patch.object(o, "collect_dependency_info", new=AsyncMock(return_value={})), \
+             patch.object(o.dependency_collector, "collect", new=AsyncMock(return_value={})), \
              patch.object(o.dimensions["impact"], "collect", new=AsyncMock(side_effect=RuntimeError("boom"))), \
              patch.object(o.dimensions["ecosystem"], "collect", new=AsyncMock(return_value=dim)), \
              patch.object(o.dimensions["quality"], "collect", new=AsyncMock(return_value=dim)):

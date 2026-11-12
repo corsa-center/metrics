@@ -289,7 +289,8 @@ the repository: description, homepage, language, license, dates, `topics`,
   those without one -- where to look for a recipe that needs `spack_repo`.
   A `spack_package` Spack has no recipe for is logged as a warning.
 
-A key is left out when its lookup failed, rather than written empty.
+A key is left out when its lookup failed, rather than written empty. Both
+are collected by `collectors/dependencies.py`, outside the three dimensions.
 
 The metrics_data repository's daily "Generate dashboard data" workflow turns
 those into the dashboard's `intReposInfo.json`, `intRepos_Topics.json`,
