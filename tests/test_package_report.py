@@ -403,3 +403,43 @@ class TestRepeatedDetailLines:
         assert page.count("DE-AC05-00OR22725") == 1
         # The dashboard keeps its own detail line.
         assert "DE-AC05-00OR22725</p>" in dashboard["ecosystem"]["financial_sustainability"]["data"]
+
+
+class TestNoThresholdRows:
+    """#118: a measurement with nothing to judge it against (4.1.1's stars,
+    Citation Score) is shown as ∞, not "Not scored", which is kept for rows
+    that weren't judged."""
+
+    @staticmethod
+    def _row(value, mark=None, thresholds=(), overridden=False):
+        return {"label": "X", "value": [(value, None)], "mark": mark,
+                "thresholds": list(thresholds), "overridden": overridden, "details": []}
+
+    def test_a_value_with_no_threshold_has_none(self):
+        from package_report import _no_threshold
+        assert _no_threshold(self._row("2,260"))
+        assert _no_threshold(self._row("75.0/100"))
+
+    def test_rows_that_were_not_judged_are_not_scored(self):
+        from package_report import _no_threshold
+        assert not _no_threshold(self._row("Unavailable this run"))
+        assert not _no_threshold(self._row("Not yet implemented"))
+        assert not _no_threshold(self._row("Not applicable to a Python project"))
+        assert not _no_threshold(self._row("N/A"))
+        assert not _no_threshold(self._row("3 PRs", thresholds=["10 — minimum sample"]))
+        assert not _no_threshold(self._row("N/A — not US-funded", overridden=True))
+        assert not _no_threshold(self._row("4", mark="✓"))
+
+    def test_4_1_1_renders_infinity_and_keeps_not_scored_for_gaps(self, orchestrator):
+        metrics = _metrics()
+        metrics["dimensions"]["impact"] = {"sub_results": {
+            "score": 75.0, "repo_stats": {"stars": 2260, "forks": 584},
+            "sub_metrics": {"formal_citations": {"not_collected": True}}}}
+        dashboard = DashboardFormatter().format(metrics, {})
+        report = build_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        page = render_package_report("o/r", dashboard, metrics, orchestrator._metric_weights())
+        rows = {r["label"]: r for d in report["dimensions"] for s in d["sections"]
+                if s["path"] == "impact/citation_and_adoption" for r in s["rows"]}
+        assert rows["GitHub Stars"]["no_threshold"] and rows["Citation Score"]["no_threshold"]
+        assert not rows["Formal Citations"]["no_threshold"]
+        assert page.count('title="No threshold: reported for information, not judged">∞</span>') == 3  # stars, forks, Citation Score

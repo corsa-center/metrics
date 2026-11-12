@@ -223,8 +223,11 @@ Detailed logs of the collection process
 A standalone page showing how one package's results were reached, meant to
 be linked from the package's dashboard page:
 
-- every dashboard row with its value, met / not met / not scored, and the
-  evidence behind it (file links, counts, failing Scorecard checks)
+- every dashboard row with its value; whether it was met, not met, not
+  judged ("Not scored": unavailable, not applicable, too little data) or is a
+  measurement with no threshold (∞, such as 4.1.1's stars and Citation
+  Score); and the evidence behind it (file links, counts, failing Scorecard
+  checks)
 - under each row, the threshold from `../config/thresholds.yaml` it was judged
   against, with any `thresholds:` overrides applied
 - rows whose text was set by `overrides` in `../package_config` or the
