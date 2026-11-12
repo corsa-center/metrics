@@ -86,6 +86,8 @@ _LABEL = re.compile(r'\s*<strong>([^<]+):</strong>\s*(.*)', re.S)
 _LINK = re.compile(r'<a href="([^"]*)">(.*?)</a>', re.S)
 _TAG = re.compile(r'<[^>]+>')
 _MARKS = ("✓", "✗")
+# Values that say a row wasn't measured, rather than giving a measurement.
+_NOT_MEASURED = ("Unavailable", "Not yet implemented", "Not applicable", "Not measurable", "N/A")
 
 # Text with links: a list of (text, url-or-None) segments.
 Segments = List[Tuple[str, Optional[str]]]
@@ -295,6 +297,18 @@ def section_thresholds(path: str, descriptions: Dict[tuple, str]) -> Dict[str, L
     return result
 
 
+def _no_threshold(row: Dict) -> bool:
+    """Whether a row is a measurement with nothing to judge it against
+    (4.1.1's stars, downloads, Citation Score): it has a value, no ✓/✗, no
+    threshold, and wasn't set by package configuration. Other rows without
+    a mark weren't judged -- unavailable, not applicable, or too little
+    data for a threshold they do have."""
+    if row["mark"] or row["thresholds"] or row.get("overridden"):
+        return False
+    value = "".join(text for text, _ in row["value"]).strip()
+    return bool(value) and not value.startswith(_NOT_MEASURED)
+
+
 def _fmt_time(iso: Optional[str]) -> str:
     try:
         return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M UTC")
@@ -345,6 +359,7 @@ def build_report(
                 row["evidence"] = None if row["overridden"] else (
                     cross_section.get((path, row["label"])) or evidence.get(row["label"]))
                 row["details"] = _uncovered_details(row)
+                row["no_threshold"] = _no_threshold(row)
             sections.append({
                 "path": path,
                 "number": number,
@@ -455,9 +470,11 @@ def render_html(report: Dict) -> str:
         "Sustainability Metrics Report, exactly as the dashboard shows it. "
         '<span class="pass">✓ met</span> and <span class="fail">✗ not met</span> compare '
         "the measured value with the threshold listed under it. "
+        '<span class="unscored">∞</span> rows are measurements with no threshold, reported '
+        "for information. "
         '<span class="unscored">Not scored</span> rows were reported but not judged — not '
-        "yet implemented, unavailable this run, not applicable, or too little data — and are left out of the "
-        "section score, which is ✓ rows out of ✓ and ✗ rows. Grey lines under a row are "
+        "yet implemented, unavailable this run, not applicable, or too little data. Neither "
+        "counts toward the section score, which is ✓ rows out of ✓ and ✗ rows. Grey lines under a row are "
         "the evidence it was based on; where a collector records it, they also say "
         "what was <b>found</b> and where, and <b>where it looked</b>. Each section's "
         "<i>How this is measured</i> link explains what is checked and what passes.</p>",
@@ -540,6 +557,9 @@ def _render_row(row: Dict) -> str:
         badge = '<span class="mark pass">✓ met</span>'
     elif mark == "✗":
         badge = '<span class="mark fail">✗ not met</span>'
+    elif row.get("no_threshold"):
+        badge = ('<span class="mark unscored" title="No threshold: reported for information, '
+                 'not judged">∞</span>')
     else:
         badge = '<span class="mark unscored">Not scored</span>'
     label = f'<b>{esc(row["label"])}:</b> ' if row["label"] else ""
